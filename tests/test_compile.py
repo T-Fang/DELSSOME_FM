@@ -368,3 +368,36 @@ def test_card_yaml_rejects_unknown_keys_and_string_numbers():
         card_from_yaml(text.replace("name: linear", "name: linear\nextra: 1"))
     with pytest.raises(CardError, match="1.0e-4"):
         card_from_yaml(text.replace("bias: [null]", "bias: [1e-4]"))
+
+
+# ---------------------------------------------------------------- Wong-Wang evaluation
+
+
+@pytest.mark.parametrize("ops", [NumpyOps(), JaxOps()], ids=["numpy", "jax-float32"])
+def test_wong_wang_kernel_is_finite_and_accurate_near_zero(ops):
+    u = np.array([0.0, 3e-8, -3e-8, 1e-4, -1e-4, 0.5, -0.5, 5.0, -5.0, 80.0, -80.0])
+    got = np.asarray(ops.wong_wang(np.asarray(u, dtype=ops.dtype)), dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ref = np.where(u == 0, 1.0, u / -np.expm1(-u))  # float64, limit 1 at u = 0
+    assert np.all(np.isfinite(got))
+    np.testing.assert_allclose(got, ref, rtol=2e-6, atol=1e-30)
+
+
+def test_walk_b_fuses_wong_wang_but_the_dag_keeps_primitives():
+    for name, n_ww in (("mfm", 1), ("fic", 2), ("hopf", 0), ("wilson_cowan", 0)):
+        m = compile_card(load_reference(name))
+        assert sum(i.op == "wong_wang" for i in m.program.instrs) == n_ww
+        assert all(n.type in NODE_TYPES for n in m.dag.nodes)
+
+
+def test_fic_rhs_finite_where_the_current_crosses_threshold():
+    """u_E = 0 exactly: the literal subtree is 0/0, the fused kernel gives the limit."""
+    m = compile_card(load_reference("fic"))
+    # choose S_I so that u_E = 7.44 wEE S_E - 49.6 wIE S_I - 1.0528 = 0 with no coupling
+    wEE, wIE, SE = 3.0, 1.5, 0.2
+    SI = (7.44 * wEE * SE - 1.0528) / (49.6 * wIE)
+    x = np.array([[SE, SI]])
+    out = m.rhs(NumpyOps())(x, np.zeros((1, 2)), np.array([[wEE, 2.0, 0.0, wIE]]),
+                            np.array([0.0]), np.zeros((1, 1)))
+    expected_E = -10 * SE + 4.00625 * (1 - SE) * 1.0
+    assert np.all(np.isfinite(out)) and out[0, 0] == pytest.approx(expected_E, rel=1e-6)

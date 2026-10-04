@@ -27,8 +27,8 @@ documented in [docs/data.md](docs/data.md).
 | 1. Phase 0: data and groups (gate) | **done**, verification passes |
 | 2. Repo skeleton, config loading, cluster wrapper | **done** |
 | 3. Model card and compiler | **done** |
-| 4. Reference cards (gate) | five cards compile; **awaiting review** |
-| 5. Simulator | not started |
+| 4. Reference cards (gate) | **done**: seven cards (adds MPR and Jansen–Rit) |
+| 5. Simulator | **done**: integrate, observe, summary; summary reproduces the empirical pipeline |
 | 6. Reference reproduction (gate) | not started |
 | 7. Sampler and corpus | not started |
 | 8. Network and training | not started |
@@ -84,17 +84,19 @@ python scripts/submit_job.py --name sim --walltime 02:00:00 --mem 32G --ngpus 1 
 
 ```
 configs/            plain YAML, one file per dataclass in src/delssome_fm/config.py
+                    (data, sim, cluster)
 docs/               design documents, the codegen brief, data provenance
 scripts/            thin CLI entry points, no logic
 src/delssome_fm/
     config.py       config dataclasses and the strict YAML loader
     data/           group membership, empirical SC/FC/FCD loading and averaging, Phase 0 check
     spec/           model card -> SymPy -> equation DAG + simulator rhs; see spec/README.md
+    sim/            Euler-Maruyama in JAX, Balloon-Windkessel, FC/FCD/regional summaries
     cluster/        CBIG_pbsubmit wrapper
 tests/
 ```
 
-`sim/`, `nn/` and `train/` are added in build steps 5 to 8.
+`nn/` and `train/` are added in build step 8.
 
 ## Where outputs land
 

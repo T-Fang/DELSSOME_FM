@@ -14,6 +14,11 @@ symbol A_c. The observable is a second kind of expression. Each channel addition
 edge expression G_c * C_ij * (f_c(p^c_j) - delta_c f_c(p^c_i)), p^c = sum_u m^c_u x^u, which
 is what the Agg node sums over neighbours j.
 
+Walk B emits the same primitives as walk A, with one exception: it recognises the canonical
+Wong-Wang subtree u * Inv(1 + Neg(Exp(Neg u))) and evaluates it with the fused, numerically
+stable `ops.wong_wang` (ops.py explains why). The function is identical; only its float32
+evaluation near u = 0 changes.
+
 Walk B evaluates the derivative trees with nu as an input. Feeding nu = xi / sqrt(dt), with xi
 standard normal, makes `x + dt * rhs` exactly one Euler-Maruyama step; feeding nu = 0 gives
 the deterministic drift. Channels are evaluated once per step outside the per-region trees,
@@ -431,7 +436,7 @@ class Instr:
     """One step of a straight-line program. `args` index earlier instructions.
 
     op:    const | state | noise | par_regional | par_global | channel |
-           add | mul | neg | inv | sq | exp | log
+           add | mul | neg | inv | sq | exp | log | wong_wang
     index: state / noise / parameter column / channel position, where relevant
     """
 
@@ -500,6 +505,9 @@ class _ProgramWalk:
         if expr.is_Add or expr.is_Mul:
             if _is_neg(expr):
                 return self.add(Instr("neg", args=(self.walk(expr.args[1]),)))
+            u = _wong_wang_input(expr)
+            if u is not None:
+                return self.add(Instr("wong_wang", args=(self.walk(u),)))
             idx = [self.walk(a) for a in expr.args]
             op = "add" if expr.is_Add else "mul"
             acc = idx[0]
@@ -521,6 +529,16 @@ class _ProgramWalk:
         if isinstance(expr, sp.log):
             return self.add(Instr("log", args=(self.walk(expr.args[0]),)))
         raise CompileError(f"no primitive for {type(expr).__name__}: {expr}")
+
+
+def _wong_wang_input(expr: sp.Expr) -> sp.Expr | None:
+    """u if `expr` is exactly the canonical wong_wang(u) subtree, else None."""
+    if not (expr.is_Mul and len(expr.args) == 2):
+        return None
+    for u in expr.args:
+        if not u.is_Pow and canonicalize(transfer("wong_wang", u)) == expr:
+            return u
+    return None
 
 
 def _walk_program(card: ModelCard, sym: Symbols, derivs: list,

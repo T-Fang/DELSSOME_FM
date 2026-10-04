@@ -46,6 +46,20 @@ class DataConfig:
 
 
 @dataclass(frozen=True)
+class SimConfig:
+    """configs/sim.yaml: integration and summary settings, shared by every simulation so that
+    stage 1 and stage 2 statistics come from the identical pipeline (brief §7.3)."""
+
+    dt: float                  # s, Euler-Maruyama step
+    tr: float                  # s, one observed frame; must be a whole number of steps
+    n_frames: int              # observed frames kept
+    burn_in_frames: int        # frames simulated and discarded before those
+    divergence_bound: float    # |state| above this marks a run as diverged
+    fcd_window: int            # frames per FCD sliding window (stride 1)
+    fcd_bins: int              # equal FCD histogram bins on [-1, 1]
+
+
+@dataclass(frozen=True)
 class ClusterConfig:
     """configs/cluster.yaml: how jobs are submitted through CBIG_pbsubmit (cluster/submit.py)."""
 

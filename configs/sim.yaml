@@ -1,0 +1,11 @@
+# Simulation and summary settings. Every field is required. These must match the empirical
+# pipeline (docs/data.md §4.2): HCP-YA has 1200 frames at TR 0.72 s and an 83-frame window.
+
+dt: 0.001                  # s. Sized for FIC's tau_I = 10 ms (generation.md §8)
+tr: 0.72                   # s. 720 steps per frame
+n_frames: 1200             # 864 s, one HCP-YA run
+burn_in_frames: 200        # 144 s discarded, as the original DELSSOME's 2.4 min burn-in
+divergence_bound: 1.0e6    # any |state| above this, or a NaN, marks the run diverged
+
+fcd_window: 83             # 60 s at TR 0.72 s, stride 1 -> 1118 windows
+fcd_bins: 10000            # equal bins on [-1, 1], as the empirical FCD CDFs

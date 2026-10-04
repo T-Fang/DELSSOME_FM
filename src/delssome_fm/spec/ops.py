@@ -5,7 +5,11 @@ JAX (simulation, float32, under jit/vmap) or NumPy (GPU-free tests and a cross-c
 float64). A PyTorch backend would be one more class with these methods.
 
 There is one method per DAG primitive, plus the few array operations the coupling channels
-and the state layout need. Nothing here knows about models.
+and the state layout need, plus `wong_wang`: a fused, numerically stable evaluation of the
+Wong-Wang subtree u * Inv(1 - exp(-u)). In float32, 1 - exp(-u) is exactly 0 for
+|u| < ~6e-8, so the literal subtree returns inf; the fused kernel computes
+u / (-expm1(-u)) and fills the removable singularity at u = 0 with its limit, 1. Nothing
+here knows about models.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ class Ops(Protocol):
     def exp(self, a: Array) -> Array: ...
     def log(self, a: Array) -> Array: ...
     def sq(self, a: Array) -> Array: ...
+    def wong_wang(self, u: Array) -> Array:
+        """u / (1 - exp(-u)), finite for every finite u (equals 1 at u = 0)."""
     def column(self, x: Array, i: int) -> Array:
         """x[..., i] of a (..., n) array."""
     def stack(self, xs: Sequence[Array]) -> Array:
@@ -66,6 +72,13 @@ class NumpyOps:
 
     def sq(self, a):
         return a * a
+
+    def wong_wang(self, u):
+        u = np.asarray(u, dtype=self.dtype)
+        zero = u == 0
+        safe = np.where(zero, 1.0, u)
+        with np.errstate(over="ignore"):
+            return np.where(zero, 1.0, safe / -np.expm1(-safe))
 
     def column(self, x, i):
         return x[..., i]
@@ -115,6 +128,12 @@ class JaxOps:
 
     def sq(self, a):
         return a * a
+
+    def wong_wang(self, u):
+        jnp = self._jnp
+        zero = u == 0
+        safe = jnp.where(zero, 1.0, u)
+        return jnp.where(zero, 1.0, safe / -jnp.expm1(-safe))
 
     def column(self, x, i):
         return x[..., i]
