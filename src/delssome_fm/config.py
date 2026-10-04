@@ -60,6 +60,23 @@ class SimConfig:
 
 
 @dataclass(frozen=True)
+class CorpusConfig:
+    """configs/corpus.yaml: the stage-1 synthetic corpus (generation.md §5-§7, §9)."""
+
+    seed: int                     # cards, SC choice, parameter draws and noise all derive from it
+    n_param_sets: int             # parameter draws simulated per kept model
+    first_draw: int               # index of the first draw (to append draws to models later)
+    batch_size: int               # simulations per jit call (draws of one model)
+    screen_draws: int             # generation.md §6: 4 random draws
+    screen_frames: int            # ~3 min of simulated time
+    screen_burn_in_frames: int
+    flat_rel_sd: float            # flat if SD <= flat_rel_sd * max(1, |mean|) in every region
+    initial_state_scale: float    # x0 ~ U(-s, s), drawn per simulation
+    fcd_store_stride: int         # store every k-th bin of the FCD CDF (1 = all 10,000)
+    output_dir: Path
+
+
+@dataclass(frozen=True)
 class ReproduceModel:
     """One reference model in the build-step-6 gate, with the original's test protocol."""
 

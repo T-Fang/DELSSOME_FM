@@ -1,0 +1,18 @@
+# Stage-1 synthetic corpus (generation.md §9: first pass of ~100,000 models x 100 parameter
+# sets). Simulation settings come from configs/sim.yaml; the 64 training group SCs from
+# configs/data.yaml. Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-5           # flat: SD <= 1e-5 * max(1, |mean|) in every region
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 10          # PROVISIONAL, awaiting the project lead: every 10th CDF bin
+
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus
