@@ -6,7 +6,8 @@ import pytest
 import yaml
 
 from conftest import DATA_CONFIG_PATH
-from delssome_fm.config import DataConfig, SplitBounds, load_config
+from delssome_fm.config import (ClusterConfig, DataConfig, ReproduceConfig, SimConfig,
+                                 SplitBounds, load_config)
 
 
 def _write(tmp_path, raw) -> Path:
@@ -54,3 +55,10 @@ def test_wrong_tuple_length_raises(tmp_path):
     raw["splits"]["val"] = [680, 860, 900]
     with pytest.raises(ValueError, match="splits.val"):
         load_config(_write(tmp_path, raw), DataConfig)
+
+
+@pytest.mark.parametrize("name,cls", [("data", DataConfig), ("sim", SimConfig),
+                                      ("cluster", ClusterConfig), ("reproduce", ReproduceConfig)])
+def test_every_config_file_loads(name, cls):
+    """Catches YAML pitfalls such as 1.0e6 (read as a string; write 1.0e+6)."""
+    load_config(DATA_CONFIG_PATH.parent / f"{name}.yaml", cls)

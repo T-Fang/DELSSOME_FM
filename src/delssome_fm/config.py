@@ -60,6 +60,37 @@ class SimConfig:
 
 
 @dataclass(frozen=True)
+class ReproduceModel:
+    """One reference model in the build-step-6 gate, with the original's test protocol."""
+
+    name: str                           # reference card name: mfm | fic | hopf
+    original_dir: str                   # subdirectory of original_params_root for this model
+    dt: float                           # s, the original's test-time Euler step
+    burn_in_frames: int                 # warm-up + burn-in of the original, in frames
+    initial_state: tuple[float, ...]    # (V,) the original's initial state; FIC's S_E is solved
+
+
+@dataclass(frozen=True)
+class ReproduceConfig:
+    """configs/reproduce.yaml: build step 6, reproducing the published costs (docs/data.md §7)."""
+
+    original_params_root: Path          # tzeng DELSSOME_plus/params (read-only)
+    original_input_dir: Path            # the original test inputs: SC/FC_test.csv, FCD_CDF_test.mat
+    export_dir: Path                    # where scripts/export_original_params.py wrote .npz files
+    output_dir: Path
+    n_sets: int                         # saved CMA-ES runs per model (seed1..seedN)
+    n_noise_repeats: int                # independent cost evaluations per parameter set
+    n_dup: int                          # simulations averaged per cost (the original's param_dup)
+    seed: int
+    batch_size: int                     # simulations per jit call; fixed so shapes are static
+    z_threshold: float                  # a set misses if |recorded - our mean| > z * our SD
+    max_misses: int                     # allowed misses per component
+    bias_alpha: float                   # family-wise level of the paired bias t-tests,
+                                        # Bonferroni-split over models x cost components
+    models: tuple[ReproduceModel, ...]
+
+
+@dataclass(frozen=True)
 class ClusterConfig:
     """configs/cluster.yaml: how jobs are submitted through CBIG_pbsubmit (cluster/submit.py)."""
 

@@ -70,6 +70,23 @@ failure.
 python scripts/verify_groups.py --config configs/data.yaml
 ```
 
+**Build step 6: reproduce the published costs (gate).** The original fitted parameters are
+torch pickles, so export them once with an environment that has torch:
+
+```bash
+/home/ftian/storage/miniconda/envs/lifespan_ei/bin/python scripts/export_original_params.py \
+    --params-root /mnt/nas/CSC21/Yeolab/Users/tzeng/Python/DELSSOME_plus/params \
+    --out-dir outputs/reproduce/original --n-sets 50
+```
+
+Then evaluate each model (a GPU job per model, submitted from `headnode`), and apply the
+pass criterion in `configs/reproduce.yaml`:
+
+```bash
+python scripts/reproduce_costs.py --model mfm --sets 0:50     # likewise fic, hopf
+python scripts/check_reproduction.py                          # exits 1 if the gate fails
+```
+
 **Submit a job to the cluster.** By default it prints a dry run. Add `--submit` to actually
 submit, and do that from `headnode`; GPU jobs refuse anywhere else.
 
@@ -84,7 +101,7 @@ python scripts/submit_job.py --name sim --walltime 02:00:00 --mem 32G --ngpus 1 
 
 ```
 configs/            plain YAML, one file per dataclass in src/delssome_fm/config.py
-                    (data, sim, cluster)
+                    (data, sim, cluster, reproduce)
 docs/               design documents, the codegen brief, data provenance
 scripts/            thin CLI entry points, no logic
 src/delssome_fm/

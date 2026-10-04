@@ -1,0 +1,31 @@
+# Build step 6 (gate): reproduce the published FIC, MFM and Hopf test costs with our cards
+# and simulator. Every field is required.
+#
+# Pass criterion, agreed with the project lead on 2026-10-05 and calibrated before any real
+# data was run: a perfect reimplementation fails it about 4% of the time (Monte Carlo under the
+# null; tests/test_reproduce.py). Do not change the thresholds to make the gate pass.
+
+original_params_root: /mnt/nas/CSC21/Yeolab/Users/tzeng/Python/DELSSOME_plus/params
+original_input_dir: /mnt/nas/CSC21/Yeolab/Users/tzeng/Python/DELSSOME_plus/input/HCPYA/DK68
+export_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/reproduce/original
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/reproduce/ours
+
+n_sets: 50                # trial1/test/seed1..seed50: the Euler arm behind Figs 3c, 5b, 5e
+n_noise_repeats: 20
+n_dup: 3                  # the original averaged FC and FCD over 3 simulations
+seed: 20261005
+batch_size: 240           # simulations per jit call
+
+z_threshold: 3.0          # a set misses if |recorded - our mean| > 3 x our SD
+max_misses: 4             # of 50 sets, per model and component
+bias_alpha: 0.05          # family-wise; Bonferroni over models x 4 components (0.05/12)
+
+# Protocol of the original test runs (configs HCPYA_CMAES_main_*.ini). burn_in_frames covers
+# the 5000-step warm-up plus t_pre: MFM/FIC 2.5 s + 144 s, Hopf 5 s + 72 s, at TR 0.72 s.
+models:
+  - {name: mfm, original_dir: pMFM_HCPYA/trial1/test, dt: 0.0005, burn_in_frames: 204,
+     initial_state: [0.001]}
+  - {name: fic, original_dir: pFIC_HCPYA/trial1/test, dt: 0.0005, burn_in_frames: 204,
+     initial_state: [0.0, 0.1433408985]}      # S_E is replaced by the solved S_E_ave
+  - {name: hopf, original_dir: Hopf_HCPYA/trial1/test, dt: 0.001, burn_in_frames: 107,
+     initial_state: [0.0, 0.0]}
