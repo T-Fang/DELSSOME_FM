@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from delssome_fm.spec.compile import compile_card
-from delssome_fm.spec.sampler import (MULTIPLIER_LOG10, N_FREE, V_PROBS, draw_parameters,
-                                      sample_card)
+from delssome_fm.spec.sampler import (COUPLING_RATIO_LOG10, MULTIPLIER_LOG10, N_FREE,
+                                      SC_ROW_SUM, V_PROBS, draw_parameters, sample_card)
 
 CARDS = [sample_card(123, i) for i in range(400)]
 
@@ -102,3 +102,30 @@ def test_draw_parameters_are_log_uniform_multipliers():
     lo, hi = (10.0 ** b for b in MULTIPLIER_LOG10)
     assert theta.min() >= lo and theta.max() <= hi
     assert np.log10(theta).mean() == pytest.approx(0.0, abs=0.05)
+
+
+def test_coupling_gain_is_relative_to_the_competing_term():
+    for card in CARDS:
+        for ch in card.channels:
+            if ch.into_derivative:
+                v = ch.into_derivative[0]
+                c = card.linear[v][v]
+                reference = abs(c.value if c.param is None else c.scale)
+            else:
+                t = card.nonlinear[ch.into_input[0]]
+                vals = [abs(w.value if w.param is None else w.scale) for w in t.weights
+                        if w is not None]
+                if t.drive is not None:
+                    vals.append(abs(t.drive.value if t.drive.param is None else t.drive.scale))
+                reference = max(vals, default=1.0)
+            ratio = np.log10(ch.gain.scale * SC_ROW_SUM / reference)
+            assert COUPLING_RATIO_LOG10[0] - 1e-9 <= ratio <= COUPLING_RATIO_LOG10[1] + 1e-9
+
+
+@pytest.mark.cluster
+def test_sc_row_sum_constant_matches_the_training_groups(data_cfg):
+    from conftest import data_available
+    if not data_available():
+        pytest.skip("HCP-YA data not reachable")
+    from delssome_fm.sim.corpus import training_scs
+    assert training_scs(data_cfg).sum(axis=2).mean() == pytest.approx(SC_ROW_SUM, abs=0.005)

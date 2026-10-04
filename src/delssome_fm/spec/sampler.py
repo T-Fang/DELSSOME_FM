@@ -18,6 +18,18 @@ not, gets a nominal constant c, log10|c| ~ U[-4, 4] with the slot's sign. A free
 stored as scale x parameter with scale = c, and `draw_parameters` gives the dimensionless
 multipliers Theta, Psi ~ 10^U(-1, 1) (decided 2026-10-05).
 
+Coupling gains are the one exception to the flat constant prior (decided 2026-10-05). Drawn
+independently over 8 decades, the coupling was usually negligible next to the leak: in a
+60-candidate pilot, 6 of 7 usable kept models had mean FC ~ 0, so their FC carried no SC.
+A channel's nominal gain is instead relative to the term it competes with at its injection
+site:
+
+    G_c = 10^U(-2, 1) * reference / SC_ROW_SUM
+    reference = |L_vv| of the target v           (injected at the derivative, D)
+              = largest |w_vu| or |I_v| of u^v    (injected into u^v, U; 1 if neither)
+
+so coupling ranges from 1% to 10x the competing term for a typical region.
+
 Probabilities the design documents leave open are module constants below, marked "choice".
 This module does not simulate or screen (sim/corpus.py does).
 """
@@ -51,6 +63,10 @@ P_LEAK = 0.8                     # choice: L diagonal positive (leak) vs negativ
 N_FREE = (1, 2, 3, 4)            # §4 step 3
 LOG10_RANGE = (-4.0, 4.0)        # §4 constants
 MULTIPLIER_LOG10 = (-1.0, 1.0)   # Theta, Psi ~ 10^U(-1, 1)
+COUPLING_RATIO_LOG10 = (-2.0, 1.0)
+# Mean row sum of the 64 HCP-YA training group SCs rescaled to max 0.02 (range over groups
+# 0.356-0.365; tests/test_sampler.py checks it against the data on the cluster).
+SC_ROW_SUM = 0.360
 MAX_ATTEMPTS = 1000
 
 
@@ -88,6 +104,7 @@ def sample_card(seed: int, index: int) -> ModelCard:
     _sample_channels(rng, d)
     _ensure_inputs(d)
     _sample_L(rng, d)
+    _set_gains(rng, d)
     observable = _sample_observable(rng, d)
     return _assemble(rng, d, observable, name=f"syn_{seed}_{index}")
 
@@ -148,7 +165,7 @@ def _one_channel(rng: np.random.Generator, d: _Draft, c: int) -> dict:
     else:
         transfer = ("logistic", "wong_wang")[rng.integers(2)]
     return {"name": f"c{c}", "source": int(rng.integers(d.V)), "transfer": transfer,
-            "diffusive": bool(rng.random() < P_DIFFUSIVE), "gain": _constant(rng, 1.0),
+            "diffusive": bool(rng.random() < P_DIFFUSIVE), "gain": None,  # _set_gains
             "into_input": [target] if into_input else [],
             "into_derivative": [] if into_input else [target]}
 
@@ -177,6 +194,20 @@ def _sample_L(rng: np.random.Generator, d: _Draft) -> None:
             d.L = L
             return
     raise SamplerError("could not satisfy R1")
+
+
+def _set_gains(rng: np.random.Generator, d: _Draft) -> None:
+    """Coupling gain relative to the competing term at the injection site (module docstring)."""
+    for ch in d.channels:
+        if ch["into_derivative"]:
+            reference = abs(d.L[ch["into_derivative"][0], ch["into_derivative"][0]])
+        else:
+            t = d.nonlinear[ch["into_input"][0]]
+            inputs = [abs(w) for w in t["weights"] if w is not None]
+            inputs += [abs(t["drive"])] if t["drive"] is not None else []
+            reference = max(inputs, default=1.0)
+        ratio = 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10)
+        ch["gain"] = float(ratio * reference / SC_ROW_SUM)
 
 
 def _sample_observable(rng: np.random.Generator, d: _Draft) -> tuple[int, int | None]:

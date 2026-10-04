@@ -177,6 +177,12 @@ $$\Theta[i,p] \sim 10^{\,\mathcal{U}[-1,\,1]} \text{ i.i.d. over regions and dra
 
 so the effective coefficient is $c\,\Theta[i,p]$, within one decade of its nominal value. The magnitude reaches the encoder through the `Const` node's $\log_{10}|c|$ feature, and $\Theta$ stays $O(1)$ for the network.
 
+**Coupling gains are relative, not flat (decided 2026-10-05).** The nominal gain of channel $c$ is drawn relative to the term it competes with at its injection site:
+
+$$G_c = 10^{\,\mathcal{U}[-2,\,1]}\;\frac{\text{reference}}{\overline{\textstyle\sum_j C_{ij}}}, \qquad \text{reference} = \begin{cases}|L_{vv}| & \text{injected at } dx^v/dt\ (D)\\ \max(|w_{vu}|, |I_v|) & \text{injected into } u^v\ (U)\end{cases}$$
+
+where $\overline{\sum_j C_{ij}} = 0.36$ is the mean row sum of the training group SCs rescaled to max 0.02. Coupling therefore ranges from 1% to 10× the competing term. With the flat 8-decade prior, coupling was almost always negligible: in the first 60-candidate pilot, 6 of the 7 usable kept models had mean off-diagonal FC ≈ 0, so their FC carried no connectome structure and the stage-1 pairwise targets were noise. With the relative prior, a 300-candidate screen kept 19.7% (was ~13-15%). Of the kept models, 63% still had |mean FC| < 0.05, 24% were between 0.05 and 0.9, and 14% were above 0.9. The coupling target could reach the observable in 57 of 59 kept models, so the remaining FC ≈ 0 is weak coupling, not structure: mean FC becomes substantial only near the critical coupling ratio of about 1.
+
 **One shared $\sigma$.** $\sigma$ is a single regional parameter (the "1" in $P = 1 + n$). Every noisy variable uses it through its own sampled scale constant, $\sigma_v = c_v\,\sigma$. A variable is noiseless with probability ~0.1.
 
 ### Every reference model lands on the same triple
