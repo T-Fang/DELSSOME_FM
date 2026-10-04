@@ -169,6 +169,16 @@ $P$ and $K$ vary by model deliberately. All five reference models are $P{=}3$, $
 
 Regional values are drawn i.i.d. per region. The known cost of dropping spatial structure is that simulated FC leans more on SC than it would with realistic parameter maps.
 
+### Values of the free parameters (decided 2026-10-05)
+
+A selected candidate still gets a sampled nominal constant c, drawn from the constant prior above (log-uniform over 8 decades, sign from the slot). The card stores the slot as `scale × parameter` with scale = c. $\Theta$ and $\Psi$ then hold **dimensionless multipliers**:
+
+$$\Theta[i,p] \sim 10^{\,\mathcal{U}[-1,\,1]} \text{ i.i.d. over regions and draws}, \qquad \Psi[\kappa] \sim 10^{\,\mathcal{U}[-1,\,1]}$$
+
+so the effective coefficient is $c\,\Theta[i,p]$, within one decade of its nominal value. The magnitude reaches the encoder through the `Const` node's $\log_{10}|c|$ feature, and $\Theta$ stays $O(1)$ for the network.
+
+**One shared $\sigma$.** $\sigma$ is a single regional parameter (the "1" in $P = 1 + n$). Every noisy variable uses it through its own sampled scale constant, $\sigma_v = c_v\,\sigma$. A variable is noiseless with probability ~0.1.
+
 ### Every reference model lands on the same triple
 
 | | regional | global |
@@ -199,7 +209,7 @@ Without this, the acceptance rate drops noticeably once off-diagonals are dense,
 
 ## 6. The one screen
 
-Simulate 68 regions with one connectome and four random parameter draws, roughly three minutes of simulated time each.
+Simulate 68 regions with the model's connectome (§9) and four random parameter draws, roughly three minutes of simulated time each.
 
 - **Reject** if every draw diverges (NaN, or state past a fixed bound).
 - **Reject** if every draw's **observed signal** is flat (temporal variance below a floor).
@@ -215,7 +225,7 @@ No parameter-box calibration, no cost-landscape screening, no stratification, no
 
 ```
 BUILD THE CORPUS
-  repeat until we have ~50 models:
+  repeat until we have ~100,000 models:
 
       pick the observation model
       pick the number of state variables
@@ -233,6 +243,7 @@ BUILD THE CORPUS
           which slots each one is injected into
 
       pick the observable: one state variable, or a difference of two
+      pick the model's connectome: one of the 64 training group SCs
       fill in the constants: log-uniform over 8 decades, signs per slot
       work out which coefficients are eligible to be free, pick a few
 
@@ -243,9 +254,8 @@ BUILD THE CORPUS
 
 BUILD THE TRAINING DATA
   for each model we kept:
-      repeat a few hundred times:
+      repeat ~1,000 times:
           draw regional parameters and coupling gains
-          pick one of the connectome bootstraps
           simulate -> observation model -> BOLD at TR
           compute the summary statistics
           store (model, parameters, connectome, statistics)
@@ -311,12 +321,12 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 
 | | |
 |---|---|
-| Synthetic models | ~50 |
-| Parameter sets per model | ~200 |
-| SC bootstraps | 4 |
-| **Total simulations** | **~40,000** |
+| Synthetic models | ~100,000 |
+| Parameter sets per model | ~1,000 |
+| Connectome | one of the 64 HCP-YA training group SCs per model, drawn uniformly at random (seeded) |
+| **Total simulations** | **~100,000,000** |
 
-Four times a single specialist corpus. Small enough to generate, inspect by hand, and throw away if it turns out to be wrong.
+**Revised 2026-10-05** (project lead). The earlier plan was ~50 models × ~200 parameter sets × 4 SC bootstraps (~40,000 simulations). SC is no longer a per-simulation sampling axis. Each synthetic model is tied to one randomly chosen training group SC, so SC still varies across the corpus (architecture.md §7) without multiplying the simulation count. Only training-split groups are used, so validation and test SCs stay unseen in stage 1. The sizes may be reduced if the simulation budget requires it (cost estimate in the build-step-7 report).
 
 Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is one training sample.
 
