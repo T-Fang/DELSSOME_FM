@@ -29,7 +29,7 @@ documented in [docs/data.md](docs/data.md).
 | 3. Model card and compiler | **done** |
 | 4. Reference cards (gate) | **done**: seven cards (adds MPR and Jansen–Rit) |
 | 5. Simulator | **done**: integrate, observe, summary; summary reproduces the empirical pipeline |
-| 6. Reference reproduction (gate) | not started |
+| 6. Reference reproduction (gate) | **deferred** (2026-10-05, project lead): code, criterion and jobs ready, not yet run |
 | 7. Sampler and corpus | not started |
 | 8. Network and training | not started |
 
@@ -79,13 +79,19 @@ torch pickles, so export them once with an environment that has torch:
     --out-dir outputs/reproduce/original --n-sets 50
 ```
 
-Then evaluate each model (a GPU job per model, submitted from `headnode`), and apply the
-pass criterion in `configs/reproduce.yaml`:
+Then run one single-CPU cluster job per (model, parameter set), 150 in all, ~4 min each,
+and apply the pass criterion in `configs/reproduce.yaml`:
 
 ```bash
-python scripts/reproduce_costs.py --model mfm --sets 0:50     # likewise fic, hopf
+python scripts/submit_reproduction.py --submit                # dry run without --submit
+python scripts/submit_reproduction.py --submit --only-missing # resubmit failed sets
 python scripts/check_reproduction.py                          # exits 1 if the gate fails
 ```
+
+**Status: deferred.** On 2026-10-05 the project lead deferred this gate and asked to proceed
+as if it had passed. It has not been run. Spot checks on CPU agree with the original code
+(MFM seed 30: ours 0.426 +- 0.015, original 0.425 +- 0.025 over seven seeds), but that is
+not the gate.
 
 **Submit a job to the cluster.** By default it prints a dry run. Add `--submit` to actually
 submit, and do that from `headnode`; GPU jobs refuse anywhere else.

@@ -14,7 +14,7 @@ n_sets: 50                # trial1/test/seed1..seed50: the Euler arm behind Figs
 n_noise_repeats: 20
 n_dup: 3                  # the original averaged FC and FCD over 3 simulations
 seed: 20261005
-batch_size: 240           # simulations per jit call
+batch_size: 60            # simulations per jit call = one set (20 repeats x 3)
 
 z_threshold: 3.0          # a set misses if |recorded - our mean| > 3 x our SD
 max_misses: 4             # of 50 sets, per model and component
