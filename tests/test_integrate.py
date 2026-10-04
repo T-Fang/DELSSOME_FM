@@ -124,21 +124,59 @@ def test_rescale_sc():
 
 
 def _bw_steady_state(u):
+    """Steady state of the original equations in (z, f, v, q), as deviations from rest."""
     f = 1 + u / observe.GAMMA
     v = f ** observe.ALPHA
     q = f * (1 - (1 - observe.RHO) ** (1 / f)) / observe.RHO / v ** (1 / observe.ALPHA - 1)
-    return np.array([0.0, f, v, q])
+    return np.array([0.0, f - 1, v - 1, q - 1])
+
+
+def _original_bw(state, u):
+    """The original code's equations in (z, f, v, q) (tzeng CBIG_pMFM.py:193-198)."""
+    z, f, v, q = state.T
+    k, g, tau, a, rho = observe.KAPPA, observe.GAMMA, observe.TAU, observe.ALPHA, observe.RHO
+    return np.stack([u - k * z - g * (f - 1), z, (f - v ** (1 / a)) / tau,
+                     (f / rho * (1 - (1 - rho) ** (1 / f)) - q * v ** (1 / a - 1)) / tau], -1)
+
+
+def _original_bold(state):
+    z, f, v, q = state.T
+    return 100 / observe.RHO * observe.V0 * (observe.K1 * (1 - q) + observe.K2 * (1 - q / v)
+                                              + observe.K3 * (1 - v))
+
+
+def test_deviation_form_equals_original_equations():
+    rng = np.random.default_rng(0)
+    orig = np.stack([rng.normal(0, 0.05, 50), 1 + rng.normal(0, 0.1, 50),
+                     1 + rng.normal(0, 0.05, 50), 1 + rng.normal(0, 0.05, 50)], -1)
+    dev = orig - np.array([0.0, 1.0, 1.0, 1.0])
+    u = rng.uniform(0, 0.5, 50)
+    with jax.enable_x64(True):
+        got = np.asarray(observe.bw_derivative(jnp.asarray(dev), jnp.asarray(u)))
+        bold = np.asarray(observe.bw_signal(jnp.asarray(dev)))
+    np.testing.assert_allclose(got, _original_bw(orig, u), rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(bold, _original_bold(orig), rtol=1e-9, atol=1e-12)
+
+
+def test_float32_deviation_form_keeps_small_fluctuations():
+    """The reason for the deviation form: a float32 step of size 1e-9 must not vanish."""
+    dev = jnp.asarray([[0.0, 1e-6, 1e-6, 1e-6]], jnp.float32)
+    d = observe.bw_derivative(dev, jnp.asarray([1e-6], jnp.float32))
+    stepped = dev + jnp.float32(5e-4) * d
+    # z = 0, so F does not move; V and Q must, by a step of ~1e-9 on values of ~1e-6
+    assert bool(jnp.all(d[:, 2:] != 0)) and bool(jnp.all(stepped[:, 2:] != dev[:, 2:]))
 
 
 def test_balloon_windkessel_steady_state_under_constant_input():
-    u = jnp.array([0.0, 0.2, 0.5])
+    u_np = np.array([0.0, 0.2, 0.5])
     with jax.enable_x64(True):
+        u = jnp.asarray(u_np)
         def step(h, _):
             return h + 1e-3 * observe.bw_derivative(h, u), None
         h, _ = jax.lax.scan(step, observe.bw_initial(3, jnp.float64), None, length=200_000)
         h = np.asarray(h)
         bold = np.asarray(observe.bw_signal(jnp.asarray(h)))
-    for i, ui in enumerate(np.asarray(u)):
+    for i, ui in enumerate(u_np):
         np.testing.assert_allclose(h[i], _bw_steady_state(ui), rtol=1e-6, atol=1e-9)
     assert bold[0] == pytest.approx(0.0, abs=1e-12)   # rest gives zero BOLD
     assert bold[2] > bold[1] > 0                      # more input, more BOLD
@@ -148,3 +186,19 @@ def test_bold_constants_match_original_code():
     assert observe.K1 == pytest.approx(4.3 * 28.265 * 3 * 0.0331 * 0.34)
     assert observe.K2 == pytest.approx(0.47 * 110 * 0.0331 * 0.34)
     assert observe.K3 == pytest.approx(0.53)
+
+
+def test_kahan_keeps_increments_below_float32_resolution():
+    """Adding 1e-8 to 1.0 a million times: plain float32 stays at 1, compensated reaches 1.01."""
+    from delssome_fm.sim.integrate import kahan_add
+
+    def body(carry, _):
+        plain, total, comp = carry
+        total, comp = kahan_add(total, comp, jnp.float32(1e-8))
+        return (plain + jnp.float32(1e-8), total, comp), None
+
+    one = jnp.float32(1.0)
+    (plain, total, _), _ = jax.lax.scan(jax.jit(body), (one, one, jnp.float32(0)), None,
+                                        length=1_000_000)
+    assert float(plain) == 1.0
+    assert float(total) == pytest.approx(1.01, rel=1e-6)

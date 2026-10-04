@@ -8,7 +8,17 @@ One step, for the card's right-hand side f (compile.py) with noise input nu = xi
 
     x <- x + dt f(x, nu)   ==   x + dt drift(x) + sqrt(dt) sigma xi
 
-which is exactly Euler-Maruyama for the template's additive noise. When the card observes
+which is exactly Euler-Maruyama for the template's additive noise.
+
+Compensated summation. The update x <- x + dt f is done with Kahan compensation: each state
+carries the rounding error of its last update and adds it back on the next one. In float32 at
+dt = 0.5 ms the per-step increment of a slow state (Balloon-Windkessel's f, v, q; MFM's S) is
+near the resolution of the state's own value, so plain accumulation loses the fluctuations
+that FC and FCD are made of. Build step 6 measured it: MFM seed 30 cost 0.52 +- 0.03 in plain
+float32 against 0.43 +- 0.03 in float64 and in the original code. Compensation keeps float32
+arithmetic (generation.md §8) at three extra operations per state.
+
+When the card observes
 through Balloon-Windkessel, the hemodynamic state advances in the same step with input
 o(x) (observe.py); otherwise the observable itself is recorded at each frame.
 
@@ -79,28 +89,37 @@ def make_simulate(model: CompiledModel, cfg: SimConfig,
         x0, theta, psi, sc = (jnp.asarray(a, dtype) for a in (x0, theta, psi, sc))
 
         def step(carry, _):
-            x, h, k = carry
+            x, cx, h, ch, k = carry
             k, sub = jax.random.split(k)
             nu = jax.random.normal(sub, x.shape, dtype) * noise_scale
             if hemo:
-                h = h + dt * bw_derivative(h, observe(x))
-            x = x + dt * rhs(x, nu, theta, psi, sc)
-            return (x, h, k), None
+                h, ch = kahan_add(h, ch, dt * bw_derivative(h, observe(x)))
+            x, cx = kahan_add(x, cx, dt * rhs(x, nu, theta, psi, sc))
+            return (x, cx, h, ch, k), None
 
         def frame(carry, _):
-            (x, h, k), diverged = carry
-            (x, h, k), _ = jax.lax.scan(step, (x, h, k), None, length=n_steps)
+            state, diverged = carry
+            state, _ = jax.lax.scan(step, state, None, length=n_steps)
+            x, h = state[0], state[2]
             y = bw_signal(h) if hemo else observe(x)
             bad = (~jnp.all(jnp.isfinite(x)) | ~jnp.all(jnp.isfinite(y))
                    | jnp.any(jnp.abs(x) > bound) | jnp.any(jnp.abs(y) > bound))
-            return ((x, h, k), diverged | bad), y
+            return (state, diverged | bad), y
 
-        init = ((x0, bw_initial(N, dtype), key), jnp.asarray(False))
+        h0 = bw_initial(N, dtype)
+        init = ((x0, jnp.zeros_like(x0), h0, jnp.zeros_like(h0), key), jnp.asarray(False))
         (_, diverged), frames = jax.lax.scan(frame, init, None,
                                               length=cfg.burn_in_frames + cfg.n_frames)
         return SimOutput(observed=frames[cfg.burn_in_frames:], diverged=diverged)
 
     return simulate
+
+
+def kahan_add(total: Array, compensation: Array, increment: Array) -> tuple[Array, Array]:
+    """total + increment with Kahan compensation; returns (new total, new compensation)."""
+    y = increment - compensation
+    t = total + y
+    return t, (t - total) - y
 
 
 def make_batch_simulate(model: CompiledModel, cfg: SimConfig,
