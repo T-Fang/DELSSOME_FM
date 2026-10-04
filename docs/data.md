@@ -112,9 +112,32 @@ From the paper and SI in `docs/` (Zeng, Tian et al., bioRxiv 2025.04.07.647497, 
 
 - **Groups.** §4.3 says participants were "repeatedly sampled" in groups of 50, giving 64/14/13 groups. The code (§4.1) shows what this means in practice: deterministic overlapping windows, not random draws.
 - **SC is rescaled before simulation.** SI S3: group SC is computed as in §4.2 "with the maximum value normalized to 0.02". The stored reference SCs are *not* rescaled (their maximum is about 10.5), so the rescaling (SC × 0.02 / max SC) belongs to the simulation input, not to the loader. Confirm this against the simulation code before build step 6.
-- **The FC cost uses Fisher z.** SI S2: r is the Pearson correlation between the *arctanh-transformed* upper triangles of simulated and empirical FC; d is |mean(FC_sim) − mean(FC_emp)|; KS is the maximum distance between the FCD CDFs. The cost is (1 − r) + d + KS.
-- **Simulation protocol of the original.** Euler with dt = 6 ms during CMA-ES and 0.5 ms for the final test cost. FC and FCD were averaged over 3 simulations per parameter set. FIC-inversion runs used the group SC of the 680 training subjects throughout.
-- **Published costs exist only as box plots** (FIC Fig. 3c, MFM Fig. 5b, Hopf Fig. 5e). The numbers needed for the build-step-6 gate must come from the original runs.
+- **The FC correlation cost: the SI and the code disagree.** SI S2 says r is computed between *arctanh-transformed* FC upper triangles. The code that produced the published numbers (`tzeng:Python/DELSSOME_plus/scripts/utils/CBIG_pFIC_utils.py:204-231`, `FC_correlation_n_L1_cost`) correlates the **raw** upper triangles. To reproduce the published costs, use raw r. Kong 2021's pMFM code does use Fisher z, which may be where the SI wording came from.
+- **The rest of the cost, as coded** (same file, lines 155-308):
+  - d = |mean(FC_sim upper triangle) − mean(FC_emp upper triangle)|. This is a difference of means, not a mean absolute difference.
+  - KS = max over the 10,000 bins of |CDF_sim − CDF_emp|, unsigned, with both CDFs normalised to end at 1.
+  - Total cost = (1 − r) + d + KS.
+  - Simulated FC is `corrcoef` on raw BOLD after dropping burn-in.
+  - Simulated FCD uses the same 83-frame windows as the empirical pipeline, with `histc` into 10,000 bins on [−1, 1].
+  - Over the 3 noise repeats, simulated FC is averaged arithmetically and FCD histograms are summed.
+- **Simulation protocol of the original.**
+  - Euler steps: dt = 6 ms (tzeng) or 5 ms (lifespan_EI) during CMA-ES, and 0.5 ms for the final test cost. Hopf uses 1 ms throughout.
+  - Noise is σ·√dt·ξ, drawn independently for each state variable.
+  - Each run starts with 5,000 warm-up steps, then burn-in (2.4 min, or 1.2 min for Hopf) and 14.4 min of simulation. BOLD is sampled every TR, so 1200 frames remain after burn-in is dropped.
+  - FIC-inversion runs used the group SC of the 680 training subjects throughout, rescaled to SC × 0.02 / max.
+- **Recorded costs on the HCP-YA FIC-inversion test group** (mean over 50 CMA-ES seeds, Euler arm). Source: `tzeng:Python/DELSSOME_plus/params/<model>_HCPYA/trial1/test/seed*/test_results.pth`, which matches `tzeng:Python/DELSSOME_plus/analysis/source_data/source_data.xlsx`. These are the numbers behind Figs 3c and 5b,e, and the targets for the build-step-6 gate.
+
+  | Model | Mean 1 − r | Mean d | Mean KS | Mean total | Median total | Min total |
+  |---|---|---|---|---|---|---|
+  | FIC | 0.298 | 0.215 | 0.288 | 0.800 | 0.747 | 0.577 |
+  | MFM | 0.391 | 0.095 | 0.418 | 0.904 | 0.776 | 0.389 |
+  | Hopf | 0.318 | 0.027 | 0.159 | 0.504 | 0.470 | 0.379 |
+
+  Best single seeds give a sharper target: MFM seed 30 has total 0.389 (0.230 / 0.027 / 0.132). FIC's best is seed 39 and Hopf's is seed 49; their saved parameters are in the same `test_results.pth` files.
+- **Quirks in the original code that affect reproduction:**
+  - Hopf's last BOLD frame is always 0, because it records on `(t+1) % t_inter` with no final write.
+  - BOLD includes a factor of 100/ρ, which a code comment calls "a nonsense multiplication".
+  - lifespan_EI's `Mfm2013.simulate` expects minutes, but its HCP-YA config gives seconds.
 
 ## 8. Open questions for later phases
 
@@ -125,6 +148,6 @@ None of these block Phase 0. They are recorded here so they are not lost.
    - The cumulative-softmax head (§5.2) and the pointwise KS (§6.5) imply a CDF evaluated at 100 fixed FCD values.
    - KS over 100 levels only approximates the 10,000-bin KS of the original cost.
 2. **Simulated scan length (Phase 2).** The empirical FCD is defined on 1200 frames at TR 0.72 s (864 s), which gives 1118 windows of 83 TRs. generation.md §8 sizes the simulator for a 15-minute scan (900 s = 1250 frames). Brief §7.3 requires the same TR, window and stride. Decide whether simulations also use 1200 frames, so that the CDF's sampling noise matches the data.
-3. **No arctanh inside FCD.** The empirical pipeline correlates raw windowed FC. The "same arctanh" in architecture.md §5.1 refers to the pairwise FC targets (and to the FC correlation cost, §7). `summary.py` must not apply arctanh inside the FCD computation.
+3. **No arctanh inside FCD.** The empirical pipeline correlates raw windowed FC. The "same arctanh" in architecture.md §5.1 refers to the pairwise FC targets. The original FC correlation cost does *not* use arctanh (§7). `summary.py` must not apply arctanh inside the FCD computation.
 4. **SC bootstraps (Phase 3).** Adjacent groups overlap by 80% (§4.1). Choose groups at least 5 apart to get distinct connectomes, and decide which split they come from.
 5. **Cost-reproduction gate (build step 6).** Decide which group set the published costs refer to (FIC_inv test, or group_dl_ds) and which KS definition applies. Tianchu's `scripts/KS_distance.m` takes a signed, one-sided max rather than max |·|.
