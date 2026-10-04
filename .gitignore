@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Generated data, job scripts and logs
+outputs/
+
+# Machine-specific sandbox files
+claude_launch_status.txt
+codex_launch_status.txt
+sandbox_mounts.local
+
+# Editors
+.vscode/
+.idea/

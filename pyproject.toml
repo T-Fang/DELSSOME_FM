@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "delssome-fm"
+version = "0.0.1"
+description = "Model-agnostic neural surrogate for fitting biophysical brain circuit models to fMRI"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "cluster: needs the real data on the lab NAS; skipped when the data directory is absent",
+]

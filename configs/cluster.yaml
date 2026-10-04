@@ -1,0 +1,18 @@
+# Job submission through CBIG_pbsubmit. Every field is required.
+
+# $CBIG_CODE_DIR/setup/CBIG_pbsubmit. Read its -help before changing how it is called.
+pbsubmit: /home/ftian/storage/CBIG_private/setup/CBIG_pbsubmit
+
+# Each job script runs `source <conda_init>; conda activate <conda_env>`.
+conda_init: /home/ftian/storage/CBIG_private/bin/CBIG_init_conda
+conda_env: delssome_fm
+
+# GPU jobs run `module load cuda/<cuda_version>` and echo it into the job log.
+# Available on the cluster as of 2026-10: 12.4, 12.9 (default).
+cuda_version: "12.9"
+
+# Jobs `cd` here before running their command.
+repo_dir: /home/ftian/storage/projects/DELSSOME-FM
+
+# Job scripts and PBS stdout/stderr logs are written here (untracked by git).
+job_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/jobs
