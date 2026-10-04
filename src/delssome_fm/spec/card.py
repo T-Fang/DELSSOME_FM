@@ -6,7 +6,7 @@ region i:
     dx^v/dt = -sum_u L[v,u] x^u + beta_v + gamma_v g_v(x) Phi_v(u^v)
               + sum_{c : v in D_c} A_c + sigma_v nu^v
     u^v     = sum_u w[v,u] x^u + I_v + sum_{c : v in U_c} A_c
-    A_c,i   = G_c sum_j C_ij ( f_c(x^{s_c}_j) - delta_c f_c(x^{s_c}_i) )
+    A_c,i   = G_c sum_j C_ij ( f_c(p^c_j) - delta_c f_c(p^c_i) ),  p^c = sum_u m^c_u x^u
 
 Every coefficient slot holds a `Coef`: a fixed constant, or `scale` times a named free
 parameter. Several slots may name the same parameter, which is how hand-written cards tie
@@ -82,7 +82,9 @@ class Channel:
     """A coupling channel A_c, declared once and injected into input or derivative slots."""
 
     name: str
-    source: int                         # s_c: the one-hot m^c, index of the transmitted state
+    source: tuple[float, ...]           # m^c, length V: p^c = sum_u m^c_u x^u is transmitted.
+                                        # The sampler draws it one-hot; hand cards may weight
+                                        # several variables (Jansen-Rit sends y1 - y2).
     transfer: str                       # f_c, one of TRANSFERS
     diffusive: bool                     # delta_c: False = direct, True = diffusive
     gain: Coef                          # G_c: a global parameter (or a constant)
@@ -109,7 +111,9 @@ class Parameter:
 class ModelCard:
     """
     states:     (V,)    state-variable names, for humans only
-    linear:     (V, V)  L, entering as -sum_u L[v,u] x^u; diagonal always present
+    linear:     (V, V)  L, entering as -sum_u L[v,u] x^u. The sampler always draws the
+                        diagonal (generation.md §2); hand cards may leave it out (MPR's rate
+                        equation, Jansen-Rit's position variables)
     bias:       (V,)    beta_v
     nonlinear:  (V,)    the nonlinear term of each variable, or None
     noise:      (V,)    sigma_v, or None for a noiseless variable
@@ -155,8 +159,6 @@ def _validate(card: ModelCard) -> None:
         raise CardError(f"{where}: needs at least one state variable")
     _check_lengths(card, V, where)
     for v in range(V):
-        if card.linear[v][v] is None:
-            raise CardError(f"{where}: L[{v},{v}] must be present (the diagonal is never masked)")
         if card.nonlinear[v] is not None:
             _check_nonlinear(card.nonlinear[v], V, f"{where} variable {v}")
     _check_channels(card, V, where)
@@ -215,8 +217,10 @@ def _check_channels(card: ModelCard, V: int, where: str) -> None:
         cw = f"{where} channel '{c.name}'"
         if not _NAME.match(c.name):
             raise CardError(f"{cw}: name must match {_NAME.pattern}")
-        if not 0 <= c.source < V:
-            raise CardError(f"{cw}: source {c.source} is not a state variable")
+        if len(c.source) != V or not any(c.source):
+            raise CardError(f"{cw}: source weights m^c need {V} entries, not all zero")
+        if not all(math.isfinite(m) for m in c.source):
+            raise CardError(f"{cw}: source weights must be finite")
         if c.transfer not in TRANSFERS:
             raise CardError(f"{cw}: transfer must be one of {TRANSFERS}")
         if not c.into_input and not c.into_derivative:
@@ -291,7 +295,7 @@ def card_to_dict(card: ModelCard) -> dict[str, Any]:
         "nonlinear": [_nonlinear_out(t) for t in card.nonlinear],
         "noise": [_coef_out(c) for c in card.noise],
         "channels": [{
-            "name": c.name, "source": c.source, "transfer": c.transfer,
+            "name": c.name, "source": list(c.source), "transfer": c.transfer,
             "diffusive": c.diffusive, "gain": _coef_out(c.gain),
             "into_input": list(c.into_input), "into_derivative": list(c.into_derivative),
         } for c in card.channels],
@@ -311,7 +315,8 @@ def card_from_dict(raw: dict[str, Any]) -> ModelCard:
         _keys(c, {"name", "source", "transfer", "diffusive", "gain", "into_input",
                   "into_derivative"}, "channel")
         channels.append(Channel(
-            name=c["name"], source=_int(c["source"], "channel source"), transfer=c["transfer"],
+            name=c["name"], source=_floats(c["source"], "channel source"),
+            transfer=c["transfer"],
             diffusive=_bool(c["diffusive"], "channel diffusive"),
             gain=_coef_in(c["gain"], f"channel {c['name']} gain", allow_none=False),
             into_input=tuple(_int(v, "into_input") for v in c["into_input"]),
@@ -413,6 +418,13 @@ def _keys(raw: Any, required: set[str], where: str, optional: set[str] = frozens
     if missing or unknown:
         raise CardError(f"{where}: missing keys {sorted(missing)}, unknown keys {sorted(unknown)}")
     return raw
+
+
+def _floats(raw: Any, where: str) -> tuple[float, ...]:
+    if not isinstance(raw, list) or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                                        for v in raw):
+        raise CardError(f"{where}: expected a list of numbers, found {raw!r}")
+    return tuple(float(v) for v in raw)
 
 
 def _int(raw: Any, where: str) -> int:

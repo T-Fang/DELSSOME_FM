@@ -22,7 +22,7 @@ nonlinear: [null]
 noise: [{param: sigma}]
 channels:
   - name: x
-    source: 0
+    source: [1.0]
     transfer: identity
     diffusive: false
     gain: {param: G}

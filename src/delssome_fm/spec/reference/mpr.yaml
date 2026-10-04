@@ -1,0 +1,55 @@
+# Montbrio-Pazo-Roxin (2015) next-generation neural mass. Time in seconds.
+#
+#   tau dr/dt = Delta / (pi tau) + 2 r v
+#   tau dv/dt = v^2 + eta + J tau r - (pi tau r)^2 + G sum_j C_ij r_j   (+ noise on v)
+#
+#   tau = 20 ms, Delta = 1 (Montbrio et al., 2015; J and eta are the searched parameters)
+#
+# Template slots (generation.md §1, "also reachable": beta_v, bare-state gate, free s_u,
+# sigma = 0):
+#   r: beta_r = Delta / (pi tau^2); no leak (L_rr absent); nonlinear term
+#      gamma = 2/tau, gate x^r (bare state), identity transfer of u = v
+#   v: beta_v = eta / tau; L_vr = -J (so -L_vr r = J r); no leak; nonlinear term
+#      gamma = -pi^2 tau, quadratic gate r^2 - v^2 / (pi tau)^2 (first weight fixed to 1,
+#      rule R3), identity transfer of the constant u = 1
+#   coupling: one direct channel on r injected at dv/dt with gain G / tau
+#   noise on v only; r is a rate and has none
+#   observable r through Balloon-Windkessel
+#
+# The original DELSSOME did not implement MPR: no published fit to reproduce.
+#
+# Card parameters equal the published ones: eta, J, sigma regional; G global. P = 3, K = 1.
+name: mpr
+states: [r, v]
+parameters:
+  - {name: eta, scope: regional}
+  - {name: J, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: G, scope: global}
+linear:
+  - [null, null]
+  - [{param: J, scale: -1.0}, null]
+bias:
+  - 795.7747154594767                        # Delta / (pi tau^2)
+  - {param: eta, scale: 50.0}                # 1 / tau
+nonlinear:
+  - gain: 100.0                              # 2 / tau
+    gate: {kind: state, state: 0}            # r
+    transfer: identity
+    weights: [null, 1.0]                     # u = v
+    drive: null
+  - gain: -0.19739208802178718               # -pi^2 tau
+    gate: {kind: quadratic, weights: [1.0, -253.30295910584442]}   # r^2 - v^2 / (pi tau)^2
+    transfer: identity
+    weights: [null, null]
+    drive: 1.0                               # u = 1
+noise: [null, {param: sigma}]
+channels:
+  - name: r
+    source: [1.0, 0.0]
+    transfer: identity
+    diffusive: false
+    gain: {param: G, scale: 50.0}            # 1 / tau
+    into_input: []
+    into_derivative: [1]
+observable: {plus: 0, minus: null, observation: balloon_windkessel}

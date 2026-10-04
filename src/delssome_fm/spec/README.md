@@ -41,16 +41,16 @@ v of region i:
 ```
 dx^v/dt = -Σ_u L[v,u] x^u + β_v + γ_v g_v(x) Φ_v(u^v) + Σ_{c: v∈D_c} A_c + σ_v ν^v
 u^v     =  Σ_u w[v,u] x^u + I_v + Σ_{c: v∈U_c} A_c
-A_c,i   =  G_c Σ_j C_ij ( f_c(x^{s_c}_j) − δ_c f_c(x^{s_c}_i) )
+A_c,i   =  G_c Σ_j C_ij ( f_c(p^c_j) − δ_c f_c(p^c_i) ),   p^c = Σ_u m^c_u x^u
 ```
 
 | Card field | Template slot | Notes |
 |---|---|---|
-| `linear` (V×V) | L | enters as −Σ L x; the diagonal must be present |
+| `linear` (V×V) | L | enters as −Σ L x. The sampler always draws the diagonal; hand cards may omit it (MPR, Jansen–Rit) |
 | `bias` | β_v | |
 | `nonlinear[v]` | γ_v, g_v, Φ_v, w[v,:], I_v | `None` = no nonlinear term |
 | `noise` | σ_v | `None` = noiseless variable |
-| `channels` | f_c, s_c, δ_c, G_c, U_c, D_c | a channel is declared once and injected by index |
+| `channels` | f_c, m^c, δ_c, G_c, U_c, D_c | declared once, injected by variable index. `source` is the weight vector m^c: one-hot from the sampler, weighted in hand cards (Jansen–Rit sends y1 − y2) |
 | `observable` | o_i, observation model | x^q or x^q − x^q′; Balloon–Windkessel or direct |
 | `parameters` | which coefficients are free | regional ones are the P columns of Θ, global ones the K entries of Ψ |
 
@@ -130,13 +130,13 @@ order, which the encoder needs for the κ_p and λ_κ readouts.
 
 **Sharing.** Identical subexpressions are one node, so the "graph" is a DAG. The exception is
 `Const`: each occurrence gets its own node, so that unrelated subtrees are not joined through a
-shared literal such as 1. `EdgeAttr` and neighbour `Var` nodes are per channel.
+shared literal such as 1. `EdgeAttr` and neighbour `Var` nodes are per channel (one neighbour `Var` per variable with nonzero m^c_u).
 
 **Agg.** A channel appears in the per-region equations as one `Agg` node. Its child is the
-edge expression `G_c · C_ij · (f_c(x_j) − δ_c f_c(x_i))`, so the encoder sees the gain, whether
-coupling is diffusive, and f_c. The Agg depth (`depth_from_roots`) is 2 for Linear and Hopf
-and 5 for MFM and FIC, as architecture.md §2 says. Wilson–Cowan's is 8, because the logistic
-expands to `Inv(Add(1, Exp(Neg u)))`.
+edge expression `G_c · C_ij · (f_c(p^c_j) − δ_c f_c(p^c_i))`, so the encoder sees the gain, whether
+coupling is diffusive, and f_c. The Agg depth (`depth_from_roots`) is 2 when the channel is injected at the
+derivative (Linear, Hopf, MPR, Jansen–Rit) and 5 for MFM and FIC, as architecture.md §2 says.
+Wilson–Cowan's is 8, because the logistic expands to `Inv(Add(1, Exp(Neg u)))`.
 
 ## 4. The right-hand side (walk B, `ops.py`)
 
@@ -148,7 +148,7 @@ Walk B emits a straight-line program over the `Ops` protocol, with one method pe
   Euler–Maruyama step. With ν = 0 you get the deterministic drift. The compiler checks that
   noise enters additively.
 - **Channels** are computed once per step outside the per-region program as
-  `G_c · (C @ f_c(x^s) − δ_c · rowsum(C) · f_c(x^s))`. That is algebraically the Agg sum, and
+  `G_c · (C @ f_c(p^c) − δ_c · rowsum(C) · f_c(p^c))`. That is algebraically the Agg sum, and
   `tests/test_compile.py` checks it against an explicit Σ_j of the edge expression.
 - `NumpyOps` (float64) is for GPU-free tests; `JaxOps` (float32) is for simulation under
   `jit`/`vmap`.
@@ -162,12 +162,19 @@ Walk B emits a straight-line program over the `Ops` protocol, with one method pe
 | `fic` | 2 | wEE, wEI, sigma, **wIE** | G | S_E, BW | equal; wIE is solved by FIC, not searched (P = 4) |
 | `wilson_cowan` | 2 | c1, P, sigma | c5 | E, BW | **P_card = P − θ_e**; illustrative constants |
 | `hopf` | 2 | a, omega, sigma | g | x, direct | equal |
+| `mpr` | 2 | eta, J, sigma | G | r, BW | equal; no published fit |
+| `jansen_rit` | 6 | p, sigma | G | y1 − y2, BW | equal; **linear** y1 − y2 coupling (see below); no published fit |
 
 The template has no constant slot inside u apart from the drive, so a published threshold is
 absorbed into the drive parameter (generation.md §3). That is why two cards carry a shifted
 parameter. Each YAML file documents its mapping in its header. The original DELSSOME only
-implemented FIC, MFM and Hopf, so Linear and Wilson–Cowan cannot be checked against published
-costs.
+implemented FIC, MFM and Hopf, so the other four cannot be checked against published costs.
+
+**Jansen–Rit's coupling.** The usual sigmoidal network coupling S(y1_j − y2_j) puts the
+threshold v0 inside the sigmoid, and the template has no constant slot inside f_c (only m^c,
+which absorbs the slope). The card therefore couples y1 − y2 *linearly* into the excitatory
+input. The single-region model is exact. Supporting the sigmoidal form would need an offset
+in p^c, which would be a template change.
 
 ## 6. Extending the template
 
@@ -184,7 +191,7 @@ The design keeps every extension a matter of lengthening a list (generation.md �
 
 ## 7. Tests (`tests/test_compile.py`)
 
-- All five cards compile, round-trip through YAML, and have the expected V, P and K.
+- All seven cards compile, round-trip through YAML, and have the expected V, P and K.
 - **Each card's compiled rhs equals its published equations**, written out by hand in NumPy
   with the published constants (rtol 1e-11). This is the check that the absorbed constants
   are right.

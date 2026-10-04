@@ -49,7 +49,7 @@ nonlinear:
 noise: [{param: sigma}, {param: sigma}]
 channels:
   - name: E
-    source: 0
+    source: [1.0, 0.0]
     transfer: identity
     diffusive: false
     gain: {param: c5, scale: 1.3}            # a_e

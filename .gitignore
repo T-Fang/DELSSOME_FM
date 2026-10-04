@@ -17,3 +17,6 @@ sandbox_mounts.local
 # Editors
 .vscode/
 .idea/
+
+# Reference papers (kept local)
+docs/*.pdf

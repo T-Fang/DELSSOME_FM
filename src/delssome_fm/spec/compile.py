@@ -11,13 +11,13 @@ checks the round trip. A compile that fails raises CompileError; nothing here is
 Expressions. For each state variable v, the canonical expression is the full right-hand side
 dx^v/dt including the noise term sigma_v * nu_v, with each coupling channel appearing as a
 symbol A_c. The observable is a second kind of expression. Each channel additionally has an
-edge expression G_c * C_ij * (f_c(x^s_j) - delta_c f_c(x^s_i)), which is what the Agg node
-sums over neighbours j.
+edge expression G_c * C_ij * (f_c(p^c_j) - delta_c f_c(p^c_i)), p^c = sum_u m^c_u x^u, which
+is what the Agg node sums over neighbours j.
 
 Walk B evaluates the derivative trees with nu as an input. Feeding nu = xi / sqrt(dt), with xi
 standard normal, makes `x + dt * rhs` exactly one Euler-Maruyama step; feeding nu = 0 gives
 the deterministic drift. Channels are evaluated once per step outside the per-region trees,
-as G_c * (C @ f_c(x^s) - delta_c * rowsum(C) * f_c(x^s)) (brief §6.2).
+as G_c * (C @ f_c(p^c) - delta_c * rowsum(C) * f_c(p^c)) (brief §6.2).
 
 This module does not integrate (sim/integrate.py) and does not sample cards (sampler.py).
 """
@@ -30,7 +30,7 @@ from typing import Callable
 import sympy as sp
 from sympy.core.sorting import default_sort_key
 
-from delssome_fm.spec.card import Coef, ModelCard, Nonlinear
+from delssome_fm.spec.card import Channel, Coef, ModelCard, Nonlinear
 from delssome_fm.spec.dag import Dag, Node
 from delssome_fm.spec.ops import Array, Ops
 
@@ -52,7 +52,7 @@ class Symbols:
     params: dict[str, sp.Symbol]
     channel: dict[str, sp.Symbol]                # A_c, the per-region coupling input
     edge: dict[str, sp.Symbol]                   # C_ij, one symbol per channel
-    neighbour: dict[str, sp.Symbol]              # x^{s_c}_j, one symbol per channel
+    neighbour: dict[tuple[str, int], sp.Symbol]  # x^u_j, per (channel, u) with m^c_u != 0
 
     @staticmethod
     def for_card(card: ModelCard) -> "Symbols":
@@ -63,7 +63,8 @@ class Symbols:
             params={p.name: sp.Symbol(p.name, real=True) for p in card.parameters},
             channel={c.name: sp.Symbol(f"__A_{c.name}", real=True) for c in card.channels},
             edge={c.name: sp.Symbol(f"__C_{c.name}", real=True) for c in card.channels},
-            neighbour={c.name: sp.Symbol(f"__xn_{c.name}", real=True) for c in card.channels},
+            neighbour={(c.name, u): sp.Symbol(f"__xn_{c.name}_{u}", real=True)
+                       for c in card.channels for u, m in enumerate(c.source) if m != 0},
         )
 
 
@@ -133,6 +134,13 @@ def _gate(term: Nonlinear, v: int, sym: Symbols) -> sp.Expr:
     return _add(*[_mul(number(s), _sq(sym.state[u])) for u, s in enumerate(g.weights) if s != 0])
 
 
+def channel_source(c: Channel, sym: Symbols, neighbour: bool) -> sp.Expr:
+    """p^c = sum_u m^c_u x^u, of region i (neighbour=False) or of neighbour j."""
+    terms = [_mul(number(m), sym.neighbour[(c.name, u)] if neighbour else sym.state[u])
+             for u, m in enumerate(c.source) if m != 0]
+    return terms[0] if len(terms) == 1 else _add(*terms)
+
+
 def build_expressions(card: ModelCard, sym: Symbols) -> tuple[list, list, sp.Expr]:
     """The template of generation.md §1 written out in SymPy, unevaluated.
 
@@ -171,8 +179,9 @@ def build_expressions(card: ModelCard, sym: Symbols) -> tuple[list, list, sp.Exp
         derivs.append(_add(*terms))
     edges = []
     for c in card.channels:
-        f_nbr = transfer(c.transfer, sym.neighbour[c.name])
-        diff = _add(f_nbr, _neg(transfer(c.transfer, x[c.source]))) if c.diffusive else f_nbr
+        f_nbr = transfer(c.transfer, channel_source(c, sym, neighbour=True))
+        f_self = transfer(c.transfer, channel_source(c, sym, neighbour=False))
+        diff = _add(f_nbr, _neg(f_self)) if c.diffusive else f_nbr
         edges.append(_mul(*_factors(c.gain, sym), sym.edge[c.name], diff))
     obs = card.observable
     observable = x[obs.plus] if obs.minus is None else _add(x[obs.plus], _neg(x[obs.minus]))
@@ -279,8 +288,10 @@ class _DagWalk:
             self.lookup[sym.params[p.name]] = Node("Par", param=p.name, scope=p.scope)
         for c, e in zip(card.channels, edges):
             self.lookup[sym.edge[c.name]] = Node("EdgeAttr", channel=c.name)
-            self.lookup[sym.neighbour[c.name]] = Node("Var", state=c.source, neighbour=True,
-                                                      channel=c.name)
+            for u, m in enumerate(c.source):
+                if m != 0:
+                    self.lookup[sym.neighbour[(c.name, u)]] = Node(
+                        "Var", state=u, neighbour=True, channel=c.name)
             self.lookup[sym.channel[c.name]] = ("Agg", c.name, e)
 
     def add(self, node: Node) -> int:
@@ -366,7 +377,8 @@ def dag_to_sympy(dag: Dag, sym: Symbols) -> tuple[list, dict[str, sp.Expr], sp.E
         elif t == "Par":
             e = sym.params[node.param]
         elif t == "Var":
-            e = sym.neighbour[node.channel] if node.neighbour else sym.state[node.state]
+            e = (sym.neighbour[(node.channel, node.state)] if node.neighbour
+                 else sym.state[node.state])
         elif t == "Noise":
             e = sym.noise[node.state]
         elif t == "EdgeAttr":
@@ -435,7 +447,7 @@ class Program:
     instrs:          straight-line code, evaluated per region (arrays of shape (N,))
     derivs:          (V,) instruction index of dx^v/dt
     observable:      instruction index of o_i
-    channel_source:  per channel, instruction index of f_c(x^{s_c}_i)
+    channel_source:  per channel, instruction index of f_c(p^c_i)
     channel_gain:    per channel, instruction index of G_c
     channel_diffusive: per channel, delta_c
     """
@@ -516,7 +528,7 @@ def _walk_program(card: ModelCard, sym: Symbols, derivs: list,
     w = _ProgramWalk(card, sym)
     d = tuple(w.walk(e) for e in derivs)
     obs = w.walk(observable)
-    source = tuple(w.walk(canonicalize(transfer(c.transfer, sym.state[c.source])))
+    source = tuple(w.walk(canonicalize(transfer(c.transfer, channel_source(c, sym, False))))
                    for c in card.channels)
     gain = tuple(w.walk(canonicalize(_mul(*_factors(c.gain, sym)))) for c in card.channels)
     return Program(instrs=tuple(w.instrs), derivs=d, observable=obs, channel_source=source,

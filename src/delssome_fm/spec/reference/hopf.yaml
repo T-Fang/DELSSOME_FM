@@ -37,14 +37,14 @@ nonlinear:
 noise: [{param: sigma}, {param: sigma}]
 channels:
   - name: x
-    source: 0
+    source: [1.0, 0.0]
     transfer: identity
     diffusive: true
     gain: {param: g}
     into_input: []
     into_derivative: [0]
   - name: y
-    source: 1
+    source: [0.0, 1.0]
     transfer: identity
     diffusive: true
     gain: {param: g}

@@ -47,7 +47,8 @@ def _inputs(model, rng):
 def test_reference_cards_compile_with_expected_sizes(compiled):
     card = compiled.card
     expected = {"linear": (1, 2, 1), "mfm": (1, 3, 1), "fic": (2, 4, 1),
-                "wilson_cowan": (2, 3, 1), "hopf": (2, 3, 1)}[card.name]
+                "wilson_cowan": (2, 3, 1), "hopf": (2, 3, 1), "mpr": (2, 3, 1),
+                "jansen_rit": (6, 2, 1)}[card.name]
     assert (card.n_states, len(card.regional_params), len(card.global_params)) == expected
     assert 10 <= compiled.dag.n_nodes <= 120
 
@@ -62,7 +63,7 @@ def test_agg_depth_matches_architecture(compiled):
     transfer function) in MFM, FIC and Wilson-Cowan."""
     depth = depth_from_roots(compiled.dag)
     agg = [int(depth[a]) for a in compiled.dag.agg_nodes]
-    if compiled.card.name in ("linear", "hopf"):
+    if compiled.card.name in ("linear", "hopf", "mpr", "jansen_rit"):  # injected at dx/dt
         assert set(agg) == {2}
     else:
         assert min(agg) >= 5
@@ -125,7 +126,39 @@ def _published_wilson_cowan(x, nu, theta, psi, sc):
     return np.stack([dE + sigma * nu[:, 0], dI + sigma * nu[:, 1]], axis=-1)
 
 
+def _published_mpr(x, nu, theta, psi, sc):
+    tau, delta = 0.02, 1.0
+    eta, J, sigma = theta.T
+    r, v = x[:, 0], x[:, 1]
+    dr = (delta / (np.pi * tau) + 2 * r * v) / tau
+    dv = (v ** 2 + eta + J * tau * r - (np.pi * tau * r) ** 2 + psi[0] * (sc @ r)) / tau
+    return np.stack([dr, dv + sigma * nu[:, 1]], axis=-1)
+
+
+def _published_jansen_rit(x, nu, theta, psi, sc):
+    A, B, a, b, e0, v0, r, C = 3.25, 22.0, 100.0, 50.0, 2.5, 6.0, 0.56, 135.0
+    C1, C2, C3, C4 = C, 0.8 * C, 0.25 * C, 0.25 * C
+    p, sigma = theta.T
+    y0, y1, y2, y3, y4, y5 = x.T
+
+    def S(v):
+        return 2 * e0 / (1 + np.exp(r * (v0 - v)))
+
+    coupling = psi[0] * (sc @ (y1 - y2))
+    return np.stack([
+        y3, y4, y5,
+        A * a * S(y1 - y2) - 2 * a * y3 - a ** 2 * y0,
+        A * a * (p + C2 * S(C1 * y0) + coupling) - 2 * a * y4 - a ** 2 * y1
+        + A * a * sigma * nu[:, 4],
+        B * b * C4 * S(C3 * y0) - 2 * b * y5 - b ** 2 * y2,
+    ], axis=-1)
+
+
 PUBLISHED = {
+    "mpr": (_published_mpr, lambda r: np.stack([r.uniform(-6, -4, N), r.uniform(10, 20, N),
+                                                 r.uniform(0.01, 0.1, N)], 1), (0.01,)),
+    "jansen_rit": (_published_jansen_rit,
+                   lambda r: np.stack([r.uniform(120, 320, N), r.uniform(1, 5, N)], 1), (0.1,)),
     "mfm": (_published_mfm, lambda r: np.stack([r.uniform(0.5, 1.5, N), r.uniform(-0.1, 0.1, N),
                                                  r.uniform(0.001, 0.01, N)], 1), (0.5,)),
     "fic": (_published_fic, lambda r: np.stack([r.uniform(2, 6, N), r.uniform(0.5, 2, N),
@@ -162,12 +195,13 @@ def test_rhs_matches_sympy_lambdify_with_explicit_neighbour_sum(compiled):
     params = [sym.params[n] for n in card.regional_params + card.global_params]
     channels = []
     for c, edge in zip(card.channels, compiled.edges):
-        f = sp.lambdify([sym.state[c.source], sym.neighbour[c.name], sym.edge[c.name], *params],
-                        edge, "numpy")
+        used = [u for u, m in enumerate(c.source) if m != 0]
+        f = sp.lambdify([*sym.state, *[sym.neighbour[(c.name, u)] for u in used],
+                         sym.edge[c.name], *params], edge, "numpy")
         a = np.zeros(N)
         for i in range(N):
             for j in range(N):
-                a[i] += f(x[i, c.source], x[j, c.source], sc[i, j], *theta[i], *psi)
+                a[i] += f(*x[i], *x[j, used], sc[i, j], *theta[i], *psi)
         channels.append(a)
     args = [*sym.state, *sym.noise, *params, *[sym.channel[c.name] for c in card.channels]]
     expected = np.stack([
@@ -178,8 +212,10 @@ def test_rhs_matches_sympy_lambdify_with_explicit_neighbour_sum(compiled):
 
 
 def test_observable(compiled):
+    obs = compiled.card.observable
     x = np.random.default_rng(1).normal(size=(N, compiled.card.n_states))
-    np.testing.assert_array_equal(compiled.observe(NumpyOps())(x), x[:, 0])
+    expected = x[:, obs.plus] - (0 if obs.minus is None else x[:, obs.minus])
+    np.testing.assert_allclose(compiled.observe(NumpyOps())(x), expected, rtol=1e-15)
 
 
 def test_jax_backend_matches_numpy_under_jit(compiled):
@@ -315,10 +351,11 @@ def test_valid_minimal_card_compiles():
     (dict(parameters=(Parameter("w", "regional"), Parameter("s", "regional"),
                       Parameter("z", "regional"))), "not used"),
     (dict(parameters=(Parameter("w", "global"), Parameter("s", "regional"))), "regional"),
-    (dict(linear=((None,),)), "diagonal"),
     (dict(observable=Observable(0, 0, "direct")), "two different"),
-    (dict(channels=(Channel("c", 0, "identity", False, Coef(param="s"), (0,), ()),)),
+    (dict(channels=(Channel("c", (1.0,), "identity", False, Coef(param="s"), (0,), ()),)),
      "global"),
+    (dict(channels=(Channel("c", (0.0,), "identity", False, Coef(value=1.0), (0,), ()),)),
+     "not all zero"),
 ])
 def test_card_rules_raise(change, match):
     with pytest.raises(CardError, match=match):

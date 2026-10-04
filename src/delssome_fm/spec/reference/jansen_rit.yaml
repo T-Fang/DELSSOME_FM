@@ -1,0 +1,71 @@
+# Jansen-Rit (1995) cortical column, as a network. Time in seconds, potentials in mV.
+#
+#   dy0/dt = y3        dy3/dt = A a S(y1 - y2)                - 2a y3 - a^2 y0
+#   dy1/dt = y4        dy4/dt = A a (p + C2 S(C1 y0) + c_i)    - 2a y4 - a^2 y1
+#   dy2/dt = y5        dy5/dt = B b C4 S(C3 y0)                - 2b y5 - b^2 y2
+#   S(v) = 2 e0 / (1 + exp(r (v0 - v))) = 2 e0 logistic(r (v - v0))
+#   c_i  = G sum_j C_ij (y1_j - y2_j)                          (network coupling, see below)
+#
+#   A = 3.25 mV, B = 22 mV, a = 100 /s, b = 50 /s, e0 = 2.5 /s, v0 = 6 mV, r = 0.56 /mV,
+#   C = 135, C1 = C, C2 = 0.8 C, C3 = C4 = 0.25 C               (Jansen & Rit, 1995)
+#
+# Template slots: three critically damped filter pairs in L ({-1; a^2, 2a}, generation.md
+# §2), so the position variables y0..y2 have no diagonal; three nonlinear terms with gate 1
+# and the logistic transfer, slope r and threshold v0 absorbed into w and the drive, 2 e0 and
+# the synaptic gains into gamma (generation.md §3).
+#
+# Network coupling. Jansen-Rit's usual sigmoidal coupling S(y1_j - y2_j) has the threshold v0
+# inside the sigmoid, and the template has no slot for a constant inside f_c. This card uses
+# linear coupling of y1 - y2 into the excitatory input instead: a channel with the
+# non-one-hot source m = (0, 1, -1, 0, 0, 0) and identity f_c, injected at dy4/dt with gain
+# A a G. The local model is exact; the coupling is a modelling choice (decision 2026-10-05).
+#
+# The original DELSSOME did not implement Jansen-Rit: no published fit to reproduce.
+#
+# Observable y1 - y2 (a difference, architecture.md §2) through Balloon-Windkessel.
+#
+# Card parameters: p (input firing rate, regional, scale A a), sigma (input noise, regional,
+# scale A a: noise enters with p), G (global). P = 2, K = 1.
+name: jansen_rit
+states: [y0, y1, y2, y3, y4, y5]
+parameters:
+  - {name: p, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: G, scope: global}
+linear:
+  - [null, null, null, -1.0, null, null]
+  - [null, null, null, null, -1.0, null]
+  - [null, null, null, null, null, -1.0]
+  - [10000.0, null, null, 200.0, null, null]     # a^2, 2a
+  - [null, 10000.0, null, null, 200.0, null]     # a^2, 2a
+  - [null, null, 2500.0, null, null, 100.0]      # b^2, 2b
+bias: [null, null, null, null, {param: p, scale: 325.0}, null]   # A a p
+nonlinear:
+  - null
+  - null
+  - null
+  - gain: 1625.0                             # A a 2 e0
+    gate: {kind: one}
+    transfer: logistic
+    weights: [null, 0.56, -0.56, null, null, null]                  # r (y1 - y2)
+    drive: -3.36                             # -r v0
+  - gain: 175500.0                           # A a C2 2 e0
+    gate: {kind: one}
+    transfer: logistic
+    weights: [75.6, null, null, null, null, null]                   # r C1 y0
+    drive: -3.36
+  - gain: 185625.0                           # B b C4 2 e0
+    gate: {kind: one}
+    transfer: logistic
+    weights: [18.9, null, null, null, null, null]                   # r C3 y0
+    drive: -3.36
+noise: [null, null, null, null, {param: sigma, scale: 325.0}, null]
+channels:
+  - name: y12
+    source: [0.0, 1.0, -1.0, 0.0, 0.0, 0.0]
+    transfer: identity
+    diffusive: false
+    gain: {param: G, scale: 325.0}           # A a
+    into_input: []
+    into_derivative: [4]
+observable: {plus: 1, minus: 2, observation: balloon_windkessel}
