@@ -237,13 +237,13 @@ Both cost terms that compare distributions can also be computed **in closed form
 
 | | Stage 1 | Stage 2 |
 |---|---|---|
-| Data | synthetic corpus, ~40k simulations | target-model corpus, deliberately small |
+| Data | synthetic corpus, ~100,000 models × 100 parameter sets (~10M simulations) | target-model corpus, deliberately small |
 | Input | $\Theta, \Psi, C$, DAG | same, plus $\text{FC}^{\text{emp}}, \text{FCD}^{\text{emp}}$ |
 | Target | simulated summary statistics | three cost terms vs. real data |
 | Trains | everything | LoRA on backbone, cost heads, empirical encoders |
-| SC | **vary across samples** | as deployed |
+| SC | **vary across models** | as deployed |
 
-**Vary SC in stage 1.** If every sample uses one group-average connectome, the learned representation entangles with it. Use the bootstrapped group-average SCs as an additional sampling axis.
+**Vary SC in stage 1.** If every sample uses one group-average connectome, the learned representation entangles with it. Each synthetic model is therefore tied to one of the 64 HCP-YA training group SCs, drawn at random, so SC varies across the corpus without being a separate sampling axis (revised 2026-10-05; generation.md §9). Validation and test group SCs stay unseen in stage 1.
 
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 

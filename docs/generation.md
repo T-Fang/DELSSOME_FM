@@ -254,7 +254,7 @@ BUILD THE CORPUS
 
 BUILD THE TRAINING DATA
   for each model we kept:
-      repeat ~1,000 times:
+      repeat ~100 times:
           draw regional parameters and coupling gains
           simulate -> observation model -> BOLD at TR
           compute the summary statistics
@@ -322,11 +322,11 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 | | |
 |---|---|
 | Synthetic models | ~100,000 |
-| Parameter sets per model | ~1,000 |
+| Parameter sets per model | ~100 (first pass; more can be added per model later) |
 | Connectome | one of the 64 HCP-YA training group SCs per model, drawn uniformly at random (seeded) |
-| **Total simulations** | **~100,000,000** |
+| **Total simulations** | **~10,000,000** |
 
-**Revised 2026-10-05** (project lead). The earlier plan was ~50 models × ~200 parameter sets × 4 SC bootstraps (~40,000 simulations). SC is no longer a per-simulation sampling axis. Each synthetic model is tied to one randomly chosen training group SC, so SC still varies across the corpus (architecture.md §7) without multiplying the simulation count. Only training-split groups are used, so validation and test SCs stay unseen in stage 1. The sizes may be reduced if the simulation budget requires it (cost estimate in the build-step-7 report).
+**Revised 2026-10-05** (project lead). The earlier plan was ~50 models × ~200 parameter sets × 4 SC bootstraps (~40,000 simulations). SC is no longer a per-simulation sampling axis. Each synthetic model is tied to one randomly chosen training group SC, so SC still varies across the corpus (architecture.md §7) without multiplying the simulation count. Only training-split groups are used, so validation and test SCs stay unseen in stage 1. First pass: 100 parameter sets per model (~6,500-9,700 CPU-hours, 1.3-2 days on 200 CPUs, by the single-CPU benchmark of 2026-10-05). The plan of ~1,000 per model can be reached by adding parameter sets to existing models, so the corpus format must allow appending.
 
 Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is one training sample.
 
