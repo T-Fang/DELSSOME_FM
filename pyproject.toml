@@ -12,6 +12,9 @@ dependencies = [
     "scipy",
     "pandas",
     "pyyaml",
+    "sympy",
+    "jax",
+    "equinox",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +22,9 @@ test = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"delssome_fm.spec.reference" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

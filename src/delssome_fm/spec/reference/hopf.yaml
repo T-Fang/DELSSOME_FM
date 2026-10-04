@@ -1,0 +1,53 @@
+# Hopf (Stuart-Landau) network (Ponce-Alvarez & Deco, 2024), as in DELSSOME SI S8. Seconds.
+#
+#   dz_j/dt = (a_j + i w_j) z_j - |z_j|^2 z_j + g sum_k C_jk (z_k - z_j) + eta_j,  z = x + i y
+#
+# in real coordinates:
+#   dx/dt = a x - w y - (x^2 + y^2) x + g sum C (x_k - x_j) + sigma nu_x
+#   dy/dt = w x + a y - (x^2 + y^2) y + g sum C (y_k - y_j) + sigma nu_y
+#
+# Template slots: L = [[-a, w], [-w, -a]] (entering as -L x), nonlinear term with gain -1,
+# isotropic quadratic gate x^2 + y^2, identity transfer of u = x (resp. y); two diffusive
+# channels on x and y injected at the derivative; x observed directly (downsampled to TR).
+# Coefficient tying: a, w, sigma and g each appear in two slots.
+#
+# Card parameters equal the published ones: a, omega, sigma regional; g global. P = 3, K = 1.
+name: hopf
+states: [x, y]
+parameters:
+  - {name: a, scope: regional}
+  - {name: omega, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: g, scope: global}
+linear:
+  - [{param: a, scale: -1.0}, {param: omega}]
+  - [{param: omega, scale: -1.0}, {param: a, scale: -1.0}]
+bias: [null, null]
+nonlinear:
+  - gain: -1.0
+    gate: {kind: quadratic, weights: [1.0, 1.0]}
+    transfer: identity
+    weights: [1.0, null]
+    drive: null
+  - gain: -1.0
+    gate: {kind: quadratic, weights: [1.0, 1.0]}
+    transfer: identity
+    weights: [null, 1.0]
+    drive: null
+noise: [{param: sigma}, {param: sigma}]
+channels:
+  - name: x
+    source: 0
+    transfer: identity
+    diffusive: true
+    gain: {param: g}
+    into_input: []
+    into_derivative: [0]
+  - name: y
+    source: 1
+    transfer: identity
+    diffusive: true
+    gain: {param: g}
+    into_input: []
+    into_derivative: [1]
+observable: {plus: 0, minus: null, observation: direct}

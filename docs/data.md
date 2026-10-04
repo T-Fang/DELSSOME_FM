@@ -106,7 +106,17 @@ The files `HCP-YA/{FC,SC,FCD_cdf}/DK68/FIC_inv/FIC_inv_{train,val,test}.csv` are
 
 They use the same averaging (`get_input.ipynb` cell 6; Tianchu's `scripts/run.m`). Recomputation matches: SC exactly, FC to ≤ 2.0e-14 relative error, and FCD to ≤ 5.6e-16 on the normalised CDF. This is the pFIC-style train/validation/test protocol, and probably what the published FIC costs were computed against. Confirm this at build step 6.
 
-## 7. Open questions for later phases
+## 7. What the DELSSOME paper adds
+
+From the paper and SI in `docs/` (Zeng, Tian et al., bioRxiv 2025.04.07.647497, version of 2026-03-24).
+
+- **Groups.** §4.3 says participants were "repeatedly sampled" in groups of 50, giving 64/14/13 groups. The code (§4.1) shows what this means in practice: deterministic overlapping windows, not random draws.
+- **SC is rescaled before simulation.** SI S3: group SC is computed as in §4.2 "with the maximum value normalized to 0.02". The stored reference SCs are *not* rescaled (their maximum is about 10.5), so the rescaling (SC × 0.02 / max SC) belongs to the simulation input, not to the loader. Confirm this against the simulation code before build step 6.
+- **The FC cost uses Fisher z.** SI S2: r is the Pearson correlation between the *arctanh-transformed* upper triangles of simulated and empirical FC; d is |mean(FC_sim) − mean(FC_emp)|; KS is the maximum distance between the FCD CDFs. The cost is (1 − r) + d + KS.
+- **Simulation protocol of the original.** Euler with dt = 6 ms during CMA-ES and 0.5 ms for the final test cost. FC and FCD were averaged over 3 simulations per parameter set. FIC-inversion runs used the group SC of the 680 training subjects throughout.
+- **Published costs exist only as box plots** (FIC Fig. 3c, MFM Fig. 5b, Hopf Fig. 5e). The numbers needed for the build-step-6 gate must come from the original runs.
+
+## 8. Open questions for later phases
 
 None of these block Phase 0. They are recorded here so they are not lost.
 
@@ -115,6 +125,6 @@ None of these block Phase 0. They are recorded here so they are not lost.
    - The cumulative-softmax head (§5.2) and the pointwise KS (§6.5) imply a CDF evaluated at 100 fixed FCD values.
    - KS over 100 levels only approximates the 10,000-bin KS of the original cost.
 2. **Simulated scan length (Phase 2).** The empirical FCD is defined on 1200 frames at TR 0.72 s (864 s), which gives 1118 windows of 83 TRs. generation.md §8 sizes the simulator for a 15-minute scan (900 s = 1250 frames). Brief §7.3 requires the same TR, window and stride. Decide whether simulations also use 1200 frames, so that the CDF's sampling noise matches the data.
-3. **No arctanh inside FCD.** The empirical pipeline correlates raw windowed FC. The "same arctanh" in architecture.md §5.1 refers to the pairwise FC targets. `summary.py` must not apply arctanh inside the FCD computation.
+3. **No arctanh inside FCD.** The empirical pipeline correlates raw windowed FC. The "same arctanh" in architecture.md §5.1 refers to the pairwise FC targets (and to the FC correlation cost, §7). `summary.py` must not apply arctanh inside the FCD computation.
 4. **SC bootstraps (Phase 3).** Adjacent groups overlap by 80% (§4.1). Choose groups at least 5 apart to get distinct connectomes, and decide which split they come from.
 5. **Cost-reproduction gate (build step 6).** Decide which group set the published costs refer to (FIC_inv test, or group_dl_ds) and which KS definition applies. Tianchu's `scripts/KS_distance.m` takes a signed, one-sided max rather than max |·|.

@@ -1,0 +1,61 @@
+# Feedback inhibition control model (Deco et al., 2014), as in DELSSOME SI S1. Seconds.
+#
+#   I_E = W_E I0 + w_EE J S_E + G J sum_k C_jk S_E,k - w_IE S_I
+#   I_I = W_I I0 + w_EI J S_E - w_II S_I
+#   dS_E/dt = -S_E / tau_E + gamma (1 - S_E) H_E(I_E) + sigma nu
+#   dS_I/dt = -S_I / tau_I + H_I(I_I) + sigma nu
+#   H_X(I)  = (a_X I - b_X) / (1 - exp(-d_X (a_X I - b_X)))
+#
+#   a_E = 310, a_I = 615 n/C;  b_E = 125, b_I = 177 Hz;  d_E = 0.16, d_I = 0.087 s
+#   tau_E = 0.1 s, tau_I = 0.01 s, gamma = 0.641
+#   w_II = 1, W_E = 1, W_I = 0.7, I0 = 0.382 nA, J = J_NMDA = 0.15 nA
+#
+# Canonical form: H_X(I) = (1/d_X) WW(u_X), u_X = d_X (a_X I_X - b_X):
+#   u_E = (d_E a_E J) w_EE S_E - (d_E a_E) w_IE S_I + (d_E a_E J) G sum C S_E
+#         + d_E (a_E W_E I0 - b_E)
+#   u_I = (d_I a_I J) w_EI S_E - (d_I a_I w_II) S_I + d_I (a_I W_I I0 - b_I)
+#
+# Card parameters equal the published ones (only scales are absorbed):
+#   wEE, wEI, sigma  regional (the searched triple)
+#   wIE              regional, not searched: pFIC solves it per region so that the E firing
+#                    rate stays near 3 Hz. Carried as a 4th column of Theta (decision of
+#                    2026-10-05), filled by the FIC solver at build step 6.
+#   G                global
+# P = 4, K = 1.
+name: fic
+states: [S_E, S_I]
+parameters:
+  - {name: wEE, scope: regional}
+  - {name: wEI, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: wIE, scope: regional}
+  - {name: G, scope: global}
+linear:
+  - [10.0, null]                             # 1 / tau_E
+  - [null, 100.0]                            # 1 / tau_I
+bias: [null, null]
+nonlinear:
+  - gain: 4.00625                            # gamma / d_E
+    gate: {kind: one_minus_self}
+    transfer: wong_wang
+    weights:
+      - {param: wEE, scale: 7.44}            # d_E a_E J
+      - {param: wIE, scale: -49.6}           # -d_E a_E
+    drive: -1.0528                           # d_E (a_E W_E I0 - b_E)
+  - gain: 11.49425287356322                  # 1 / d_I
+    gate: {kind: one}
+    transfer: wong_wang
+    weights:
+      - {param: wEI, scale: 8.02575}         # d_I a_I J
+      - -53.505                              # -d_I a_I w_II
+    drive: -1.091763                         # d_I (a_I W_I I0 - b_I)
+noise: [{param: sigma}, {param: sigma}]
+channels:
+  - name: S_E
+    source: 0
+    transfer: identity
+    diffusive: false
+    gain: {param: G, scale: 7.44}            # d_E a_E J
+    into_input: [0]
+    into_derivative: []
+observable: {plus: 0, minus: null, observation: balloon_windkessel}

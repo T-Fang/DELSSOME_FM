@@ -26,8 +26,8 @@ documented in [docs/data.md](docs/data.md).
 |---|---|
 | 1. Phase 0: data and groups (gate) | **done**, verification passes |
 | 2. Repo skeleton, config loading, cluster wrapper | **done** |
-| 3. Model card and compiler | not started |
-| 4. Reference cards (gate) | not started |
+| 3. Model card and compiler | **done** |
+| 4. Reference cards (gate) | five cards compile; **awaiting review** |
 | 5. Simulator | not started |
 | 6. Reference reproduction (gate) | not started |
 | 7. Sampler and corpus | not started |
@@ -42,7 +42,9 @@ conda activate delssome_fm
 pip install -e ".[test]"
 ```
 
-JAX is added when the simulator lands (build step 5).
+`pip install -e .` installs CPU JAX. For GPU jobs, also run `pip install "jax[cuda12]"`
+(the `delssome_fm` env on the cluster already has it). Without a GPU, JAX falls back to the
+CPU.
 
 ## Run
 
@@ -87,11 +89,12 @@ scripts/            thin CLI entry points, no logic
 src/delssome_fm/
     config.py       config dataclasses and the strict YAML loader
     data/           group membership, empirical SC/FC/FCD loading and averaging, Phase 0 check
+    spec/           model card -> SymPy -> equation DAG + simulator rhs; see spec/README.md
     cluster/        CBIG_pbsubmit wrapper
 tests/
 ```
 
-`spec/`, `sim/`, `nn/` and `train/` are added in build steps 3 to 8.
+`sim/`, `nn/` and `train/` are added in build steps 5 to 8.
 
 ## Where outputs land
 

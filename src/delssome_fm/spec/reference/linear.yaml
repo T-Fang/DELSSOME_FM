@@ -1,0 +1,31 @@
+# Linear (Ornstein-Uhlenbeck) network. Time in seconds.
+#
+#   dx_i/dt = -x_i / tau + G sum_j C_ij x_j + sigma nu_i
+#
+# Template slots (generation.md §1 table): L = 1/tau, no nonlinear term (rule R2: an identity
+# transfer with gate 1 would be affine, so the term is omitted), one direct channel on x
+# injected at the derivative (D_1), observed through Balloon-Windkessel.
+#
+# Card parameters vs the equation above:
+#   inv_tau = 1/tau (regional), sigma (regional), G (global).  P = 2, K = 1.
+# There is no published Linear fit in DELSSOME; this card is checked for compiling only.
+name: linear
+states: [x]
+parameters:
+  - {name: inv_tau, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: G, scope: global}
+linear:
+  - [{param: inv_tau}]
+bias: [null]
+nonlinear: [null]
+noise: [{param: sigma}]
+channels:
+  - name: x
+    source: 0
+    transfer: identity
+    diffusive: false
+    gain: {param: G}
+    into_input: []
+    into_derivative: [0]
+observable: {plus: 0, minus: null, observation: balloon_windkessel}

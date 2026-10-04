@@ -1,0 +1,44 @@
+# Mean field model (Deco et al., 2013), as in DELSSOME SI S7. Time in seconds.
+#
+#   dS_i/dt = -S_i / tau_s + gamma (1 - S_i) H(x_i) + sigma nu_i
+#   H(x)    = (a x - b) / (1 - exp(-d (a x - b)))
+#   x_i     = w J S_i + G J sum_j C_ij S_j + I
+#
+#   J = 0.2609 nA, a = 270 n/C, b = 108 Hz, d = 0.154 s, gamma = 0.641, tau_s = 0.1 s
+#
+# Canonical form (generation.md §3): H(x) = (1/d) WW(u) with WW(u) = u / (1 - exp(-u)) and
+#   u = d (a x - b) = (d a J) w S_i + (d a J) G sum_j C_ij S_j + (d a) (I - b/a)
+# so gamma_v = gamma / d, the w and G slots carry scale d a J, and the drive carries d a.
+#
+# Card parameters vs published:
+#   w     = w            (regional, scale d a J = 10.848222)
+#   I     = I - b/a      (regional, scale d a = 41.58)   <- shifted by b/a = 0.4 nA
+#   sigma = sigma        (regional)
+#   G     = G            (global, scale d a J)
+# P = 3, K = 1.
+name: mfm
+states: [S]
+parameters:
+  - {name: w, scope: regional}
+  - {name: I, scope: regional}
+  - {name: sigma, scope: regional}
+  - {name: G, scope: global}
+linear:
+  - [10.0]                                   # 1 / tau_s
+bias: [null]
+nonlinear:
+  - gain: 4.162337662337663                  # gamma / d
+    gate: {kind: one_minus_self}
+    transfer: wong_wang
+    weights: [{param: w, scale: 10.848222}]  # d a J
+    drive: {param: I, scale: 41.58}          # d a
+noise: [{param: sigma}]
+channels:
+  - name: S
+    source: 0
+    transfer: identity
+    diffusive: false
+    gain: {param: G, scale: 10.848222}       # d a J
+    into_input: [0]
+    into_derivative: []
+observable: {plus: 0, minus: null, observation: balloon_windkessel}
