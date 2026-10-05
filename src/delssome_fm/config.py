@@ -72,7 +72,7 @@ class CorpusConfig:
     screen_burn_in_frames: int
     flat_rel_sd: float            # flat if SD <= flat_rel_sd * max(1, |mean|) in every region
     initial_state_scale: float    # x0 ~ U(-s, s), drawn per simulation
-    fcd_store_stride: int         # store every k-th bin of the FCD CDF (1 = all 10,000)
+    fcd_store_stride: int         # store the FCD CDF at every k-th bin (summary.fcd_levels)
     output_dir: Path
 
 

@@ -36,7 +36,7 @@ from delssome_fm.config import CorpusConfig, DataConfig, SimConfig
 from delssome_fm.data.empirical import N_REGIONS, load_reference_group
 from delssome_fm.data.groups import groups_from_config
 from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
-from delssome_fm.sim.summary import summarize
+from delssome_fm.sim.summary import fcd_levels, summarize
 from delssome_fm.spec.card import ModelCard, card_to_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.sampler import draw_parameters, sample_card
@@ -126,7 +126,7 @@ def _summariser(cfg: SimConfig, stride: int):
     """jit(map(summarize)) for one batch; cached so it compiles once per process."""
     def one(y):
         s = summarize(y, cfg)
-        return s._replace(fcd_cdf=s.fcd_cdf[stride - 1::stride])
+        return s._replace(fcd_cdf=fcd_levels(s.fcd_cdf, stride))
     return jax.jit(lambda ys: jax.lax.map(one, ys, batch_size=8))
 
 

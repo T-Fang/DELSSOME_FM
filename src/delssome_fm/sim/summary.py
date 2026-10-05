@@ -21,8 +21,11 @@ and the stage-1 statistics of architecture.md §5.1:
     pairwise          arctanh(FC_ij) over the upper triangle
     fc_moments (3,)   mean, SD, skewness of the upper-triangle FC
 
-Not decided here (docs/data.md §8): reducing the 10,000-bin FCD CDF to the 100 levels of
-architecture.md. The cost functions of build step 6 also live elsewhere.
+The FCD CDF is computed at full resolution (needed for the original cost's KS). The stage-1
+corpus stores it reduced by `fcd_levels`: the CDF at every k-th bin's right edge. With
+k = 100 that is 100 levels at FCD values -0.98, -0.96, ..., 1.00 (decided 2026-10-05).
+Stage 2 must reduce empirical CDFs with the same function. The cost functions of build step 6
+live in cost.py.
 """
 
 from __future__ import annotations
@@ -125,3 +128,15 @@ def summarize(x: Array, cfg: SimConfig) -> Summary:
                    regional=regional_statistics(x, fc),
                    pairwise=jnp.arctanh(fc[rows, cols]),
                    fc_moments=fc_moments(fc))
+
+
+def fcd_levels(cdf: Array, stride: int) -> Array:
+    """
+    cdf: (..., B) cumulative counts at B bins on [-1, 1]
+    returns: (..., B // stride) the CDF at every stride-th bin's right edge. The last level
+             is the total count, so the result can still be normalised.
+    """
+    B = cdf.shape[-1]
+    if stride < 1 or B % stride:
+        raise ValueError(f"fcd stride {stride} must divide the {B} bins")
+    return cdf[..., stride - 1::stride]

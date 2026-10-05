@@ -143,10 +143,7 @@ From the paper and SI in `docs/` (Zeng, Tian et al., bioRxiv 2025.04.07.647497, 
 
 None of these block Phase 0. They are recorded here so they are not lost.
 
-1. **FCD resolution (Phase 2).** The data has 10,000 bins, while architecture.md §1 and §5.1 use 100 fixed levels. The reduction needs choosing, and it must be applied identically to empirical and simulated CDFs. There is also an inconsistency in architecture.md:
-   - §5.1 says "100 fixed *probability* levels", which describes quantiles.
-   - The cumulative-softmax head (§5.2) and the pointwise KS (§6.5) imply a CDF evaluated at 100 fixed FCD values.
-   - KS over 100 levels only approximates the 10,000-bin KS of the original cost.
+1. **FCD resolution: decided for the stage-1 corpus (2026-10-05).** The corpus stores the simulated FCD CDF at **100 levels**: the CDF at FCD values −0.98, −0.96, …, 1.00, i.e. every 100th bin of the 10,000-bin CDF (`summary.fcd_levels`, stride 100). That makes the representation a CDF at fixed FCD values, not quantiles. Stage 2 must reduce empirical CDFs with the same function. Measured on the 91 empirical group CDFs, KS over these 100 levels underestimates the 10,000-bin KS by at most 0.0004 (mean 0.00007). Known cost of the even grid: the empirical FCD puts almost all its mass on [0.2, 1.0] (CDF < 0.001 below 0.21 in every group), so about 60 of the 100 levels sit where the empirical CDF is ~0. Costs of target-model simulations (build step 6, stage 2) are still computed at full resolution.
 2. **Simulated scan length (Phase 2).** The empirical FCD is defined on 1200 frames at TR 0.72 s (864 s), which gives 1118 windows of 83 TRs. generation.md §8 sizes the simulator for a 15-minute scan (900 s = 1250 frames). Brief §7.3 requires the same TR, window and stride. Decide whether simulations also use 1200 frames, so that the CDF's sampling noise matches the data.
 3. **No arctanh inside FCD.** The empirical pipeline correlates raw windowed FC. The "same arctanh" in architecture.md §5.1 refers to the pairwise FC targets. The original FC correlation cost does *not* use arctanh (§7). `summary.py` must not apply arctanh inside the FCD computation.
 4. **SC bootstraps (Phase 3).** Adjacent groups overlap by 80% (§4.1). Choose groups at least 5 apart to get distinct connectomes, and decide which split they come from.

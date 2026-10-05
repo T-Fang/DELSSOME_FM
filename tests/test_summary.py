@@ -18,7 +18,7 @@ from scipy import stats
 from conftest import data_available
 from delssome_fm.config import SimConfig
 from delssome_fm.data.empirical import FCD_BINS, read_csv_array
-from delssome_fm.sim.summary import (fc_moments, fcd_cdf, functional_connectivity,
+from delssome_fm.sim.summary import (fc_moments, fcd_cdf, fcd_levels, functional_connectivity,
                                      regional_statistics, summarize, window_fc_vectors)
 
 CFG = SimConfig(dt=0.001, tr=0.72, n_frames=1200, burn_in_frames=0, divergence_bound=1e6,
@@ -145,3 +145,17 @@ def test_summary_reproduces_stored_run_fc_and_fcd(data_cfg, run):
     cdf_ref = read_csv_array(data_cfg.run_fcd_dir / f"{run}.csv", (FCD_BINS,))
     np.testing.assert_allclose(fc, fc_ref, rtol=0, atol=1e-12)
     np.testing.assert_array_equal(cdf, cdf_ref)
+
+
+def test_fcd_levels_are_the_cdf_at_fixed_fcd_values():
+    """100 levels from 10,000 bins: the CDF at -0.98, -0.96, ..., 1.00, computed directly."""
+    rng = np.random.default_rng(8)
+    values = np.tanh(rng.normal(0.5, 0.3, 50_000))
+    counts, _ = np.histogram(values, bins=10_000, range=(-1, 1))
+    levels = np.asarray(fcd_levels(jnp.asarray(np.cumsum(counts)), 100))
+    edges = np.linspace(-1, 1, 101)[1:]
+    direct = np.array([(values <= e).sum() for e in edges])  # edges hit no sample exactly
+    np.testing.assert_array_equal(levels, direct)
+    assert levels[-1] == len(values)
+    with pytest.raises(ValueError, match="divide"):
+        fcd_levels(jnp.asarray(np.cumsum(counts)), 300)
