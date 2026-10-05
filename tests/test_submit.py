@@ -1,5 +1,7 @@
 """cluster/submit.py. Nothing here submits a job: subprocess.run is replaced so a call fails."""
 
+import shlex
+
 from pathlib import Path
 
 import pytest
@@ -15,7 +17,8 @@ def cluster(tmp_path) -> ClusterConfig:
     cfg = load_config(REPO_ROOT / "configs" / "cluster.yaml", ClusterConfig)
     return ClusterConfig(pbsubmit=cfg.pbsubmit, conda_init=cfg.conda_init,
                          conda_env=cfg.conda_env, cuda_version="12.9",
-                         repo_dir=cfg.repo_dir, job_dir=tmp_path / "jobs")
+                         repo_dir=cfg.repo_dir, job_dir=tmp_path / "jobs",
+                         headnode_ssh=cfg.headnode_ssh)
 
 
 @pytest.fixture(autouse=True)
@@ -63,11 +66,13 @@ def test_dry_run_is_default_and_writes_nothing(cluster, capsys):
     assert "dry run" in out and str(cluster.pbsubmit) in out
 
 
-def test_gpu_submission_off_headnode_refuses(cluster, monkeypatch):
-    monkeypatch.setattr(submit_mod.socket, "gethostname", lambda: "compiler")
-    with pytest.raises(RuntimeError, match="headnode"):
-        submit("echo hi", "gpu", Resources("00:01:00", "1G", ngpus=1), cluster, dry_run=False)
-    assert not cluster.job_dir.exists()
+def test_off_headnode_the_call_is_forwarded_over_ssh(cluster):
+    from delssome_fm.cluster.submit import submission_argv
+    job = build_job("echo hi", "gpu", Resources("00:01:00", "1G", ngpus=1), cluster, stamp="T0")
+    remote = submission_argv(job, cluster, host="compiler")
+    assert remote[:len(cluster.headnode_ssh)] == list(cluster.headnode_ssh)
+    assert shlex.split(remote[-1]) == list(job.argv)  # the whole pbsubmit call, quoted once
+    assert submission_argv(job, cluster, host="headnode") == list(job.argv)
 
 
 @pytest.mark.parametrize("kwargs", [dict(walltime="2:00", memory="1G"),

@@ -117,6 +117,7 @@ class ClusterConfig:
     cuda_version: str
     repo_dir: Path
     job_dir: Path
+    headnode_ssh: tuple[str, ...]   # command prefix that runs a shell command on the headnode
 
 
 def load_config(path: Path, cls: type[T]) -> T:

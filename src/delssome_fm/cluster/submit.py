@@ -6,7 +6,13 @@ the command), and calls CBIG_pbsubmit with that script's path. Passing a script 
 than a compound command is what CBIG_pbsubmit requires when it has to forward a submission
 from a compute node to the headnode.
 
-Dry run is the default. It prints the script and the CBIG_pbsubmit call and writes nothing.
+CBIG_pbsubmit is always run on the headnode, where it calls qsub directly. Elsewhere (this
+project's sandbox runs on `compiler`) the call is forwarded with `cluster.headnode_ssh`. The
+script's own forwarding uses plain `ssh headnode`, which the sandbox rejects (its
+/etc/ssh/ssh_config.d files show the wrong owner), and it cannot submit GPU jobs at all.
+
+Dry run is the default. It prints the script and the command it would run, and writes
+nothing.
 
 This module does not decide what to run or how to split work into jobs; the corpus and
 training code do that. It does not write job manifests either; each job writes its own.
@@ -99,14 +105,11 @@ def submit(command: str, name: str, resources: Resources, cluster: ClusterConfig
     """Submit `command` as one job. With dry_run (the default) only print what would happen."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     job = build_job(command, name, resources, cluster, stamp)
+    argv = submission_argv(job, cluster, socket.gethostname())
     if dry_run:
         print(f"# dry run: would write {job.script_path}\n{job.script}")
-        print("# dry run: would run\n" + shlex.join(job.argv))
+        print("# dry run: would run\n" + shlex.join(argv))
         return job
-    host = socket.gethostname()
-    if resources.ngpus > 0 and host != "headnode":
-        raise RuntimeError(f"GPU jobs must be submitted from headnode (CBIG_pbsubmit -help); "
-                           f"this is {host!r}. Run `ssh headnode` first.")
     if not cluster.pbsubmit.is_file():
         raise FileNotFoundError(f"CBIG_pbsubmit not found at {cluster.pbsubmit}")
     cluster.job_dir.mkdir(parents=True, exist_ok=True)
@@ -114,5 +117,12 @@ def submit(command: str, name: str, resources: Resources, cluster: ClusterConfig
         raise FileExistsError(f"job script already exists: {job.script_path}")
     job.script_path.write_text(job.script)
     job.script_path.chmod(0o755)
-    subprocess.run(job.argv, check=True)
+    subprocess.run(argv, check=True)
     return job
+
+
+def submission_argv(job: Job, cluster: ClusterConfig, host: str) -> list[str]:
+    """The CBIG_pbsubmit call as run on the headnode: directly there, via ssh elsewhere."""
+    if host == "headnode":
+        return list(job.argv)
+    return [*cluster.headnode_ssh, shlex.join(job.argv)]

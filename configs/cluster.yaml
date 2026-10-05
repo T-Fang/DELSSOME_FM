@@ -16,3 +16,7 @@ repo_dir: /home/ftian/storage/projects/DELSSOME-FM
 
 # Job scripts and PBS stdout/stderr logs are written here (untracked by git).
 job_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/jobs
+
+# Off the headnode, CBIG_pbsubmit is run on the headnode through this command. -F skips the
+# system ssh config, which the sandbox rejects (wrong owner on /etc/ssh/ssh_config.d).
+headnode_ssh: [ssh, -F, /home/ftian/.ssh/config, -o, BatchMode=yes, headnode]
