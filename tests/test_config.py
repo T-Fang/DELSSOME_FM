@@ -58,7 +58,8 @@ def test_wrong_tuple_length_raises(tmp_path):
 
 
 @pytest.mark.parametrize("name,cls", [("data", DataConfig), ("sim", SimConfig),
-                                      ("cluster", ClusterConfig), ("reproduce", ReproduceConfig)])
+                                      ("cluster", ClusterConfig), ("reproduce", ReproduceConfig),
+                                      ("reproduce_once", ReproduceConfig)])
 def test_every_config_file_loads(name, cls):
     """Catches YAML pitfalls such as 1.0e6 (read as a string; write 1.0e+6)."""
     load_config(DATA_CONFIG_PATH.parent / f"{name}.yaml", cls)
