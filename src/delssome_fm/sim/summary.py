@@ -85,12 +85,17 @@ def window_fc_vectors(x: Array, window: int) -> Array:
     return fcs[:, rows, cols]
 
 
+def fcd_matrix(x: Array, window: int) -> Array:
+    """x: (T, N) -> (W, W) FCD matrix, W = T - window + 1: the Pearson correlation between
+    the windows' upper-triangle FC vectors."""
+    z = _standardise(window_fc_vectors(x, window), axis=1)
+    return z @ z.T
+
+
 def fcd_cdf(x: Array, window: int, bins: int) -> Array:
     """x: (T, N) -> (bins,) cumulative histogram counts of the upper-triangle FCD values."""
-    vecs = window_fc_vectors(x, window)
-    z = _standardise(vecs, axis=1)
-    fcd = z @ z.T
-    rows, cols = upper(vecs.shape[0])
+    fcd = fcd_matrix(x, window)
+    rows, cols = upper(fcd.shape[0])
     counts, _ = jnp.histogram(fcd[rows, cols], bins=bins, range=(-1.0, 1.0))
     return jnp.cumsum(counts)
 

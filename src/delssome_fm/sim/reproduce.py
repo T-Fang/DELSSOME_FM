@@ -36,7 +36,7 @@ from delssome_fm.data.empirical import FCD_BINS, N_REGIONS, read_csv_array
 from delssome_fm.sim import fic
 from delssome_fm.sim.cost import delssome_cost
 from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
-from delssome_fm.sim.summary import fcd_cdf, functional_connectivity
+from delssome_fm.sim.summary import fcd_cdf, fcd_matrix, functional_connectivity
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.reference import load_reference
 
@@ -115,7 +115,8 @@ def evaluate(cfg: ReproduceConfig, sim_cfg: SimConfig, model: ReproduceModel,
     """Our costs for `sets`: arrays (len(sets), n_noise_repeats) per component; n_valid
     (same shape): how many of the n_dup simulations did not diverge; and the simulated
     statistics: fc (S, R, N, N) averaged over valid simulations, fcd_cdf (S, R, bins) summed
-    cumulative counts."""
+    cumulative counts; and fc_first (S, N, N), fcd_first (S, W, W): the FC and FCD matrix of
+    each set's first simulation (NaN if it diverged), for figures."""
     card = load_reference(model.name)
     sim_cfg = SimConfig(dt=model.dt, tr=sim_cfg.tr, n_frames=sim_cfg.n_frames,
                         burn_in_frames=model.burn_in_frames,
@@ -129,6 +130,12 @@ def evaluate(cfg: ReproduceConfig, sim_cfg: SimConfig, model: ReproduceModel,
     x0 = initial_state(model)
     jobs = [(i, r, k) for i in range(len(sets)) for r in range(cfg.n_noise_repeats)
             for k in range(cfg.n_dup)]
+    # FC and FCD matrix of the first simulation of the first evaluation of each set, for
+    # figures (as the original's analysis_utils.plot_time_series plots one simulation)
+    first = jax.jit(lambda y: (functional_connectivity(y), fcd_matrix(y, sim_cfg.fcd_window)))
+    n_win = sim_cfg.n_frames - sim_cfg.fcd_window + 1
+    fc_first = np.full((len(sets), N_REGIONS, N_REGIONS), np.nan, np.float32)
+    fcd_first = np.full((len(sets), n_win, n_win), np.nan, np.float32)
     fc = np.zeros((len(sets), cfg.n_noise_repeats, N_REGIONS, N_REGIONS))
     hist = np.zeros((len(sets), cfg.n_noise_repeats, sim_cfg.fcd_bins))
     n_valid = np.zeros((len(sets), cfg.n_noise_repeats), dtype=int)
@@ -144,12 +151,17 @@ def evaluate(cfg: ReproduceConfig, sim_cfg: SimConfig, model: ReproduceModel,
                        jnp.asarray(np.tile(inputs.sc, (len(padded), 1, 1))))
         fcs, cdfs = (np.asarray(a, np.float64) for a in summarise(out.observed))
         diverged = np.asarray(out.diverged)
-        for j, (i, r, _) in enumerate(chunk):
+        for j, (i, r, k) in enumerate(chunk):
+            if r == 0 and k == 0 and not diverged[j]:
+                f1, d1 = first(out.observed[j])
+                fc_first[i], fcd_first[i] = np.asarray(f1), np.asarray(d1)
             if not diverged[j]:
                 fc[i, r] += fcs[j]
                 hist[i, r] += cdfs[j]   # cumulative counts: summing them sums the histograms
                 n_valid[i, r] += 1
-    return _costs(fc, hist, n_valid, inputs)
+    out = _costs(fc, hist, n_valid, inputs)
+    out["fc_first"], out["fcd_first"] = fc_first, fcd_first
+    return out
 
 
 def _costs(fc: np.ndarray, cdf: np.ndarray, n_valid: np.ndarray,

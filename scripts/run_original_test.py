@@ -5,7 +5,7 @@ Mirrors CBIG_{pMFM,pFIC,Hopf}_optimizer.py *_Tester.test: torch.manual_seed(stor
 the surviving parameter vector repeated 3 times, the model simulated at dt_test, FC averaged
 and FCD histograms averaged over the valid repeats. With the stored seed this should replay the
 recorded run exactly; the recomputed cost against the test data is saved next to the recorded
-one as a check.
+one as a check. Also saves the FC and FCD matrix of the first valid simulation, for figures.
 
 Needs torch and imports the original code read-only, so run it in the lifespan_ei env:
     /home/ftian/storage/miniconda/envs/lifespan_ei/bin/python scripts/run_original_test.py \\
@@ -74,13 +74,17 @@ def main() -> None:
     bold = bold[:, valid, :]                                  # [N, valid repeats, T]
     if bold.shape[1] == 0:
         raise RuntimeError(f"{args.model} seed{args.seed_index}: all 3 repeats invalid")
-    fc = FC_calculate(bold).mean(0, keepdim=True)            # [1, N, N]
-    _, hist = FCD_calculate(bold, int(system["window_size"]))
+    fcs = FC_calculate(bold)                                  # [valid repeats, N, N]
+    fc = fcs.mean(0, keepdim=True)                            # [1, N, N]
+    fcd_mats, hist = FCD_calculate(bold, int(system["window_size"]))
     hist = hist.mean(1, keepdim=True)                         # [bins, 1]
     _, corr, l1, ks = all_loss_calculate_from_fc_fcd(fc, hist, fc_emp, fcd_emp)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out = args.out_dir / f"{args.model}_seed{args.seed_index}.npz"
+    # fc_first, fcd_first: the first valid simulation, as analysis_utils.plot_time_series plots
     np.savez(out, fc=fc[0].numpy(), fcd_hist=hist[:, 0].numpy(), n_valid=int(valid.sum()),
+             fc_first=fcs[0].numpy().astype(np.float32),
+             fcd_first=fcd_mats[0].numpy().astype(np.float32),
              recomputed=np.array([float(corr[0]), float(l1[0]), float(ks[0])]),
              recorded=np.array([float(saved["corr_loss"][0]), float(saved["l1_loss"][0]),
                                 float(saved["ks_loss"][0])]))

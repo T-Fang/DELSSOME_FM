@@ -18,7 +18,8 @@ from scipy import stats
 from conftest import data_available
 from delssome_fm.config import SimConfig
 from delssome_fm.data.empirical import FCD_BINS, read_csv_array
-from delssome_fm.sim.summary import (fc_moments, fcd_cdf, fcd_levels, functional_connectivity,
+from delssome_fm.sim.summary import (fc_moments, fcd_cdf, fcd_levels, fcd_matrix,
+                                     functional_connectivity,
                                      regional_statistics, summarize, window_fc_vectors)
 
 CFG = SimConfig(dt=0.001, tr=0.72, n_frames=1200, burn_in_frames=0, divergence_bound=1e6,
@@ -159,3 +160,12 @@ def test_fcd_levels_are_the_cdf_at_fixed_fcd_values():
     assert levels[-1] == len(values)
     with pytest.raises(ValueError, match="divide"):
         fcd_levels(jnp.asarray(np.cumsum(counts)), 300)
+
+
+def test_fcd_matrix_matches_numpy():
+    x = np.random.default_rng(9).normal(size=(150, 8)).cumsum(0)
+    with jax.enable_x64(True):
+        got = np.asarray(fcd_matrix(jnp.asarray(x), 30))
+    iu = np.triu_indices(8, 1)
+    vecs = np.stack([np.corrcoef(x[t:t + 30].T)[iu] for t in range(150 - 30 + 1)])
+    np.testing.assert_allclose(got, np.corrcoef(vecs), rtol=1e-10, atol=1e-12)
