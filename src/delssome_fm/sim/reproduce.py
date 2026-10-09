@@ -112,8 +112,10 @@ def initial_state(model: ReproduceModel) -> np.ndarray:
 
 def evaluate(cfg: ReproduceConfig, sim_cfg: SimConfig, model: ReproduceModel,
              original: Original, inputs: TestInputs, sets: range) -> dict[str, np.ndarray]:
-    """Our costs for `sets`: arrays (len(sets), n_noise_repeats) per component, plus
-    n_valid (same shape): how many of the n_dup simulations did not diverge."""
+    """Our costs for `sets`: arrays (len(sets), n_noise_repeats) per component; n_valid
+    (same shape): how many of the n_dup simulations did not diverge; and the simulated
+    statistics: fc (S, R, N, N) averaged over valid simulations, fcd_cdf (S, R, bins) summed
+    cumulative counts."""
     card = load_reference(model.name)
     sim_cfg = SimConfig(dt=model.dt, tr=sim_cfg.tr, n_frames=sim_cfg.n_frames,
                         burn_in_frames=model.burn_in_frames,
@@ -162,6 +164,11 @@ def _costs(fc: np.ndarray, cdf: np.ndarray, n_valid: np.ndarray,
             for c in COMPONENTS:
                 out[c][idx] = float(getattr(cost, c))
     out["n_valid"] = n_valid
+    # The simulated statistics themselves, so they can be compared with other runs directly:
+    # FC averaged over the valid simulations, FCD CDF as summed cumulative counts (float32).
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["fc"] = (fc / n_valid[..., None, None]).astype(np.float32)
+    out["fcd_cdf"] = cdf.astype(np.float32)
     return out
 
 

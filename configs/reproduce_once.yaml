@@ -1,6 +1,7 @@
-# One evaluation per saved parameter set, exactly as the original test did it (3 simulations,
-# FC averaged, FCD histograms summed, one cost). For the side-by-side comparison with the
-# recorded costs requested on 2026-10-05; the deferred gate keeps configs/reproduce.yaml.
+# Original-style evaluations of each saved parameter set (3 simulations, FC averaged, FCD
+# histograms summed, one cost), two of them with independent noise: the first is compared with
+# Tianchu's own simulations (scripts/run_original_test.py), the pair gives our noise floor.
+# The deferred gate keeps configs/reproduce.yaml.
 # The z/miss/bias fields are unused here (judge needs repeats) but required by the dataclass.
 
 original_params_root: /mnt/nas/CSC21/Yeolab/Users/tzeng/Python/DELSSOME_plus/params
@@ -9,10 +10,10 @@ export_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/reproduce/original
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/reproduce/once
 
 n_sets: 50                # trial1/test/seed1..seed50: the Euler arm behind Figs 3c, 5b, 5e
-n_noise_repeats: 1
+n_noise_repeats: 2
 n_dup: 3                  # the original averaged FC and FCD over 3 simulations
 seed: 20261005
-batch_size: 3             # simulations per jit call = one evaluation
+batch_size: 6             # simulations per jit call = one set (2 evaluations x 3)
 
 z_threshold: 3.0          # a set misses if |recorded - our mean| > 3 x our SD
 max_misses: 4             # of 50 sets, per model and component
