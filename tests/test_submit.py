@@ -94,3 +94,15 @@ def test_pbsubmit_path_in_config_exists():
     if not Path("/home/ftian/storage").exists():
         pytest.skip("lab storage not mounted")
     assert cfg.pbsubmit.is_file() and cfg.conda_init.is_file()
+
+
+def test_batch_dry_run_writes_nothing_and_uses_one_remote_call(cluster, capsys, monkeypatch):
+    from delssome_fm.cluster.submit import submit_batch
+    monkeypatch.setattr(submit_mod.socket, "gethostname", lambda: "compiler")
+    reqs = [(f"echo {i}", f"job{i}", Resources("00:01:00", "1G")) for i in range(3)]
+    jobs = submit_batch(reqs, cluster)
+    assert len(jobs) == 3 and len({j.script_path for j in jobs}) == 3
+    assert not cluster.job_dir.exists()
+    out = capsys.readouterr().out
+    remote = out.strip().splitlines()[-1]
+    assert remote.startswith(shlex.join(cluster.headnode_ssh)) and "bash" in remote

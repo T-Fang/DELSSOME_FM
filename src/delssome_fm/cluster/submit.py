@@ -126,3 +126,37 @@ def submission_argv(job: Job, cluster: ClusterConfig, host: str) -> list[str]:
     if host == "headnode":
         return list(job.argv)
     return [*cluster.headnode_ssh, shlex.join(job.argv)]
+
+
+def submit_batch(requests: list[tuple[str, str, Resources]], cluster: ClusterConfig,
+                 dry_run: bool = True) -> list[Job]:
+    """Submit many (command, name, resources) jobs through one headnode session.
+
+    Each remote command pays the login shell's start-up (~6 s from the sandbox), so the
+    CBIG_pbsubmit calls are written to one batch file and run by a single remote `bash`.
+    CBIG_pbsubmit's own 3 s pause per job remains. Dry run prints the batch and writes nothing.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    jobs = [build_job(c, n, r, cluster, f"{stamp}_{k}") for k, (c, n, r) in enumerate(requests)]
+    batch_path = cluster.job_dir / f"batch_{stamp}.sh"
+    batch = "\n".join(["#!/bin/bash", "set -e", *(shlex.join(j.argv) for j in jobs), ""])
+    host = socket.gethostname()
+    argv = ["bash", str(batch_path)] if host == "headnode" else \
+        [*cluster.headnode_ssh, shlex.join(["bash", str(batch_path)])]
+    if dry_run:
+        print(f"# dry run: {len(jobs)} jobs; first job script {jobs[0].script_path if jobs else '-'}")
+        if jobs:
+            print(jobs[0].script)
+        print(f"# dry run: would write {batch_path} and run\n" + shlex.join(argv))
+        return jobs
+    if not cluster.pbsubmit.is_file():
+        raise FileNotFoundError(f"CBIG_pbsubmit not found at {cluster.pbsubmit}")
+    cluster.job_dir.mkdir(parents=True, exist_ok=True)
+    for job in jobs:
+        if job.script_path.exists():
+            raise FileExistsError(f"job script already exists: {job.script_path}")
+        job.script_path.write_text(job.script)
+        job.script_path.chmod(0o755)
+    batch_path.write_text(batch)
+    subprocess.run(argv, check=True)
+    return jobs

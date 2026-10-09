@@ -9,7 +9,7 @@
 import argparse
 from pathlib import Path
 
-from delssome_fm.cluster.submit import Resources, submit
+from delssome_fm.cluster.submit import Resources, submit_batch
 from delssome_fm.config import ClusterConfig, ReproduceConfig, load_config
 from delssome_fm.sim.reproduce import output_path
 
@@ -30,16 +30,16 @@ def main() -> None:
     cfg = load_config(args.config, ReproduceConfig)
     cluster = load_config(args.cluster_config, ClusterConfig)
     resources = Resources(walltime=args.walltime, memory=args.mem, ncpus=1)
-    n = 0
+    requests = []
     for model in cfg.models:
         for s in range(cfg.n_sets):
             if args.only_missing and output_path(cfg, model.name, range(s, s + 1)).exists():
                 continue
             command = (f"{ENV} python scripts/reproduce_costs.py --config {args.config} "
                        f"--model {model.name} --sets {s}:{s + 1}")
-            submit(command, f"repro_{model.name}_{s}", resources, cluster, dry_run=not args.submit)
-            n += 1
-    print(f"{'submitted' if args.submit else 'dry run:'} {n} jobs")
+            requests.append((command, f"repro_{model.name}_{s}", resources))
+    submit_batch(requests, cluster, dry_run=not args.submit)
+    print(f"{'submitted' if args.submit else 'dry run:'} {len(requests)} jobs")
 
 
 if __name__ == "__main__":

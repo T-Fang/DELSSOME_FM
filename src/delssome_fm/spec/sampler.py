@@ -1,7 +1,8 @@
 """Procedural sampling of synthetic model cards (generation.md §2, §4, §5), and of their
 free-parameter values.
 
-`sample_card(seed, index)` draws one ModelCard deterministically from (seed, index). It
+`sample_card(seed, stream, index)` draws one ModelCard deterministically from (seed,
+stream, index); streams are independent populations (the corpus uses one per split). It
 applies, before any simulation:
 
     R1  dissipativity: min Re eig(L) > 0 with nominal values, unless some variable has a
@@ -92,9 +93,9 @@ def _constant(rng: np.random.Generator, sign: float | None = None) -> float:
     return float(s * 10.0 ** rng.uniform(*LOG10_RANGE))
 
 
-def sample_card(seed: int, index: int) -> ModelCard:
-    """The `index`-th synthetic card of the corpus generated with `seed`."""
-    rng = np.random.default_rng([seed, index])
+def sample_card(seed: int, stream: int, index: int) -> ModelCard:
+    """The `index`-th synthetic card of population `stream` under `seed`."""
+    rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
     d = _Draft(V=V, L=np.full((V, V), np.nan))
     d.nonlinear = [_sample_nonlinear(rng, v, V) if rng.random() < P_NONLINEAR else None
@@ -106,7 +107,7 @@ def sample_card(seed: int, index: int) -> ModelCard:
     _sample_L(rng, d)
     _set_gains(rng, d)
     observable = _sample_observable(rng, d)
-    return _assemble(rng, d, observable, name=f"syn_{seed}_{index}")
+    return _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}")
 
 
 def _sample_nonlinear(rng: np.random.Generator, v: int, V: int) -> dict:

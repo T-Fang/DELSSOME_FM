@@ -10,7 +10,7 @@ from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.sampler import (COUPLING_RATIO_LOG10, MULTIPLIER_LOG10, N_FREE,
                                       SC_ROW_SUM, V_PROBS, draw_parameters, sample_card)
 
-CARDS = [sample_card(123, i) for i in range(400)]
+CARDS = [sample_card(123, 0, i) for i in range(400)]
 
 
 def _nominal_L(card):
@@ -25,9 +25,10 @@ def _nominal_L(card):
 
 
 def test_same_seed_and_index_give_the_same_card():
-    assert sample_card(5, 17) == sample_card(5, 17)
-    assert sample_card(5, 17) != sample_card(5, 18)
-    assert sample_card(5, 17) != sample_card(6, 17)
+    assert sample_card(5, 0, 17) == sample_card(5, 0, 17)
+    assert sample_card(5, 0, 17) != sample_card(5, 0, 18)
+    assert sample_card(5, 0, 17) != sample_card(6, 0, 17)
+    assert sample_card(5, 0, 17) != sample_card(5, 1, 17)  # another stream (split)
 
 
 def test_every_sampled_card_compiles():
@@ -127,5 +128,5 @@ def test_sc_row_sum_constant_matches_the_training_groups(data_cfg):
     from conftest import data_available
     if not data_available():
         pytest.skip("HCP-YA data not reachable")
-    from delssome_fm.sim.corpus import training_scs
-    assert training_scs(data_cfg).sum(axis=2).mean() == pytest.approx(SC_ROW_SUM, abs=0.005)
+    from delssome_fm.sim.corpus import split_scs
+    assert split_scs(data_cfg, "train").sum(axis=2).mean() == pytest.approx(SC_ROW_SUM, abs=0.005)

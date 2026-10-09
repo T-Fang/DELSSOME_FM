@@ -330,7 +330,9 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 | Synthetic models | ~100,000 |
 | Parameter sets per model | ~100 (first pass; more can be added per model later) |
 | Connectome | one of the 64 HCP-YA training group SCs per model, drawn uniformly at random (seeded) |
-| **Total simulations** | **~10,000,000** |
+| **Total simulations** | **~10,000,000** (train) + ~2,000,000 (val, test) |
+
+**Splits and validity (decided 2026-10-10, project lead).** Three disjoint model populations, each a separate random stream of the sampler: **train** (100,000 models, SC from the 64 training groups), **val** and **test** (10,000 models each, SC from the 14 validation and 13 test groups). Each count is of **valid** models: a model passes the 4-draw screen (§6) *and* at least one of its 100 base parameter draws is neither diverged nor flat. A split's corpus is its first N valid models by candidate index, so it is reproducible at any size, and it grows by screening more indices; more draws per model are added by extension runs that skip the screen. Diverged: any state or recorded value non-finite or beyond ±10⁶ at any frame boundary. Flat: every region's temporal SD of the recorded signal at most 10⁻⁵ × max(1, |mean|). Statistics are stored in float32.
 
 **Revised 2026-10-05** (project lead). The earlier plan was ~50 models × ~200 parameter sets × 4 SC bootstraps (~40,000 simulations). SC is no longer a per-simulation sampling axis. Each synthetic model is tied to one randomly chosen training group SC, so SC still varies across the corpus (architecture.md §7) without multiplying the simulation count. Only training-split groups are used, so validation and test SCs stay unseen in stage 1. First pass: 100 parameter sets per model (~6,500-9,700 CPU-hours, 1.3-2 days on 200 CPUs, by the single-CPU benchmark of 2026-10-05). The plan of ~1,000 per model can be reached by adding parameter sets to existing models, so the corpus format must allow appending. Each simulation stores its summary statistics (architecture.md §5.1) with the FCD CDF at 100 levels (data.md §8): about 11.6 KB per simulation, ~115 GB for 10⁷ simulations.
 
