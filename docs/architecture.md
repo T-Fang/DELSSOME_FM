@@ -2,7 +2,9 @@
 
 **Scope.** Parcellation fixed at $N = 68$ (Desikan–Killiany). The research claim is model-agnosticism alone: one surrogate that transfers across circuit models without retraining from scratch. Parcellation-agnosticism is deferred, not withdrawn — v1's signed-graph region encoder remains the design for that, and nothing here forecloses it.
 
-**Companion documents.** `delssome-fm-poc-generation.md` (what the synthetic corpus contains); `delssome-fm-v2-synthetic-model-generation.md` (fuller model survey and later-stage generation rules).
+**Companion documents.** `docs/generation.md` (what the synthetic corpus contains, from `delssome-fm-poc-generation.md`); `docs/data.md` (the empirical data and the comparison with the original DELSSOME); `delssome-fm-v2-synthetic-model-generation.md` (fuller model survey and later-stage generation rules, not in this repository).
+
+**Status (2026-10-10).** Nothing in this document is implemented yet (build step 8). Where the corpus being generated fixes a quantity used here, the value is noted.
 
 ---
 
@@ -11,10 +13,10 @@
 | Symbol | Shape | Meaning |
 |---|---|---|
 | $N$ | 68 | regions, fixed |
-| $V$ | 1–3 | state variables per region, varies by model |
-| $P$ | 2–5 | regional free parameters, varies by model |
+| $V$ | 1–6 | state variables per region, varies by model (corpus: 95% of valid models have $V \le 2$) |
+| $P$ | 1–5 | regional free parameters, varies by model (corpus: §9 question 5) |
 | $K$ | 1–2 | global free parameters, varies by model |
-| $M$ | ~30–120 | nodes in the equation DAG, varies by model |
+| $M$ | ~20–180 | nodes in the equation DAG, varies by model (corpus: median 36, 5–95% range 19–67, max 177) |
 | $d$ | 128 | transformer width |
 | $d_t$ | 128 | template encoder width |
 | $k$ | 32 | bilinear FC factorization rank |
@@ -153,7 +155,9 @@ Three groups, all computed from simulated BOLD through **the identical pipeline 
 
 **Pairwise** — supervised on region-token pairs: $\operatorname{arctanh}(\text{FC}_{ij})$, over the 2278 upper-triangular edges.
 
-**Global** — 103, supervised on $h_{\text{CLS}}$: the FCD CDF at 100 fixed probability levels, plus the mean, SD, and skewness of the upper-triangular FC.
+**Global** — 103, supervised on $h_{\text{CLS}}$: the FCD CDF at 100 fixed FCD values (−0.98, −0.96, …, 1.00; data.md §8), plus the mean, SD, and skewness of the upper-triangular FC.
+
+In the corpus these are the arrays `regional` (68 × 6), `pairwise` (2278) and `fcd_cdf` (100) + `fc_moments` (3) of each simulation, in float32 (generation.md §9). `sim/summary.py::summarize` computes them, and stage 2 must call the same function.
 
 Target vector per simulation: $68 \times 6 + 2278 + 103$.
 
@@ -179,7 +183,9 @@ $$\mathcal{L} = \sum_{\text{groups } \gamma} \frac{1}{2s_\gamma^2}\mathcal{L}_\g
 
 with $s_\gamma$ learned. Four scales is manageable to sanity-check by hand, which was part of the reason for cutting the statistic set.
 
-**No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic.
+**No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic. In the corpus they are flagged `diverged` and their statistics are NaN. They make up 14.7% of the draws of valid models.
+
+Draws whose observed signal is flat are also stored, flagged `flat` (0.8% of draws). Their statistics are meaningless: FC is correlation between numerical noise, and about a third of flat draws have some NaN statistics (zero-variance regions). Whether to exclude them too is open (§9 question 6).
 
 ### 5.4 Two deliberate redundancies
 
@@ -237,13 +243,13 @@ Both cost terms that compare distributions can also be computed **in closed form
 
 | | Stage 1 | Stage 2 |
 |---|---|---|
-| Data | synthetic corpus, ~100,000 models × 100 parameter sets (~10M simulations) | target-model corpus, deliberately small |
+| Data | synthetic corpus, ~100,000 train models × 100 parameter sets (~10M simulations); 10,000 val and 10,000 test models with their own SCs | target-model corpus, deliberately small |
 | Input | $\Theta, \Psi, C$, DAG | same, plus $\text{FC}^{\text{emp}}, \text{FCD}^{\text{emp}}$ |
 | Target | simulated summary statistics | three cost terms vs. real data |
 | Trains | everything | LoRA on backbone, cost heads, empirical encoders |
 | SC | **vary across models** | as deployed |
 
-**Vary SC in stage 1.** If every sample uses one group-average connectome, the learned representation entangles with it. Each synthetic model is therefore tied to one of the 64 HCP-YA training group SCs, drawn at random, so SC varies across the corpus without being a separate sampling axis (revised 2026-10-05; generation.md §9). Validation and test group SCs stay unseen in stage 1.
+**Vary SC in stage 1.** If every sample uses one group-average connectome, the learned representation entangles with it. Each synthetic model is therefore tied to one of the 64 HCP-YA training group SCs, drawn at random, so SC varies across the corpus without being a separate sampling axis (revised 2026-10-05; generation.md §9). Validation and test group SCs stay unseen in stage-1 training. The val and test synthetic models use them (generation.md §9), so held-out evaluation also tests unseen connectomes.
 
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
@@ -279,4 +285,5 @@ Logged so they are not relitigated.
 2. **Do the four readouts in $g$ compose or interfere?** $g$ is now a sum of $\text{MLP}_g(\cdot)$, $z_M$, $u$, $o$ and $m_{\text{agg}}$. Each additional summand contributes less in expectation unless the MLPs rebalance, and $m_{\text{agg}}$ averages 1 to 2 nodes while $z_M$ averages 30 to 120. Cheap ablation: $g$ with and without $m_{\text{agg}}$, everything else fixed. Run it alongside the FiLM ablation.
 3. **Is rank $k = 32$ enough** for the bilinear head to capture simulated FC? Sweep it; §6.5 is the diagnostic.
 4. **Does removing FiLM cost accuracy at parity?** Phase 1 answers this directly — retrain MFM at $N=68$ and compare against current DELSSOME.
-5. **Corpus balance over $P$.** Larger templates have more eligible coefficients, so the sampler may concentrate on $P = 4$–$5$ and leave $P = 2$ rare — which is where the mean-over-$p$ pooling is least exercised, since one of the two summands is always $\sigma$. Histogram $P$ over the first 50 models before generating any simulations.
+5. **Corpus balance over $P$.** Larger templates have more eligible coefficients, so the sampler may concentrate on $P = 4$–$5$ and leave $P = 2$ rare — which is where the mean-over-$p$ pooling is least exercised, since one of the two summands is always $\sigma$. Histogram $P$ over the first 50 models before generating any simulations. **Measured (2026-10-10)** over the valid corpus models: $P$ = 1/2/3/4/5 in 2/36/33/19/10%. The concentration feared here did not happen. $P = 2$ is the most common value, and $P = 1$ (fully noiseless models with one free coefficient) is rare.
+6. **Flat draws in stage 1.** Draws flagged `flat` carry statistics computed from a signal with no variance, some of them NaN (§5.3). Decide whether stage 1 trains on them, excludes them like divergent draws, or labels them.

@@ -4,6 +4,8 @@
 
 **Status.** Replaces §4 of the v2 design doc. That document stays as the reference for later stages; none of it is withdrawn.
 
+**Implementation (2026-10-10).** The template, sampler, simulator and corpus builder are implemented (`src/delssome_fm/spec/`, `src/delssome_fm/sim/`). Seven reference cards are hand-written: the five here plus MPR and Jansen–Rit, which were added on 2026-10-05. Decisions taken while building are dated in the sections they change. "As implemented" paragraphs record details this document left open. Generation of the corpus started on 2026-10-10 (§9).
+
 ---
 
 ## 1. The template
@@ -73,6 +75,8 @@ Also reachable and not designed for: **MPR** ($\beta_v$, bare-state gate, free $
 | $\sigma_v$ | free, or zero | zero ~0.1 |
 | observable | single variable, or difference of two | single ~0.9 |
 | observation | Balloon–Windkessel, direct downsample | independent of everything else |
+
+**As implemented** (`spec/sampler.py`, where each such constant is marked "choice"). The table leaves four probabilities open, and each is fixed at 0.5: $\beta_v$ present, $I_v$ present, $\delta_c$ diffusive, and injection into $U_v$ rather than $D_v$ when $u^v$ exists. The two "present ~0.5" masks of $L$ and $w$ are also 0.5.
 
 ### Why $L$ and $w$ are dense with random masking
 
@@ -165,6 +169,8 @@ $$\text{candidates} \;=\; \{L_{vu}\} \;\cup\; \{\beta_v\} \;\cup\; \{w_{vu}\} \;
 
 Take $n \in \{1,2,3,4\}$, giving $P = 1 + n$ and $K$ = number of channels. An unselected candidate becomes **one scalar shared by all 68 regions**, like $w_{II} = 1$ in FIC. So the split is binary in the DAG: selected candidates compile to `Par` nodes, everything else to `Const` nodes, and $\Theta$ has exactly $P$ columns.
 
+As implemented, $n$ is capped at the number of candidates, and $\sigma$ is absent when every variable is noiseless. So $P$ ranges from 1 to 5. Among valid corpus models (§9), $P$ = 1/2/3/4/5 occurs in 2/36/33/19/10% and $K$ = 1/2 in 86/14%.
+
 $P$ and $K$ vary by model deliberately. All five reference models are $P{=}3$, $K{=}1$, so a uniformly $P{=}3$ corpus would never exercise the pooling that makes the encoder parameter-count-agnostic, and that failure would stay invisible at test time.
 
 Regional values are drawn i.i.d. per region. The known cost of dropping spatial structure is that simulated FC leans more on SC than it would with realistic parameter maps.
@@ -181,7 +187,7 @@ so the effective coefficient is $c\,\Theta[i,p]$, within one decade of its nomin
 
 $$G_c = 10^{\,\mathcal{U}[-2,\,1]}\;\frac{\text{reference}}{\overline{\textstyle\sum_j C_{ij}}}, \qquad \text{reference} = \begin{cases}|L_{vv}| & \text{injected at } dx^v/dt\ (D)\\ \max(|w_{vu}|, |I_v|) & \text{injected into } u^v\ (U)\end{cases}$$
 
-where $\overline{\sum_j C_{ij}} = 0.36$ is the mean row sum of the training group SCs rescaled to max 0.02. Coupling therefore ranges from 1% to 10× the competing term. With the flat 8-decade prior, coupling was almost always negligible: in the first 60-candidate pilot, 6 of the 7 usable kept models had mean off-diagonal FC ≈ 0, so their FC carried no connectome structure and the stage-1 pairwise targets were noise. With the relative prior, a 300-candidate screen kept 19.7% (was ~13-15%). Of the kept models, 63% still had |mean FC| < 0.05, 24% were between 0.05 and 0.9, and 14% were above 0.9. The coupling target could reach the observable in 57 of 59 kept models, so the remaining FC ≈ 0 is weak coupling, not structure: mean FC becomes substantial only near the critical coupling ratio of about 1.
+where $\overline{\sum_j C_{ij}} = 0.36$ is the mean row sum of the training group SCs rescaled to max 0.02. Coupling therefore ranges from 1% to 10× the competing term. With the flat 8-decade prior, coupling was almost always negligible: in the first 60-candidate pilot, 6 of the 7 usable kept models had mean off-diagonal FC ≈ 0, so their FC carried no connectome structure and the stage-1 pairwise targets were noise. With the relative prior, a 300-candidate screen kept 19.7% (was ~13-15%). Of the kept models, 63% still had |mean FC| < 0.05, 24% were between 0.05 and 0.9, and 14% were above 0.9. The coupling target could reach the observable in 57 of 59 kept models, so the remaining FC ≈ 0 is weak coupling, not structure: mean FC becomes substantial only near the critical coupling ratio of about 1. The project lead kept the ratio range $10^{\mathcal{U}[-2,1]}$ (2026-10-05). At corpus scale (397,500 candidates screened by 2026-10-10), the valid models' mean off-diagonal FC is below 0.05 in 61%, between 0.05 and 0.9 in 32%, and above 0.9 (the slow-drift signature above) in 6%.
 
 **One shared $\sigma$.** $\sigma$ is a single regional parameter (the "1" in $P = 1 + n$). Every noisy variable uses it through its own sampled scale constant, $\sigma_v = c_v\,\sigma$. A variable is noiseless with probability ~0.1.
 
@@ -223,6 +229,14 @@ Simulate 68 regions with the model's connectome (§9) and four random parameter 
 
 No parameter-box calibration, no cost-landscape screening, no stratification, no fingerprint deduplication. Four draws surviving is enough.
 
+**As implemented** (`sim/corpus.py::screen`, `configs/corpus.yaml`):
+
+- Each screen draw runs 250 frames at TR 0.72 s (180 s) after 50 frames of burn-in, from $x_0 \sim \mathcal{U}(-0.1, 0.1)$ per state.
+- **Diverged** means any state or recorded value is non-finite or beyond ±10⁶ at a frame boundary (`sim/integrate.py`). The flag is sticky.
+- **Flat** means every region's temporal SD of the recorded signal is at most $10^{-5}\max(1, |\text{mean}|)$.
+
+At corpus scale, 16.2% of candidates pass the screen. Of the rejections, 99% are "every draw diverged".
+
 **Screen the observable, not the state.** A model can have perfectly healthy dynamics and a dead observable: a difference of two near-identical variables cancels, or a single-variable output selects something with no variance. That failure is invisible to a state-level check and would put flat BOLD and meaningless FC into the corpus.
 
 ---
@@ -249,7 +263,7 @@ BUILD THE CORPUS
           which slots each one is injected into
 
       pick the observable: one state variable, or a difference of two
-      pick the model's connectome: one of the 64 training group SCs
+      pick the model's connectome: one of its split's group SCs (64 for train)
       fill in the constants: log-uniform over 8 decades, signs per slot
       work out which coefficients are eligible to be free, pick a few
 
@@ -319,6 +333,15 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 
 **One JAX-specific cost to plan around.** Each distinct model triggers a recompile, so fifty models means fifty compilations. Run all parameter sets for one model in a few large batches rather than interleaving models, and keep the batch size fixed so shapes stay static.
 
+**As built (2026-10).**
+
+- **Step.** dt = 1 ms with float32 state.
+- **Kahan compensation.** Euler increments of slow states sit near float32 resolution at small dt, so every update uses Kahan-compensated addition (`integrate.kahan_add`). Without it, MFM's test cost was 0.52 instead of the original's 0.43.
+- **Balloon–Windkessel** is integrated as extra state, in deviations from rest.
+- **Wong–Wang** $u/(1-e^{-u})$ is evaluated by a fused, stable op (`ops.wong_wang`), because the literal subtree is infinite in float32 for $|u| < 6\times10^{-8}$.
+- **Hardware.** The corpus runs as **single-thread CPU jobs**, one job per chunk of candidates, by the project lead's choice: the allowance is 200 CPUs per user. The GPU path works but is not used for the corpus. The statistics are computed in the same process (`sim/summary.py`), so raw BOLD is never written.
+- **Measured cost.** About 3.6 h per 500 candidates (screen plus 100 full-length draws of each kept model, including per-model compilation). That is about 7 CPU-hours per 1,000 candidates.
+
 **A correctness reference worth using.** TVB's RateML compiles a declarative model description to CUDA and was validated at 68 nodes, with Montbrió already available in its XML. Not worth building on, but generating MFM, FIC and Montbrió through it and checking against your own compiler is much stronger evidence than your implementation agreeing with itself.
 
 ---
@@ -331,10 +354,29 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 | Parameter sets per model | ~100 (first pass; more can be added per model later) |
 | Connectome | one of the 64 HCP-YA training group SCs per model, drawn uniformly at random (seeded) |
 | **Total simulations** | **~10,000,000** (train) + ~2,000,000 (val, test) |
+| Statistics per simulation | `regional` (68 × 6), `pairwise` (2278, arctanh FC), `fcd_cdf` (100 levels), `fc_moments` (3), `diverged`, `flat`, `theta` (68 × 5, NaN-padded), `psi` (2, NaN-padded), all float32 |
 
 **Splits and validity (decided 2026-10-10, project lead).** Three disjoint model populations, each a separate random stream of the sampler: **train** (100,000 models, SC from the 64 training groups), **val** and **test** (10,000 models each, SC from the 14 validation and 13 test groups). Each count is of **valid** models: a model passes the 4-draw screen (§6) *and* at least one of its 100 base parameter draws is neither diverged nor flat. A split's corpus is its first N valid models by candidate index, so it is reproducible at any size, and it grows by screening more indices; more draws per model are added by extension runs that skip the screen. Diverged: any state or recorded value non-finite or beyond ±10⁶ at any frame boundary. Flat: every region's temporal SD of the recorded signal at most 10⁻⁵ × max(1, |mean|). Statistics are stored in float32.
 
 **Revised 2026-10-05** (project lead). The earlier plan was ~50 models × ~200 parameter sets × 4 SC bootstraps (~40,000 simulations). SC is no longer a per-simulation sampling axis. Each synthetic model is tied to one randomly chosen training group SC, so SC still varies across the corpus (architecture.md §7) without multiplying the simulation count. Only training-split groups are used, so validation and test SCs stay unseen in stage 1. First pass: 100 parameter sets per model (~6,500-9,700 CPU-hours, 1.3-2 days on 200 CPUs, by the single-CPU benchmark of 2026-10-05). The plan of ~1,000 per model can be reached by adding parameter sets to existing models, so the corpus format must allow appending. Each simulation stores its summary statistics (architecture.md §5.1) with the FCD CDF at 100 levels (data.md §8): about 11.6 KB per simulation, ~115 GB for 10⁷ simulations.
+
+**Generation, as run (2026-10-10).** Seed 20261005 (`configs/corpus.yaml`). The streams are train 0, val 1 and test 2. Every random draw is keyed by (seed, stream, candidate index, purpose, draw), so any model or draw can be recomputed alone.
+
+- **Valid rate.** Over the first 397,500 candidates, 15.6% are valid in every split: 16.2% pass the screen, and 0.6% pass but have no usable base draw. Within valid models, 14.7% of draws diverge and 0.8% are flat.
+- **State count.** Valid models lean to small $V$: 57% have $V=1$, 38% $V=2$ and 5% $V=3$, against 30/45/15% when sampled. The project lead chose to proceed with this skew.
+- **Ranges submitted.** Candidates 0–660,000 for train and 0–66,000 each for val and test, in 500-candidate jobs. At 15.6% that gives about 103,000 and 10,300 valid models, a margin of about 10 standard deviations for train and 5 for val and test.
+- **Storage.** About 1.25 MB per valid model (100 draws), about 150 GB for all three splits.
+
+**Files.** Each job writes `outputs/corpus/<split>/candidatesAAAAAAA-BBBBBBB_draws0-100.*` (`sim/corpus.py::chunk_paths`):
+
+- `.npz` holds the per-draw arrays of the chunk's valid models, with a `model` index and a `draw` index.
+- `.cards.jsonl` holds each valid model's card and SC group.
+- `.log.jsonl` has one row per candidate: screen outcome, validity, $V$, $P$, $K$, DAG size and mean FC. These rows give the acceptance rate and mean FC that brief §8 asks to log.
+- `.manifest.json` records the configs, seed, git commit, host and wall time.
+
+A job that fails writes nothing, and resubmitting the same range recomputes it exactly. `scripts/corpus_status.py` reports progress, and `corpus.first_valid(split, n)` returns a split's corpus.
+
+**Scaling up.** More models means screening more indices: `scripts/submit_corpus.py --start … --stop …`. More draws per model means extension runs (`--extend --first-draw 100 --n-param-sets 100`), which simulate draws 100.. of models already found valid, without re-screening. These are written as separate `_draws100-200` files.
 
 Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is one training sample.
 
@@ -343,6 +385,8 @@ Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is 
 ## 10. What to run, in order
 
 **Step 0, hand-write the five.** Fill in the template's slots for Linear, MFM, FIC, Wilson–Cowan and Hopf, compile each, and check the simulator reproduces known behaviour and the published costs. **This is a gate.** If the template cannot reproduce the five exactly, nothing downstream means anything.
+
+**Status (2026-10-10).** All seven reference cards compile, and each card's compiled right-hand side equals its published equations (`tests/test_compile.py`). The cost-reproduction gate (build step 6) is implemented but **deferred, not passed**: the project lead deferred it on 2026-10-05 and asked to proceed as if it had passed. Direct comparisons with the original simulations are in data.md §9.
 
 Verification means matching *dynamics and cost values*, not the paper's constant tables. Nondimensionalisation and constant absorption mean the cards will not look character-for-character like the published equations.
 

@@ -150,6 +150,11 @@ Walk B emits a straight-line program over the `Ops` protocol, with one method pe
 - **Channels** are computed once per step outside the per-region program as
   `G_c · (C @ f_c(p^c) − δ_c · rowsum(C) · f_c(p^c))`. That is algebraically the Agg sum, and
   `tests/test_compile.py` checks it against an explicit Σ_j of the edge expression.
+- **Wong–Wang is fused.** Walk B recognises the Wong–Wang subtree `u · Inv(1 − exp(−u))` and
+  emits one `ops.wong_wang(u)`, which computes u / (−expm1(−u)) with the limit 1 at u = 0. In
+  float32, 1 − exp(−u) is exactly 0 for |u| < 6e-8, so the literal subtree returns inf; that
+  made FIC runs falsely diverge. The DAG (walk A) still shows the primitives. This is the one
+  place where walk B is not node-for-node.
 - `NumpyOps` (float64) is for GPU-free tests; `JaxOps` (float32) is for simulation under
   `jit`/`vmap`.
 
@@ -176,7 +181,20 @@ which absorbs the slope). The card therefore couples y1 − y2 *linearly* into t
 input. The single-region model is exact. Supporting the sigmoidal form would need an offset
 in p^c, which would be a template change.
 
-## 6. Extending the template
+## 6. Synthetic cards (`sampler.py`)
+
+`sample_card(seed, stream, index)` draws one card from the rules of generation.md §2, §4 and
+§5. It is a pure function of its three integers: the corpus uses stream 0, 1 and 2 for train,
+val and test, so `sample_card(20261005, 0, i)` is train candidate i, on any machine. The
+sampler applies R1 to R3 and the two channel and observable constraints before returning, so
+every card it returns compiles. `draw_parameters(card, rng, n, N)` draws the dimensionless
+multipliers Θ (n, N, P) and Ψ (n, K), each 10^U(−1, 1). Coupling gains get a nominal value
+relative to the term they compete with (generation.md §4). Probabilities that the design
+leaves open are module constants marked "choice".
+
+Screening, simulation and storage are not here; see `sim/corpus.py` and generation.md §9.
+
+## 7. Extending the template
 
 The design keeps every extension a matter of lengthening a list (generation.md §2):
 
@@ -189,7 +207,7 @@ The design keeps every extension a matter of lengthening a list (generation.md �
 - **A new card:** write the YAML, compile it, and add its published equations to the
   `PUBLISHED` table in `tests/test_compile.py`.
 
-## 7. Tests (`tests/test_compile.py`)
+## 8. Tests (`tests/test_compile.py`, `tests/test_sampler.py`)
 
 - All seven cards compile, round-trip through YAML, and have the expected V, P and K.
 - **Each card's compiled rhs equals its published equations**, written out by hand in NumPy
@@ -203,3 +221,5 @@ The design keeps every extension a matter of lengthening a list (generation.md �
 - The round trip catches a tampered DAG; `canonicalize` is idempotent; Wong–Wang's u is
   shared.
 - Card rules (R2, R3, scopes, unused parameters) raise.
+- The sampler is deterministic per (seed, stream, index), every sampled card compiles, R1 to R3
+  hold, the slot frequencies match generation.md §2, and coupling-gain ratios stay in range.
