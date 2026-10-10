@@ -9,7 +9,8 @@ floor, ours vs ours).
 Cost between two simulations, as the original cost but with the second simulation in place
 of the empirical data: 1 - r (raw upper-triangle FC), d = |mean difference|, KS between the
 FCD CDFs. Matrices are drawn as the original analysis_utils.plot_time_series draws them:
-imshow with the original colour tables (assets/colormaps), default colour range, colorbar.
+imshow with the original colour tables (assets/colormaps) and a colorbar; the colour
+range is shared by Tianchu's and our panel of each row (min and max over both).
 
 Needs matplotlib; run it in the lifespan_ei env:
     /home/ftian/storage/miniconda/envs/lifespan_ei/bin/python scripts/plot_comparison.py
@@ -120,13 +121,14 @@ def matrix_figures():
         for k in range(1, 51):
             t, o = load(m, k)
             fig, axes = plt.subplots(2, 2, figsize=(11, 9.5))
-            panels = [(t["fc_first"], fc_cmap, "FC, Tianchu"), (o["fc_first"][0], fc_cmap, "FC, ours"),
-                      (t["fcd_first"], fcd_cmap, "FCD, Tianchu"),
-                      (o["fcd_first"][0], fcd_cmap, "FCD, ours")]
-            for ax, (mat, cmap, title) in zip(axes.ravel(), panels):
-                im = ax.imshow(mat, cmap=cmap)
-                ax.set_title(title)
-                fig.colorbar(im, ax=ax)
+            rows = [("FC", fc_cmap, t["fc_first"], o["fc_first"][0]),
+                    ("FCD", fcd_cmap, t["fcd_first"], o["fcd_first"][0])]
+            for i, (kind, cmap, a, b) in enumerate(rows):
+                lo, hi = min(a.min(), b.min()), max(a.max(), b.max())
+                for ax, mat, who in zip(axes[i], (a, b), ("Tianchu", "ours")):
+                    im = ax.imshow(mat, cmap=cmap, vmin=lo, vmax=hi)
+                    ax.set_title(f"{kind}, {who}")
+                    fig.colorbar(im, ax=ax)
             fig.suptitle(f"{name}, test parameter set of seed {k}: one simulation each")
             fig.tight_layout()
             fig.savefig(OUT / "matrices" / f"{m}_seed{k}.png", dpi=110)
