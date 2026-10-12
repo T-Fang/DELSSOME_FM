@@ -18,7 +18,7 @@ and the stage-1 statistics of architecture.md §5.1:
 
     regional (N, 6)   mean, SD, skewness, excess kurtosis, FC node strength
                       sum_{j != i} FC_ij / (N - 1), lag-1 autocorrelation
-    pairwise          arctanh(FC_ij) over the upper triangle
+    pairwise          stable_arctanh(FC_ij) over the upper triangle
     fc_moments (3,)   mean, SD, skewness of the upper-triangle FC
 
 The FCD CDF is computed at full resolution (needed for the original cost's KS). The stage-1
@@ -45,7 +45,7 @@ class Summary(NamedTuple):
     fc:         (N, N)
     fcd_cdf:    (B,)        cumulative counts, B = fcd_bins
     regional:   (N, 6)
-    pairwise:   (N(N-1)/2,) arctanh of the upper-triangle FC
+    pairwise:   (N(N-1)/2,) stable_arctanh of the upper-triangle FC
     fc_moments: (3,)
     """
 
@@ -115,6 +115,18 @@ def regional_statistics(x: Array, fc: Array) -> Array:
     return jnp.stack([mean, sd, skew, kurt, strength, lag1], axis=-1)
 
 
+def stable_arctanh(r: Array) -> Array:
+    """arctanh with |r| >= 1 clipped to the largest value below 1 of r's dtype, sign kept.
+
+    In float32, the FC of near-perfectly synchronised regions (true r = 0.99999999) rounds to
+    1.0 or 1.0000001, where plain arctanh is inf or NaN. As CBIG_StableAtanh (data/empirical.py)
+    this maps them to a large finite value (8.66 in float32). Every |r| < 1 is unchanged.
+    NaN passes through.
+    """
+    bound = 1.0 - jnp.finfo(r.dtype).epsneg
+    return jnp.arctanh(jnp.clip(r, -bound, bound))
+
+
 def fc_moments(fc: Array) -> Array:
     """fc: (N, N) -> (3,) mean, SD and skewness of the upper-triangle entries."""
     rows, cols = upper(fc.shape[0])
@@ -131,7 +143,7 @@ def summarize(x: Array, cfg: SimConfig) -> Summary:
     return Summary(fc=fc,
                    fcd_cdf=fcd_cdf(x, cfg.fcd_window, cfg.fcd_bins),
                    regional=regional_statistics(x, fc),
-                   pairwise=jnp.arctanh(fc[rows, cols]),
+                   pairwise=stable_arctanh(fc[rows, cols]),
                    fc_moments=fc_moments(fc))
 
 

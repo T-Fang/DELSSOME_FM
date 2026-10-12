@@ -106,6 +106,17 @@ def test_regional_statistics_match_scipy():
     np.testing.assert_allclose(mom, [up.mean(), up.std(), stats.skew(up)], rtol=1e-10)
 
 
+def test_stable_arctanh_maps_saturated_correlations_to_a_finite_value():
+    from delssome_fm.sim.summary import stable_arctanh
+    below = np.nextafter(np.float32(1), np.float32(0))
+    r = jnp.asarray([0.5, below, 1.0, 1.0000001, -1.0, -1.5, np.nan], jnp.float32)
+    z = np.asarray(stable_arctanh(r))
+    top = np.arctanh(below)
+    np.testing.assert_array_equal(z[:2], np.arctanh(np.asarray(r[:2])))   # |r| < 1 unchanged
+    np.testing.assert_array_equal(z[2:6], [top, top, -top, -top])
+    assert np.isnan(z[6]) and 8.6 < top < 8.7
+
+
 def test_summarize_shapes_and_pairwise_is_arctanh():
     x = jnp.asarray(np.random.default_rng(6).normal(size=(200, 5)), jnp.float32)
     cfg = SimConfig(0.001, 0.72, 200, 0, 1e6, 50, 100)

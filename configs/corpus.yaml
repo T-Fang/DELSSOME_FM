@@ -10,7 +10,7 @@ batch_size: 100               # one model's draws per jit call
 screen_draws: 4               # generation.md §6
 screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
 screen_burn_in_frames: 50
-flat_rel_sd: 1.0e-5           # flat: SD <= 1e-5 * max(1, |mean|) in every region
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
 
 initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
 fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)

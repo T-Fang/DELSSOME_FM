@@ -1,6 +1,7 @@
 """Corpus: submit one single-CPU job per chunk of candidate indices of one split. Dry run
 unless --submit. --only-missing skips chunks whose arrays file already exists (resubmits).
 --extend submits extension jobs (more draws for valid models) instead of screening jobs.
+--rebuild-from DIR submits jobs that recompute the old chunks under DIR (same chunk size).
 
     python scripts/submit_corpus.py --split train --start 0 --stop 500000 --chunk 500 --submit
 """
@@ -29,6 +30,7 @@ def main() -> None:
     p.add_argument("--extend", action="store_true")
     p.add_argument("--first-draw", type=int, default=None)
     p.add_argument("--n-param-sets", type=int, default=None)
+    p.add_argument("--rebuild-from", type=Path, default=None)
     p.add_argument("--walltime", default="08:00:00")
     p.add_argument("--mem", default="6G")
     p.add_argument("--only-missing", action="store_true")
@@ -41,6 +43,7 @@ def main() -> None:
     cfg = dataclasses.replace(cfg, **overrides)
     extra = "".join(f" --{k.replace('_', '-')} {v}" for k, v in overrides.items())
     extra += " --extend" if args.extend else ""
+    extra += f" --rebuild-from {args.rebuild_from}" if args.rebuild_from else ""
     cluster = load_config(args.cluster_config, ClusterConfig)
     resources = Resources(walltime=args.walltime, memory=args.mem, ncpus=1)
     requests = []

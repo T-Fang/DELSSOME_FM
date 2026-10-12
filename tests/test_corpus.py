@@ -2,6 +2,7 @@
 disjoint populations, validity, extensions, and the status of a small corpus."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import jax
@@ -10,9 +11,10 @@ import pytest
 
 from delssome_fm.config import CorpusConfig, SimConfig
 from delssome_fm.sim.corpus import (K_MAX, P_MAX, _DRAW, card_for, corpus_status, draws,
-                                    extend_models, first_valid, flat_from_moments, is_flat,
-                                    read_logs, run_candidates, sc_group, simulate_draws,
-                                    write_chunk)
+                                    extend_models, first_valid, flat_draws, flat_from_moments,
+                                    is_flat, read_chunk, read_logs, rebuild_candidates,
+                                    run_candidates, sc_group, simulate_draws, write_chunk)
+from delssome_fm.sim import corpus as corpus_mod
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.reference import load_reference
 
@@ -22,7 +24,7 @@ N = 68
 def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusConfig:
     return CorpusConfig(seed=11, n_param_sets=n_param_sets, first_draw=first_draw, batch_size=2,
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
-                        flat_rel_sd=1e-5, initial_state_scale=0.1, fcd_store_stride=10,
+                        flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
                         output_dir=tmp_path)
 
 
@@ -33,12 +35,25 @@ SIM = SimConfig(dt=0.001, tr=0.72, n_frames=40, burn_in_frames=5, divergence_bou
 def test_flat_rule():
     t = np.linspace(0, 1, 50)[None, :, None]
     lively = np.broadcast_to(np.sin(20 * t), (1, 50, 3))
-    still = np.full((1, 50, 3), 7.0) + 1e-7 * np.sin(20 * t)   # SD ~7e-8 << 1e-5 * 7
-    mixed = np.concatenate([lively[..., :1], still[..., 1:]], axis=2)
-    y = np.concatenate([lively, still, mixed])
-    assert is_flat(y, 1e-5).tolist() == [False, True, False]
+    still = np.full((1, 50, 3), 7.0) + 1e-7 * np.sin(20 * t)   # SD ~7e-8 <= 1e-6 * 7
+    one_still = np.concatenate([lively[..., :1], still[..., 1:2], lively[..., 2:]], axis=2)
+    tiny = 1e-9 * np.sin(20 * t) * np.ones((1, 50, 3))         # tiny but resolved: not flat
+    zero = np.zeros((1, 50, 3))                                 # SD 0 at mean 0: flat
+    y = np.concatenate([lively, still, one_still, tiny, zero])
+    expected = [False, True, True, False, True]
+    assert is_flat(y, 1e-6).tolist() == expected
     # the corpus applies the same rule to stored per-region moments
-    assert flat_from_moments(y.mean(1), y.std(1), 1e-5).tolist() == [False, True, False]
+    assert flat_from_moments(y.mean(1), y.std(1), 1e-6).tolist() == expected
+
+
+def test_flat_draws_also_flags_non_finite_statistics():
+    B = 3
+    res = {"diverged": np.array([False, False, True]),
+           "regional": np.ones((B, N, 6)), "pairwise": np.zeros((B, 5)),
+           "fcd_cdf": np.zeros((B, 4)), "fc_moments": np.zeros((B, 3))}
+    res["pairwise"][1, 2] = np.nan
+    res["regional"][2] = np.nan                       # diverged draws are never flat
+    assert flat_draws(res, 1e-6).tolist() == [False, True, False]
 
 
 def test_draws_do_not_depend_on_how_they_are_split(tmp_path):
@@ -124,3 +139,41 @@ def test_simulate_draws_with_a_stable_card(tmp_path):
     assert np.isnan(res["theta"][..., 3:]).all() and np.isfinite(res["theta"][..., :3]).all()
     assert np.all(np.diff(res["fcd_cdf"], axis=1) >= 0)
     assert res["regional"].dtype == np.float32 and res["theta"].dtype == np.float32
+
+
+def test_rebuild_of_an_old_chunk_equals_a_fresh_run(tmp_path, monkeypatch):
+    """An "old" chunk is made from a fresh one by applying the old flat rule and putting an
+    inf into one model's pairwise statistics (as float32 FC saturation did). Rebuilding it
+    gives the fresh chunk exactly, simulating base draws only for that model."""
+    cfg = _cfg(tmp_path)
+    scs = np.random.default_rng(0).uniform(0, 0.02, (64, N, N))
+    logs, arrays, cards = run_candidates(cfg, SIM, "train", scs, 0, 12)
+    valid = [r.index for r in logs if r.valid]
+    assert len(valid) >= 2 and any(not r.kept and r.screen_diverged == cfg.screen_draws
+                                   for r in logs)
+    old = {k: v.copy() for k, v in arrays.items()}
+    mean, sd = old["regional"][..., 0], old["regional"][..., 1]
+    old["flat"] = ~old["diverged"] & np.all(sd <= 1e-5 * np.maximum(1, np.abs(mean)), axis=1)
+    hit = np.flatnonzero((old["model"] == valid[0]) & ~old["diverged"])[0]
+    old["pairwise"][hit, 0] = np.inf
+    write_chunk(cfg, "train", 0, 12, logs, old, cards)
+    old_logs, old_arrays = read_chunk(cfg, "train", 0, 12)
+
+    simulated = []
+    real = corpus_mod.simulate_draws
+    monkeypatch.setattr(corpus_mod, "simulate_draws",
+                        lambda *a: simulated.append(a[4]) or real(*a))
+    new_logs, new_arrays, new_cards = rebuild_candidates(cfg, SIM, "train", scs, 0, 12,
+                                                         old_logs, old_arrays)
+    # simulated again: the doctored model, kept models without stored draws, and models
+    # whose own pairwise statistics were already non-finite outside diverged draws
+    unfinite = {int(m) for m in np.unique(arrays["model"])
+                if not np.isfinite(arrays["pairwise"][(arrays["model"] == m)
+                                                      & ~arrays["diverged"]]).all()}
+    expected = sorted({valid[0]} | unfinite | {r.index for r in logs if r.kept and not r.valid})
+    assert simulated == expected and len(simulated) < sum(r.kept for r in logs)
+    as_json = lambda rows: [json.dumps(asdict(r)) for r in rows]   # NaN-safe equality
+    assert as_json(new_logs) == as_json(logs) and new_cards == cards
+    assert new_arrays.keys() == arrays.keys()
+    for k in arrays:
+        np.testing.assert_array_equal(new_arrays[k], arrays[k], err_msg=k)

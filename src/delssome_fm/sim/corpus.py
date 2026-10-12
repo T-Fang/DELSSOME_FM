@@ -21,10 +21,19 @@ more candidate indices. More draws per model: `extend_models` simulates draws
 first_draw .. for models already found valid, without re-screening. Draw j of a model is the
 same whichever job, chunk or extension computes it.
 
-Diverged and flat, precisely:
-    diverged  any state or recorded value non-finite, or |value| > divergence_bound, at any
-              frame boundary (sim/integrate.py); sticky for the rest of the run
-    flat      every region's temporal SD of the recorded signal <= flat_rel_sd * max(1, |mean|)
+Diverged and flat, precisely (a draw is usable when it is neither):
+    diverged  any state or recorded value of any region non-finite, or |value| >
+              divergence_bound, at any frame boundary, burn-in included (sim/integrate.py);
+              sticky for the rest of the run
+    flat      not diverged, and some region is quantised: its temporal SD over the recorded
+              frames <= flat_rel_sd * |mean| (with flat_rel_sd = 1e-6, at most ~8 float32
+              rounding steps of its own level, so its FC is rounding noise); or, for base
+              draws, some stored statistic is non-finite. Relative, so it does not depend on
+              the observable's scale (decided 2026-10-12; previously every region below
+              1e-5 * max(1, |mean|))
+
+`rebuild_candidates` recomputes a chunk written before the 2026-10-12 change (flat rule above;
+stable arctanh in sim/summary.py), skipping the work the old chunk proves unchanged.
 
 This module does not decide job granularity or submit anything (scripts/ do).
 """
@@ -35,7 +44,7 @@ import json
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
@@ -118,14 +127,27 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
     return np.stack(thetas), np.stack(psis), np.stack(x0s), keys
 
 
+STAT_NAMES = ("fcd_cdf", "regional", "pairwise", "fc_moments")
+
+
 def is_flat(observed: np.ndarray, rel_sd: float) -> np.ndarray:
-    """observed: (B, T, N) -> (B,) True where every region's temporal SD is below the floor."""
+    """observed: (B, T, N) -> (B,) True where some region is quantised (module docstring)."""
     return flat_from_moments(observed.mean(axis=1), observed.std(axis=1), rel_sd)
 
 
 def flat_from_moments(mean: np.ndarray, sd: np.ndarray, rel_sd: float) -> np.ndarray:
-    """mean, sd: (B, N) per-region temporal moments -> (B,) the flat rule of `is_flat`."""
-    return np.all(sd <= rel_sd * np.maximum(1.0, np.abs(mean)), axis=1)
+    """mean, sd: (B, N) per-region temporal moments -> (B,) the region rule of `is_flat`."""
+    return np.any(sd <= rel_sd * np.abs(mean), axis=1)
+
+
+def flat_draws(res: dict[str, np.ndarray], rel_sd: float) -> np.ndarray:
+    """(B,) the `flat` flag of summarised draws: not diverged, and some region quantised or
+    some statistic non-finite."""
+    finite = np.all([np.isfinite(res[k]).reshape(len(res["diverged"]), -1).all(axis=1)
+                     for k in STAT_NAMES], axis=0)
+    with np.errstate(invalid="ignore"):
+        quantised = flat_from_moments(res["regional"][..., 0], res["regional"][..., 1], rel_sd)
+    return ~res["diverged"] & (quantised | ~finite)
 
 
 def screen(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel, split: str,
@@ -181,11 +203,9 @@ def simulate_draws(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel, 
         parts.append({"diverged": np.asarray(out.diverged)[:m],
                       **{name: np.asarray(v, np.float32)[:m] for name, v in s._asdict().items()}})
     res = {name: np.concatenate([p[name] for p in parts]) for name in parts[0]}
-    res["flat"] = ~res["diverged"] & flat_from_moments(
-        np.nan_to_num(res["regional"][..., 0]), np.nan_to_num(res["regional"][..., 1]),
-        cfg.flat_rel_sd)
-    for name in ("fc", "fcd_cdf", "regional", "pairwise", "fc_moments"):
+    for name in ("fc", *STAT_NAMES):
         res[name][res["diverged"]] = np.nan
+    res["flat"] = flat_draws(res, cfg.flat_rel_sd)
     res["theta"], res["psi"] = _pad(theta, P_MAX), _pad(psi, K_MAX)
     res["draw"] = np.arange(first, first + n)
     del res["fc"]  # pairwise holds arctanh(FC) upper triangle; fc_moments its summary
@@ -206,9 +226,14 @@ def _usable_mean_fc(res: dict[str, np.ndarray]) -> float:
 
 
 def run_candidates(cfg: CorpusConfig, sim_cfg: SimConfig, split: str, scs: np.ndarray,
-                   start: int, stop: int) -> tuple[list[CandidateLog], dict[str, Any], list[dict]]:
+                   start: int, stop: int, skip: Callable[[int], CandidateLog | None] | None = None,
+                   reuse: Callable[[int], dict[str, np.ndarray] | None] | None = None,
+                   ) -> tuple[list[CandidateLog], dict[str, Any], list[dict]]:
     """Screen candidates start..stop-1 of `split` and simulate the base draws of the kept
     ones. Requires first_draw == 0 (base draws define validity).
+
+    skip(i), reuse(i): for `rebuild_candidates` only. A log row from skip is taken as is; base
+    draws from reuse replace their simulation.
 
     returns: (one log row per candidate,
               per-draw arrays of the valid models, concatenated, with `model` index,
@@ -219,13 +244,18 @@ def run_candidates(cfg: CorpusConfig, sim_cfg: SimConfig, split: str, scs: np.nd
                          "use extend_models for further draws")
     logs, rows, cards = [], [], []
     for i in range(start, stop):
+        if skip is not None and (row := skip(i)) is not None:
+            logs.append(row)
+            continue
         card = card_for(cfg, split, i)
         model = compile_card(card)
         g = sc_group(cfg, split, i, len(scs))
         kept, n_div, n_flat, mean_fc = screen(cfg, sim_cfg, model, split, i, scs[g])
         n, d_div, d_flat, valid = 0, 0, 0, False
         if kept:
-            res = simulate_draws(cfg, sim_cfg, model, split, i, scs[g], 0, cfg.n_param_sets)
+            res = reuse(i) if reuse is not None else None
+            if res is None:
+                res = simulate_draws(cfg, sim_cfg, model, split, i, scs[g], 0, cfg.n_param_sets)
             n, d_div, d_flat = len(res["draw"]), int(res["diverged"].sum()), int(res["flat"].sum())
             valid = d_div + d_flat < n
             mean_fc = _usable_mean_fc(res)
@@ -240,6 +270,46 @@ def run_candidates(cfg: CorpusConfig, sim_cfg: SimConfig, split: str, scs: np.nd
                                  mean_fc))
     arrays = {k: np.concatenate([r[k] for r in rows]) for k in rows[0]} if rows else {}
     return logs, arrays, cards
+
+
+def rebuild_candidates(cfg: CorpusConfig, sim_cfg: SimConfig, split: str, scs: np.ndarray,
+                       start: int, stop: int, old_logs: list[CandidateLog],
+                       old_arrays: dict[str, np.ndarray],
+                       ) -> tuple[list[CandidateLog], dict[str, Any], list[dict]]:
+    """`run_candidates` for a chunk written before the 2026-10-12 change (new flat rule, stable
+    arctanh), reusing what the old chunk proves unchanged. The simulation itself did not
+    change, so the result equals a fresh run:
+
+        all screen draws diverged   divergence is unchanged: the old log row stands
+        otherwise                   re-screened with the new flat rule
+        kept, old base draws stored, no non-finite pairwise outside diverged draws
+                                    stored statistics are unchanged (stable arctanh differs
+                                    from arctanh only where |FC| >= 1): reused, `flat`
+                                    relabelled by the new rule
+        otherwise                   base draws simulated again
+    """
+    old = {r.index: r for r in old_logs}
+    if sorted(old) != list(range(start, stop)):
+        raise ValueError(f"old log covers {len(old)} candidates, expected {start}..{stop - 1}")
+
+    def skip(i: int) -> CandidateLog | None:
+        r = old[i]
+        return r if not r.kept and r.screen_diverged == cfg.screen_draws else None
+
+    def reuse(i: int) -> dict[str, np.ndarray] | None:
+        if not old[i].valid:
+            return None
+        sel = old_arrays["model"] == i
+        res = {k: v[sel] for k, v in old_arrays.items() if k != "model"}
+        if res["draw"].tolist() != list(range(cfg.n_param_sets)):
+            raise ValueError(f"model {i}: stored draws {res['draw'].tolist()[:5]}..., "
+                             f"expected 0..{cfg.n_param_sets - 1}")
+        if not np.isfinite(res["pairwise"][~res["diverged"]]).all():
+            return None
+        res["flat"] = flat_draws(res, cfg.flat_rel_sd)
+        return res
+
+    return run_candidates(cfg, sim_cfg, split, scs, start, stop, skip=skip, reuse=reuse)
 
 
 def extend_models(cfg: CorpusConfig, sim_cfg: SimConfig, split: str, scs: np.ndarray,
@@ -283,6 +353,19 @@ def write_chunk(cfg: CorpusConfig, split: str, start: int, stop: int,
     if logs is not None:
         paths["log"].write_text("".join(json.dumps(asdict(r)) + "\n" for r in logs))
     return paths
+
+
+def read_chunk(cfg: CorpusConfig, split: str, start: int, stop: int,
+               ) -> tuple[list[CandidateLog], dict[str, np.ndarray]]:
+    """The log rows and arrays of one screening chunk (raises if either file is missing)."""
+    paths = chunk_paths(cfg, split, start, stop)
+    for key in ("log", "arrays"):
+        if not paths[key].is_file():
+            raise FileNotFoundError(f"{paths[key]} missing")
+    logs = [CandidateLog(**json.loads(line)) for line in paths["log"].read_text().splitlines()]
+    with np.load(paths["arrays"]) as d:
+        arrays = {k: d[k] for k in d.files}
+    return logs, arrays
 
 
 def read_logs(cfg: CorpusConfig, split: str) -> list[CandidateLog]:
