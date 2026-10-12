@@ -185,7 +185,7 @@ with $s_\gamma$ learned. Four scales is manageable to sanity-check by hand, whic
 
 **No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic. In the corpus they are flagged `diverged` and their statistics are NaN. They make up 14.7% of the draws of valid models.
 
-Draws whose observed signal is flat are also stored, flagged `flat` (0.8% of draws). Their statistics are meaningless: FC is correlation between numerical noise, and about a third of flat draws have some NaN statistics (zero-variance regions). Whether to exclude them too is open (§9 question 6).
+Draws whose observed signal is flat are also stored, flagged `flat` (0.8% of draws). Their statistics are meaningless: FC is correlation between numerical noise, and about a third of flat draws have some NaN statistics (zero-variance regions). **They are excluded from the stage-1 loss like divergent draws (decided 2026-10-12, project lead).** A training row is a draw with `diverged` and `flat` both false.
 
 ### 5.4 Two deliberate redundancies
 
@@ -286,4 +286,4 @@ Logged so they are not relitigated.
 3. **Is rank $k = 32$ enough** for the bilinear head to capture simulated FC? Sweep it; §6.5 is the diagnostic.
 4. **Does removing FiLM cost accuracy at parity?** Phase 1 answers this directly — retrain MFM at $N=68$ and compare against current DELSSOME.
 5. **Corpus balance over $P$.** Larger templates have more eligible coefficients, so the sampler may concentrate on $P = 4$–$5$ and leave $P = 2$ rare — which is where the mean-over-$p$ pooling is least exercised, since one of the two summands is always $\sigma$. Histogram $P$ over the first 50 models before generating any simulations. **Measured (2026-10-10)** over the valid corpus models: $P$ = 1/2/3/4/5 in 2/36/33/19/10%. The concentration feared here did not happen. $P = 2$ is the most common value, and $P = 1$ (fully noiseless models with one free coefficient) is rare.
-6. **Flat draws in stage 1.** Draws flagged `flat` carry statistics computed from a signal with no variance, some of them NaN (§5.3). Decide whether stage 1 trains on them, excludes them like divergent draws, or labels them.
+6. ~~**Flat draws in stage 1.**~~ Decided 2026-10-12: excluded from the stage-1 loss, like divergent draws (§5.3).

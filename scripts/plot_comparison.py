@@ -14,7 +14,8 @@ range is shared by Tianchu's and our panel of each row (min and max over both).
 
 Needs matplotlib; run it in the lifespan_ei env:
     /home/ftian/storage/miniconda/envs/lifespan_ei/bin/python scripts/plot_comparison.py
-Writes outputs/reproduce/comparison/.
+Writes outputs/reproduce/comparison/: cost_tianchu_vs_ours.png (with our noise floor),
+cost_tianchu_vs_ours_no_floor.png (without it), and matrices/.
 """
 
 from pathlib import Path
@@ -74,7 +75,7 @@ def style(ax):
     ax.tick_params(colors=INK2)
 
 
-def cost_figure():
+def cost_figure(noise_floor: bool, filename: str):
     fig, axes = plt.subplots(3, 4, figsize=(13, 9), facecolor=SURFACE)
     rng = np.random.default_rng(0)
     for i, (m, name) in enumerate(MODELS):
@@ -89,21 +90,24 @@ def cost_figure():
                        boxprops=dict(facecolor="#dbe8f8", edgecolor=INK2))
             ax.scatter(rng.uniform(-0.12, 0.12, len(v)), v, s=20, color=DOT,
                        edgecolor=SURFACE, lw=0.8, zorder=3)
-            ax.axhline(np.median(floor[c]), color=INK2, lw=1, ls="--")
-            ax.annotate(f"ours vs ours median {np.median(floor[c]):.3f}",
-                        (0.98, np.median(floor[c])), xycoords=("axes fraction", "data"),
-                        xytext=(0, 3), textcoords="offset points", ha="right", fontsize=7,
-                        color=INK2)
+            if noise_floor:
+                ax.axhline(np.median(floor[c]), color=INK2, lw=1, ls="--")
+                ax.annotate(f"ours vs ours median {np.median(floor[c]):.3f}",
+                            (0.98, np.median(floor[c])), xycoords=("axes fraction", "data"),
+                            xytext=(0, 3), textcoords="offset points", ha="right", fontsize=7,
+                            color=INK2)
             ax.set_xticks([0], [f"median {np.median(v):.3f}"], color=INK2, fontsize=8)
             ax.set_xlim(-0.6, 0.6)
             ax.set_title(f"{name}: {label}", color=INK, fontsize=10, loc="left")
-            print(f"{name} {c}: Tianchu vs ours median {np.median(v):.4f}, "
-                  f"ours vs ours median {np.median(floor[c]):.4f}")
+            if noise_floor:
+                print(f"{name} {c}: Tianchu vs ours median {np.median(v):.4f}, "
+                      f"ours vs ours median {np.median(floor[c]):.4f}")
     fig.suptitle("Cost between Tianchu's simulation and ours, per surviving test parameter set "
-                 "(50 per model; 3 simulations averaged each). Dashed: our noise floor",
+                 "(50 per model; 3 simulations averaged each)"
+                 + (". Dashed: our noise floor" if noise_floor else ""),
                  fontsize=10, color=INK, x=0.01, ha="left")
     fig.tight_layout()
-    fig.savefig(OUT / "cost_tianchu_vs_ours.png", dpi=150, facecolor=SURFACE)
+    fig.savefig(OUT / filename, dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
 
@@ -137,7 +141,8 @@ def matrix_figures():
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    cost_figure()
+    cost_figure(noise_floor=True, filename="cost_tianchu_vs_ours.png")
+    cost_figure(noise_floor=False, filename="cost_tianchu_vs_ours_no_floor.png")
     matrix_figures()
 
 
