@@ -153,7 +153,7 @@ Three groups, all computed from simulated BOLD through **the identical pipeline 
 | 5 | FC node strength, $\frac{1}{N-1}\sum_{j\neq i}\text{FC}_{ij}$ |
 | 6 | lag-1 autocorrelation |
 
-**Pairwise** — supervised on region-token pairs: $\operatorname{arctanh}(\text{FC}_{ij})$, over the 2278 upper-triangular edges.
+**Pairwise** — supervised on region-token pairs: $\operatorname{arctanh}(\text{FC}_{ij})$, over the 2278 upper-triangular edges. It is computed with a stable arctanh (`summary.stable_arctanh`), which clips |FC| ≥ 1 from float32 rounding to the largest value below 1, so the target is at most 8.66 in magnitude. About 5% of usable draws have such near-synchronised edges.
 
 **Global** — 103, supervised on $h_{\text{CLS}}$: the FCD CDF at 100 fixed FCD values (−0.98, −0.96, …, 1.00; data.md §8), plus the mean, SD, and skewness of the upper-triangular FC.
 
@@ -185,7 +185,7 @@ with $s_\gamma$ learned. Four scales is manageable to sanity-check by hand, whic
 
 **No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic. In the corpus they are flagged `diverged` and their statistics are NaN. They make up 14.7% of the draws of valid models.
 
-Draws whose observed signal is flat are also stored, flagged `flat` (0.8% of draws). Their statistics are meaningless: FC is correlation between numerical noise, and about a third of flat draws have some NaN statistics (zero-variance regions). **They are excluded from the stage-1 loss like divergent draws (decided 2026-10-12, project lead).** A training row is a draw with `diverged` and `flat` both false.
+Draws flagged `flat` are also stored: some region is quantised (SD ≤ 10⁻⁶ |mean|) or some statistic is non-finite (generation.md §6). Their statistics are meaningless where defined: a quantised region's FC is correlation between rounding noise. **They are excluded from the stage-1 loss like divergent draws (decided 2026-10-12, project lead).** A training row is a draw with `diverged` and `flat` both false.
 
 ### 5.4 Two deliberate redundancies
 

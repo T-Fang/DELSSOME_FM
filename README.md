@@ -117,6 +117,14 @@ python scripts/submit_corpus.py --split train --start 0 --stop 660000 --chunk 50
 python scripts/corpus_status.py --target train=100000 --target val=10000 --target test=10000
 ```
 
+The first corpus was rebuilt on 2026-10-12 after a change of the flat rule and the stable
+arctanh (docs/generation.md §9). Each old chunk is recomputed with:
+
+```bash
+python scripts/submit_corpus.py --split train --start 0 --stop 660000 --chunk 500 \
+    --walltime 06:00:00 --mem 6G --rebuild-from outputs/superseded/corpus_v1 --submit
+```
+
 `corpus_status.py` prints, per split, how many candidates are screened and valid, and how
 many more are needed for the target. To grow a split, submit a further index range. To redo
 failed chunks, rerun the same range with `--only-missing`, but only once none of its jobs are
