@@ -183,7 +183,7 @@ $$\mathcal{L} = \sum_{\text{groups } \gamma} \frac{1}{2s_\gamma^2}\mathcal{L}_\g
 
 with $s_\gamma$ learned. Four scales is manageable to sanity-check by hand, which was part of the reason for cutting the statistic set.
 
-**No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic. In the corpus they are flagged `diverged` and their statistics are NaN. They make up 14.7% of the draws of valid models.
+**No task masking is needed.** Every statistic here is universal — any model that produces BOLD produces all of them. The heterogeneous-label machinery from earlier drafts (firing rates for FIC but not Hopf, and so on) is unnecessary at this statistic set. The only exception is a divergent simulation, which has no statistics at all; those rows are excluded from stage-1 loss entirely rather than masked per-statistic. In the corpus they are flagged `diverged` and their statistics are NaN. They make up 14.9% of the draws of the train corpus models; flat draws (below) make up 1.7%.
 
 Draws flagged `flat` are also stored: some region is quantised (SD ≤ 10⁻⁶ |mean|) or some statistic is non-finite (generation.md §6). Their statistics are meaningless where defined: a quantised region's FC is correlation between rounding noise. **They are excluded from the stage-1 loss like divergent draws (decided 2026-10-12, project lead).** A training row is a draw with `diverged` and `flat` both false.
 
