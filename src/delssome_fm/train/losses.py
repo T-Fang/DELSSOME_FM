@@ -45,4 +45,4 @@ class UncertaintyWeighting(nn.Module):
 
     def scales(self) -> dict[str, float]:
         """The current s_g, for logging."""
-        return {g: float(torch.exp(log_s)) for g, log_s in zip(self.groups, self.log_s)}
+        return {g: float(torch.exp(log_s.detach())) for g, log_s in zip(self.groups, self.log_s)}

@@ -103,6 +103,7 @@ class Stage1Module(L.LightningModule):
 def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Path:
     """Train stage 1 as configured; returns the run's checkpoint directory."""
     L.seed_everything(cfg.seed, workers=True)
+    torch.set_float32_matmul_precision("high")   # TF32 tensor cores for the float32 parts
     run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
                             cfg.seed)
