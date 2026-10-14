@@ -151,11 +151,11 @@ All of these were open at the end of Phase 0 and are now settled.
 2. **Simulated scan length: as the data.** Simulations record 1200 frames at TR 0.72 s after discarding 200 frames (144 s) of burn-in (`configs/sim.yaml`), so the FCD has the same 1118 windows of 83 frames as the empirical pipeline. This replaces generation.md §8's 15-minute (1250-frame) sizing.
 3. **No arctanh inside FCD.** Implemented: `summary.fcd_matrix` correlates raw windowed FC upper triangles, as the empirical pipeline does. arctanh is applied only to the pairwise FC targets (architecture.md §5.1). The original FC correlation cost does not use it either (§7).
 4. **SC bootstraps: dropped as a sampling axis (decided 2026-10-05).** Each synthetic model is tied to one group SC, drawn uniformly (seeded) from its split's groups: train models from the 64 training groups, val and test models from the 14 and 13 val and test groups (generation.md §9). Overlap between groups (§4.1) is accepted.
-5. **Cost-reproduction protocol (build step 6).** The published costs refer to the FIC_inv test group (§6). KS is max |ΔCDF|, unsigned, as in the Python code that produced the published numbers, not the signed one-sided max of Tianchu's `scripts/KS_distance.m`. The FC correlation uses raw r (§7). The gate itself is **deferred, not passed** (project lead, 2026-10-05); its criterion is fixed in `configs/reproduce.yaml`.
+5. **Cost-reproduction protocol (build step 6).** The published costs refer to the FIC_inv test group (§6). KS is max |ΔCDF|, unsigned, as in the Python code that produced the published numbers, not the signed one-sided max of Tianchu's `scripts/KS_distance.m`. The FC correlation uses raw r (§7). The gate's criterion is fixed in `configs/reproduce.yaml`. It was deferred on 2026-10-05 and **passed** on 2026-10-14 (§9).
 
 ## 9. Our simulator against the original (2026-10-10)
 
-Build step 6 is deferred, but two direct comparisons with the original DELSSOME have been run. Both use the 50 surviving test parameter sets per model (`params/<model>_HCPYA/trial1/test/seed1..50`) and the original test protocol (§7; `configs/reproduce_once.yaml`: dt 0.5 ms for MFM and FIC, 1 ms for Hopf; 3 simulations per evaluation, FC averaged and FCD histograms summed).
+Build step 6 passed on 2026-10-14 (end of this section). Before that, two direct comparisons with the original DELSSOME were run. Both use the 50 surviving test parameter sets per model (`params/<model>_HCPYA/trial1/test/seed1..50`) and the original test protocol (§7; `configs/reproduce_once.yaml`: dt 0.5 ms for MFM and FIC, 1 ms for Hopf; 3 simulations per evaluation, FC averaged and FCD histograms summed).
 
 **The original code replays exactly.** `scripts/run_original_test.py` reruns Tianchu's own tester (torch, read-only imports) with the torch seed stored with each result. For all 150 (model, seed) pairs, the recomputed cost equals the recorded one to within 4e-11. It also saves the simulated FC and FCD, which the original runs did not keep. Outputs: `outputs/reproduce/original_sim/<model>_seed<k>.npz`.
 
@@ -179,4 +179,12 @@ Build step 6 is deferred, but two direct comparisons with the original DELSSOME 
 
 Figures are in `outputs/reproduce/comparison/`. `cost_tianchu_vs_ours.png` shows the cost plot. `matrices/<model>_seed<k>.png` shows one simulation's FC and FCD from each implementation, with the original colour tables (`assets/colormaps/`) and a colour range shared by the two panels of each row.
 
-None of this is the gate. The gate needs 20 noise repeats per set (`configs/reproduce.yaml`) and has not been run.
+**The gate (build step 6): passed, 2026-10-14.** Each of the 50 sets per model is evaluated 20 times with independent noise (3 simulations each, as the original). For each model and each component, the criterion fixed beforehand requires two things: no bias, meaning a paired t-test of our per-set mean against the recorded cost has p > 0.05/12; and no misfit, meaning the recorded cost lies within 3 SD of our mean in at least 46 of 50 sets. All 12 checks pass (`scripts/check_reproduction.py`; outputs in `outputs/reproduce/ours/`):
+
+| Model | Component | Mean ours − recorded | Paired t p (needs > 0.0042) | Misses (needs ≤ 4 of 50) |
+|---|---|---|---|---|
+| MFM | 1 − r / d / KS / total | +0.0010 / −0.0011 / +0.0057 / +0.0056 | 0.63 / 0.41 / 0.28 / 0.36 | 2 / 0 / 1 / 1 |
+| FIC | 1 − r / d / KS / total | +0.0033 / +0.0100 / −0.0081 / +0.0053 | 0.10 / 0.14 / 0.059 / 0.52 | 0 / 0 / 0 / 0 |
+| Hopf | 1 − r / d / KS / total | −0.0015 / −0.0001 / −0.0022 / −0.0038 | 0.19 / 0.95 / 0.74 / 0.64 | 0 / 1 / 1 / 2 |
+
+The largest misses are MFM seed 31 (1 − r, z = −4.9) and seed 20 (total, z = +4.1), within the 4 misses allowed.

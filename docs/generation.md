@@ -390,7 +390,7 @@ Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is 
 
 **Step 0, hand-write the five.** Fill in the template's slots for Linear, MFM, FIC, Wilson–Cowan and Hopf, compile each, and check the simulator reproduces known behaviour and the published costs. **This is a gate.** If the template cannot reproduce the five exactly, nothing downstream means anything.
 
-**Status (2026-10-10).** All seven reference cards compile, and each card's compiled right-hand side equals its published equations (`tests/test_compile.py`). The cost-reproduction gate (build step 6) is implemented but **deferred, not passed**: the project lead deferred it on 2026-10-05 and asked to proceed as if it had passed. Direct comparisons with the original simulations are in data.md §9.
+**Status (2026-10-10).** All seven reference cards compile, and each card's compiled right-hand side equals its published equations (`tests/test_compile.py`). The cost-reproduction gate (build step 6) was deferred on 2026-10-05 and **passed on 2026-10-14** for FIC, MFM and Hopf (data.md §9). Wilson–Cowan, MPR, Jansen–Rit and Linear have no published fits to reproduce.
 
 Verification means matching *dynamics and cost values*, not the paper's constant tables. Nondimensionalisation and constant absorption mean the cards will not look character-for-character like the published equations.
 

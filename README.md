@@ -30,8 +30,8 @@ against the original DELSSOME (§9).
 | 3. Model card and compiler | **done** |
 | 4. Reference cards (gate) | **done**: seven cards (adds MPR and Jansen–Rit) |
 | 5. Simulator | **done**: integrate, observe, summary; summary reproduces the empirical pipeline |
-| 6. Reference reproduction (gate) | **deferred, not passed** (2026-10-05, project lead): code and criterion ready, gate not run. Direct comparisons with the original simulations are done (docs/data.md §9) |
-| 7. Sampler and corpus | **in progress**: sampler done; corpus generation started 2026-10-10 (train 100,000, val and test 10,000 valid models each) |
+| 6. Reference reproduction (gate) | **passed** (2026-10-14): all 12 checks for FIC, MFM and Hopf (below; docs/data.md §9) |
+| 7. Sampler and corpus | **done** (2026-10-12): train 100,000, val and test 10,000 valid models each (docs/generation.md §9) |
 | 8. Network and training | not started |
 
 ## Install
@@ -89,10 +89,17 @@ python scripts/submit_reproduction.py --submit --only-missing # resubmit failed 
 python scripts/check_reproduction.py                          # exits 1 if the gate fails
 ```
 
-**Status: deferred.** On 2026-10-05 the project lead deferred this gate and asked to proceed
-as if it had passed. It has not been run. Spot checks on CPU agree with the original code
-(MFM seed 30: ours 0.426 +- 0.015, original 0.425 +- 0.025 over seven seeds), but that is
-not the gate.
+**Status: passed (2026-10-14).** The gate was deferred on 2026-10-05 and run on 2026-10-14
+at the project lead's request, with the criterion fixed before any data (configs/reproduce.yaml):
+150 jobs, 3.5 min each, 8 CPU-hours. `check_reproduction.py` passes all 12 checks (no bias:
+paired t p > 0.05/12; no misfit: recorded cost within 3 SD of our 20-repeat mean in at least
+46 of 50 sets):
+
+| Model | Component | Mean ours − recorded | Paired t p (needs > 0.0042) | Misses (needs ≤ 4 of 50) |
+|---|---|---|---|---|
+| MFM | 1 − r / d / KS / total | +0.0010 / −0.0011 / +0.0057 / +0.0056 | 0.63 / 0.41 / 0.28 / 0.36 | 2 / 0 / 1 / 1 |
+| FIC | 1 − r / d / KS / total | +0.0033 / +0.0100 / −0.0081 / +0.0053 | 0.10 / 0.14 / 0.059 / 0.52 | 0 / 0 / 0 / 0 |
+| Hopf | 1 − r / d / KS / total | −0.0015 / −0.0001 / −0.0022 / −0.0038 | 0.19 / 0.95 / 0.74 / 0.64 | 0 / 1 / 1 / 2 |
 
 **Comparison with the original simulations** (docs/data.md §9). This runs one original-style
 evaluation of ours per parameter set and replays Tianchu Zeng's own test runs with their
