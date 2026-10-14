@@ -28,7 +28,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
-        mlflow_experiment="test")
+        mlflow_artifact_dir=tmp_path / "artifacts", mlflow_experiment="test")
 
 
 @pytest.fixture
@@ -136,3 +136,4 @@ def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
     run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
     assert {"train/total", "val/total", "val/r2_pairwise"} <= set(run.data.metrics)
     assert np.isfinite(run.data.metrics["val/total"])
+    assert (tmp_path / "artifacts").is_dir() and not Path("mlruns").exists()

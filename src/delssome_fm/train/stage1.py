@@ -109,7 +109,8 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     data.setup()
     module = Stage1Module(cfg, data.train.n_fcd_levels)
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, run_name=run_name,
-                          tracking_uri=cfg.mlflow_tracking_uri)
+                          tracking_uri=cfg.mlflow_tracking_uri,
+                          artifact_location=cfg.mlflow_artifact_dir.as_uri())
     logger.experiment.log_artifact(logger.run_id, str(config_path))
     checkpoints = cfg.output_dir / run_name
     trainer = L.Trainer(

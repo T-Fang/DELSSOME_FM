@@ -20,3 +20,4 @@ sandbox_mounts.local
 
 # Reference papers (kept local)
 docs/*.pdf
+mlruns/

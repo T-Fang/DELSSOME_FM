@@ -35,4 +35,5 @@ gradient_clip: 1.0
 #   mlflow ui --backend-store-uri <mlflow_tracking_uri>
 log_every_steps: 50
 mlflow_tracking_uri: sqlite:////home/ftian/storage/projects/DELSSOME-FM/outputs/mlflow/mlflow.db
+mlflow_artifact_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/mlflow/artifacts
 mlflow_experiment: stage1

@@ -158,6 +158,7 @@ class Stage1Config:
     # tracking
     log_every_steps: int           # training metrics are logged every this many steps
     mlflow_tracking_uri: str
+    mlflow_artifact_dir: Path     # where run artifacts go (else MLflow uses ./mlruns)
     mlflow_experiment: str
 
 
