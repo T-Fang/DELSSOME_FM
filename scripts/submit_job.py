@@ -5,6 +5,7 @@
 """
 
 import argparse
+import dataclasses
 import shlex
 from pathlib import Path
 
@@ -21,6 +22,8 @@ def main() -> None:
     parser.add_argument("--ngpus", type=int, default=0)
     parser.add_argument("--ncpus", type=int, default=1)
     parser.add_argument("--gpu-type", default="L40S")
+    parser.add_argument("--conda-env", default=None,
+                        help="override cluster.yaml's env, e.g. delssome_fm_train for training")
     parser.add_argument("--submit", action="store_true", help="actually submit (default: dry run)")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="after --, the command to run")
     args = parser.parse_args()
@@ -28,8 +31,10 @@ def main() -> None:
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     resources = Resources(walltime=args.walltime, memory=args.mem, ngpus=args.ngpus,
                           ncpus=args.ncpus, gpu_type=args.gpu_type)
-    submit(shlex.join(command), args.name, resources, load_config(args.config, ClusterConfig),
-           dry_run=not args.submit)
+    cluster = load_config(args.config, ClusterConfig)
+    if args.conda_env is not None:
+        cluster = dataclasses.replace(cluster, conda_env=args.conda_env)
+    submit(shlex.join(command), args.name, resources, cluster, dry_run=not args.submit)
 
 
 if __name__ == "__main__":

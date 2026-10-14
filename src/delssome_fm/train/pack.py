@@ -1,0 +1,241 @@
+"""Pack one split of the corpus into the stage-1 training store: flat arrays that a data
+loader can read at random, plus each model's equation graph as tensors.
+
+Which draws become training rows (architecture.md §5.3): the draws of the split's corpus
+models (its first n valid models, `corpus.first_valid`) that are neither diverged nor flat
+and whose FCD is complete (every window pair present; decided 2026-10-14). A draw whose
+targets are not all finite after the transforms below is also left out and counted.
+
+Targets are stored transformed but not z-scored; `normalisation` computes the z-score
+statistics from the train split, and the data loader applies them (decided 2026-10-14):
+
+    regional (N, 6)   asinh(mean / SD), log10 SD, asinh(skew), log(excess kurtosis + 3),
+                      FC node strength, lag-1 autocorrelation
+    pairwise (2278,)  stable arctanh of the FC upper triangle, as stored by the corpus
+    fcd (L,)          the FCD CDF at its L = 100 stored levels, divided by the number of
+                      window pairs
+    fc_moments (3,)   mean, log10 SD, skewness of the FC upper triangle
+
+The scale-free statistics are transformed because observables have arbitrary units: raw
+regional SD spans 15 orders of magnitude, and a plain z-score would collapse most values to
+one number while a few extremes dominated the loss.
+
+Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
+
+    model.npy (R,) int32       row of the model in models.npz
+    draw.npy (R,) int32
+    theta.npy (R, N, 5), psi.npy (R, 2)            float32, NaN beyond the model's P, K
+    regional.npy, pairwise.npy, fcd.npy, fc_moments.npy   float32 targets
+    models.npz                 one entry per model: corpus index, SC group, sizes, graph roles
+    node_features.npy (sum M, 21), node_degree.npy (sum M, 2)    concatenated over models
+    distances.npy (sum M^2,) int16                 each model's (M, M) shortest paths, flat
+    sc.npy (G, N, N)           the split's group SCs, each divided by its maximum
+    summary.json               row counts and why draws were left out
+
+This module only reads the corpus and writes the store. It does not know about torch.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from delssome_fm.config import CorpusConfig, SimConfig, TrainingDataConfig
+from delssome_fm.sim.corpus import K_MAX, P_MAX, first_valid
+from delssome_fm.spec.card import card_from_dict
+from delssome_fm.spec.compile import compile_card
+from delssome_fm.spec.dag import Dag, node_features, shortest_paths
+
+N_REGIONS = 68
+V_MAX = 6          # state variables per model (generation.md §2)
+C_MAX = 2          # coupling channels per model
+TARGETS = ("regional", "pairwise", "fcd", "fc_moments")
+ROW_ARRAYS = ("model", "draw", "theta", "psi", *TARGETS)
+
+
+# ---------------------------------------------------------------- targets
+
+
+def transform_regional(regional: np.ndarray) -> np.ndarray:
+    """(..., N, 6) raw regional statistics -> the transformed columns of the module docstring."""
+    mean, sd, skew, excess_kurtosis = (regional[..., j].astype(np.float64) for j in range(4))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.stack([np.arcsinh(mean / sd), np.log10(sd), np.arcsinh(skew),
+                        np.log(excess_kurtosis + 3.0), regional[..., 4], regional[..., 5]], axis=-1)
+    return out.astype(np.float32)
+
+
+def transform_fc_moments(fc_moments: np.ndarray) -> np.ndarray:
+    """(..., 3) mean, SD, skewness of the FC upper triangle -> mean, log10 SD, skewness."""
+    out = fc_moments.astype(np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out[..., 1] = np.log10(out[..., 1])
+    return out.astype(np.float32)
+
+
+def n_window_pairs(sim_cfg: SimConfig) -> int:
+    """Number of upper-triangle FCD entries: C(W, 2) with W sliding windows."""
+    windows = sim_cfg.n_frames - sim_cfg.fcd_window + 1
+    return windows * (windows - 1) // 2
+
+
+# ---------------------------------------------------------------- graphs
+
+
+def graph_arrays(dag: Dag) -> dict[str, np.ndarray]:
+    """The tensors the template encoder reads for one model (architecture.md §2):
+    features (M, 21), degree (M, 2) in/out, distances (M, M), and the role indices."""
+    edges = dag.edges()
+    degree = np.zeros((dag.n_nodes, 2), dtype=np.int16)
+    np.add.at(degree[:, 0], edges[:, 1], 1)   # in-degree: parents of a node
+    np.add.at(degree[:, 1], edges[:, 0], 1)   # out-degree: its operands
+    return {"features": node_features(dag), "degree": degree,
+            "distances": shortest_paths(dag).astype(np.int16),
+            "regional_par": _pad(dag.regional_par_nodes, P_MAX),
+            "global_par": _pad(dag.global_par_nodes, K_MAX),
+            "deriv_roots": _pad(dag.deriv_roots, V_MAX),
+            "agg": _pad(dag.agg_nodes, C_MAX), "out_root": np.int32(dag.out_root)}
+
+
+def _pad(values: tuple[int, ...], width: int) -> np.ndarray:
+    if len(values) > width:
+        raise ValueError(f"{len(values)} entries, at most {width} expected")
+    return np.array(list(values) + [-1] * (width - len(values)), dtype=np.int32)
+
+
+# ---------------------------------------------------------------- packing
+
+
+def pack_split(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: TrainingDataConfig,
+               split: str, scs: np.ndarray) -> dict[str, Any]:
+    """Write <store_dir>/<split>/ (module docstring) and return its summary.
+    scs: (G, N, N) the split's group SCs (corpus.split_scs)."""
+    members = first_valid(corpus_cfg, split, getattr(cfg.n_models, split))
+    chunks = sorted((corpus_cfg.output_dir / split).glob("candidates*_draws0-*.npz"))
+    full = n_window_pairs(sim_cfg)
+    keep, summary = _select_rows(chunks, np.array(members), full)
+    out = cfg.store_dir / split
+    out.mkdir(parents=True, exist_ok=True)
+    rows = _write_rows(chunks, keep, members, full, out)
+    summary.update(rows)
+    _write_models(chunks, members, rows["rows_per_model"], out)
+    np.save(out / "sc.npy", (scs / scs.max(axis=(1, 2), keepdims=True)).astype(np.float32))
+    summary = {k: v for k, v in summary.items() if k != "rows_per_model"}
+    summary.update(split=split, n_models=len(members), last_candidate=members[-1])
+    (out / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
+
+
+def _select_rows(chunks: list[Path], members: np.ndarray, full: int,
+                 ) -> tuple[dict[Path, np.ndarray], dict[str, int]]:
+    """Pass 1, flags only: per chunk, the boolean mask of rows to keep."""
+    keep, counts = {}, dict(draws=0, diverged=0, flat=0, incomplete_fcd=0, non_finite=0)
+    for path in chunks:
+        with np.load(path) as d:
+            if "model" not in d.files:
+                continue
+            ours = np.isin(d["model"], members)
+            usable = ours & ~d["diverged"] & ~d["flat"]
+            complete = d["fcd_cdf"][:, -1] == full
+            finite = (np.isfinite(transform_regional(d["regional"])).all(axis=(1, 2))
+                      & np.isfinite(transform_fc_moments(d["fc_moments"])).all(axis=1))
+            counts["draws"] += int(ours.sum())
+            counts["diverged"] += int((ours & d["diverged"]).sum())
+            counts["flat"] += int((ours & d["flat"]).sum())
+            counts["incomplete_fcd"] += int((usable & ~complete).sum())
+            counts["non_finite"] += int((usable & complete & ~finite).sum())
+            keep[path] = usable & complete & finite
+    return keep, counts
+
+
+def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[int],
+                full: int, out: Path) -> dict[str, Any]:
+    """Pass 2: the row arrays, written straight into memory-mapped .npy files."""
+    n = int(sum(m.sum() for m in keep.values()))
+    if n == 0:
+        raise ValueError(f"{out}: no usable draws among the corpus models")
+    with np.load(next(p for p, m in keep.items() if m.any())) as d:
+        n_levels = d["fcd_cdf"].shape[1]                  # 100 with fcd_store_stride 100
+    shapes = {"model": (n,), "draw": (n,), "theta": (n, N_REGIONS, P_MAX), "psi": (n, K_MAX),
+              "regional": (n, N_REGIONS, 6), "pairwise": (n, N_REGIONS * (N_REGIONS - 1) // 2),
+              "fcd": (n, n_levels), "fc_moments": (n, 3)}
+    dtypes = {"model": np.int32, "draw": np.int32}
+    arrays = {k: np.lib.format.open_memmap(out / f"{k}.npy", mode="w+",
+                                           dtype=dtypes.get(k, np.float32), shape=s)
+              for k, s in shapes.items()}
+    model_row = {index: row for row, index in enumerate(members)}
+    rows_per_model = np.zeros(len(members), dtype=np.int64)
+    start = 0
+    for path in chunks:
+        mask = keep.get(path)
+        if mask is None or not mask.any():
+            continue
+        with np.load(path) as d:
+            block = {"model": np.array([model_row[i] for i in d["model"][mask]], np.int32),
+                     "draw": d["draw"][mask], "theta": d["theta"][mask], "psi": d["psi"][mask],
+                     "regional": transform_regional(d["regional"][mask]),
+                     "pairwise": d["pairwise"][mask], "fcd": d["fcd_cdf"][mask] / full,
+                     "fc_moments": transform_fc_moments(d["fc_moments"][mask])}
+        stop = start + len(block["model"])
+        for k, v in block.items():
+            arrays[k][start:stop] = v
+        np.add.at(rows_per_model, block["model"], 1)
+        start = stop
+    for a in arrays.values():
+        a.flush()
+    if np.any(np.diff(arrays["model"]) < 0):
+        raise ValueError("rows are not ordered by model: chunks were read out of order")
+    return {"rows": n, "rows_per_model": rows_per_model,
+            "models_without_rows": int((rows_per_model == 0).sum())}
+
+
+def _write_models(chunks: list[Path], members: list[int], rows_per_model: np.ndarray,
+                  out: Path) -> None:
+    """models.npz and the concatenated graph arrays, in the order of `members`."""
+    cards = {}
+    for path in chunks:
+        for line in path.with_suffix(".cards.jsonl").read_text().splitlines():
+            c = json.loads(line)
+            cards[c["index"]] = c
+    graphs = [graph_arrays(compile_card(card_from_dict(cards[i]["card"])).dag) for i in members]
+    sizes = np.array([len(g["features"]) for g in graphs])
+    np.save(out / "node_features.npy", np.concatenate([g["features"] for g in graphs]))
+    np.save(out / "node_degree.npy", np.concatenate([g["degree"] for g in graphs]))
+    np.save(out / "distances.npy", np.concatenate([g["distances"].ravel() for g in graphs]))
+    np.savez(out / "models.npz",
+             index=np.array(members, np.int64),
+             sc_group=np.array([cards[i]["sc_group"] for i in members], np.int32),
+             n_rows=rows_per_model,
+             node_offset=np.concatenate([[0], np.cumsum(sizes)]),
+             distance_offset=np.concatenate([[0], np.cumsum(sizes ** 2)]),
+             **{k: np.stack([g[k] for g in graphs])
+                for k in ("regional_par", "global_par", "deriv_roots", "agg", "out_root")})
+
+
+# ---------------------------------------------------------------- z-scores
+
+
+def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.ndarray]:
+    """Mean and SD of each z-scored target over the train split, written to
+    <store_dir>/normalisation.npz: per column for regional (6) and fc_moments (3), one value
+    pooled over all edges for pairwise. The FCD CDF is not z-scored: it is a probability, and
+    the monotone head predicts it directly (architecture.md §5.2)."""
+    train = store_dir / "train"
+    pool = {"regional": (0, 1), "pairwise": (0, 1), "fc_moments": (0,)}
+    stats = {}
+    for name, axes in pool.items():
+        a = np.load(train / f"{name}.npy", mmap_mode="r")
+        total, total_sq, count = 0.0, 0.0, 0
+        for s in range(0, len(a), block_rows):
+            x = np.asarray(a[s:s + block_rows], dtype=np.float64)
+            total = total + x.sum(axis=axes)
+            total_sq = total_sq + (x ** 2).sum(axis=axes)
+            count += int(np.prod([x.shape[i] for i in axes]))
+        mean = total / count
+        stats[f"{name}_mean"] = np.asarray(mean, np.float32)
+        stats[f"{name}_sd"] = np.asarray(np.sqrt(total_sq / count - mean ** 2), np.float32)
+    np.savez(store_dir / "normalisation.npz", **stats)
+    return stats

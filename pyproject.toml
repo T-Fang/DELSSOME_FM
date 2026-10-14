@@ -19,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+# Step 8 (network and training), decided 2026-10-14. Install torch first from the CUDA index
+# (README "Install"), so pip does not pick a CPU or mismatched CUDA build.
+train = ["torch", "lightning", "torchmetrics", "mlflow"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

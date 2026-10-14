@@ -1,0 +1,138 @@
+"""nn/ and train/ (stage 1): batches from the training store, the network's invariances,
+the heads' guarantees, that it can fit one batch, and a two-step Lightning run with MLflow.
+Needs torch and lightning (the delssome_fm_train env); skipped elsewhere."""
+
+import dataclasses
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+torch = pytest.importorskip("torch")
+pytest.importorskip("lightning")
+# A few threads: on a shared many-core node torch's default (one per core) is ~200x slower.
+torch.set_num_threads(4)
+
+from delssome_fm.config import Stage1Config                             # noqa: E402
+from delssome_fm.nn.template_encoder import GraphBatch                  # noqa: E402
+from delssome_fm.train.data import TrainingStore                        # noqa: E402
+from delssome_fm.train.losses import GROUPS, group_losses               # noqa: E402
+from delssome_fm.train.stage1 import Stage1Module, fit, upper_triangle  # noqa: E402
+
+
+def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
+    return Stage1Config(
+        store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
+        template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
+        fc_rank=8, max_distance=8, max_degree=8, batch_size=2, edges_per_step=64,
+        learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
+        val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
+        log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
+        mlflow_experiment="test")
+
+
+@pytest.fixture
+def setup(tiny_store, tmp_path):
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "train")
+    batch = store[list(range(min(8, len(store))))]
+    module = Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels).eval()
+    return store, batch, module
+
+
+def test_batch_shapes_and_targets(setup):
+    store, batch, _ = setup
+    B = len(batch.theta)
+    assert batch.theta.shape == (B, 68, 5) and batch.psi.shape == (B, 2)
+    assert batch.sc.shape == (B, 68, 68) and float(batch.sc.max()) <= 1.0
+    g = batch.graph
+    M = g.features.shape[1]
+    assert g.features.shape == (B, M, 21) and g.distances.shape == (B, M, M)
+    assert batch.targets["pairwise"].shape == (B, 2278)
+    for v in batch.targets.values():
+        assert torch.isfinite(v).all()
+    # absent parameters are 0 and have no Par node; present ones are log10 in [-1, 1]
+    present = g.regional_par >= 0
+    assert (batch.theta[:, :, ~present.all(0)] == 0).all() or present.all()
+    assert batch.theta.abs().max() <= 1.0 + 1e-6
+
+
+def test_outputs_ignore_graph_padding(setup):
+    """Padding the DAGs with extra masked nodes must not change any output."""
+    _, batch, module = setup
+    g = batch.graph
+    extra = 5
+    pad = lambda x, value: torch.nn.functional.pad(x, value=value, pad=_pad_spec(x, g, extra))
+    padded = GraphBatch(features=pad(g.features, 0.0), degree=pad(g.degree, 0),
+                        distances=pad(g.distances, -1), node_mask=pad(g.node_mask, False),
+                        regional_par=g.regional_par, global_par=g.global_par,
+                        deriv_roots=g.deriv_roots, agg=g.agg, out_root=g.out_root)
+    with torch.no_grad():
+        a = module.backbone(batch.theta, batch.psi, batch.sc, g)
+        b = module.backbone(batch.theta, batch.psi, batch.sc, padded)
+    torch.testing.assert_close(a.h_cls, b.h_cls, rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(a.regions, b.regions, rtol=1e-4, atol=1e-5)
+
+
+def _pad_spec(x, g, extra):
+    """F.pad spec that extends every node axis of x (those of size M) by `extra`."""
+    M = g.features.shape[1]
+    spec = []
+    for size in reversed(x.shape[1:]):
+        spec += [0, extra if size == M else 0]
+    return spec
+
+
+def test_outputs_do_not_depend_on_parameter_order(setup):
+    """Permuting the regional parameters together with their Par nodes changes nothing:
+    the network identifies a parameter by where it sits, not by its column."""
+    _, batch, module = setup
+    perm = torch.tensor([2, 0, 1, 3, 4])
+    g = batch.graph
+    permuted = dataclasses.replace(g, regional_par=g.regional_par[:, perm])
+    with torch.no_grad():
+        a = module.backbone(batch.theta, batch.psi, batch.sc, g)
+        b = module.backbone(batch.theta[..., perm], batch.psi, batch.sc, permuted)
+    torch.testing.assert_close(a.h_cls, b.h_cls, rtol=1e-4, atol=1e-5)
+
+
+def test_heads_give_a_cdf_and_a_symmetric_fc(setup):
+    _, batch, module = setup
+    with torch.no_grad():
+        out = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
+        pred = module.heads(out, upper_triangle()[:10])
+        swapped = module.heads.pairwise(out.regions, upper_triangle()[:10].flip(1))
+    assert (pred.fcd.diff(dim=-1) >= -1e-6).all()
+    torch.testing.assert_close(pred.fcd[:, -1], torch.ones(len(pred.fcd)))
+    torch.testing.assert_close(pred.pairwise, swapped)
+
+
+def test_the_network_can_fit_one_batch(setup):
+    _, batch, module = setup
+    module.train()
+    optimiser = torch.optim.Adam(module.parameters(), lr=3e-3)
+    edges = torch.arange(2278)
+    first = None
+    for _ in range(60):
+        optimiser.zero_grad()
+        losses = group_losses(module.predict_statistics(batch, edges), batch.targets, edges)
+        total = sum(losses.values())
+        total.backward()
+        optimiser.step()
+        first = first if first is not None else float(total.detach())
+    assert set(losses) == set(GROUPS)
+    assert float(total) < 0.5 * first
+
+
+def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
+    cfg, _, _ = tiny_store
+    stage1 = tiny_config(cfg.store_dir, tmp_path)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="smoke")
+    assert (checkpoints / "last.ckpt").is_file()
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
+    assert {"train/total", "val/total", "val/r2_pairwise"} <= set(run.data.metrics)
+    assert np.isfinite(run.data.metrics["val/total"])

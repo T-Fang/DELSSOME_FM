@@ -6,8 +6,9 @@ import pytest
 import yaml
 
 from conftest import DATA_CONFIG_PATH
-from delssome_fm.config import (ClusterConfig, DataConfig, ReproduceConfig, SimConfig,
-                                 SplitBounds, load_config)
+from delssome_fm.config import (ClusterConfig, CorpusConfig, DataConfig, ReproduceConfig,
+                                 SimConfig, SplitBounds, Stage1Config, TrainingDataConfig,
+                                 load_config)
 
 
 def _write(tmp_path, raw) -> Path:
@@ -57,9 +58,18 @@ def test_wrong_tuple_length_raises(tmp_path):
         load_config(_write(tmp_path, raw), DataConfig)
 
 
-@pytest.mark.parametrize("name,cls", [("data", DataConfig), ("sim", SimConfig),
-                                      ("cluster", ClusterConfig), ("reproduce", ReproduceConfig),
-                                      ("reproduce_once", ReproduceConfig)])
+CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig,
+                  "corpus": CorpusConfig, "reproduce": ReproduceConfig,
+                  "reproduce_once": ReproduceConfig, "training_data": TrainingDataConfig,
+                  "stage1": Stage1Config}
+
+
+@pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))
 def test_every_config_file_loads(name, cls):
     """Catches YAML pitfalls such as 1.0e6 (read as a string; write 1.0e+6)."""
     load_config(DATA_CONFIG_PATH.parent / f"{name}.yaml", cls)
+
+
+def test_every_config_file_is_checked():
+    files = {p.stem for p in DATA_CONFIG_PATH.parent.glob("*.yaml")}
+    assert files == set(CONFIG_CLASSES), f"add {files - set(CONFIG_CLASSES)} to CONFIG_CLASSES"

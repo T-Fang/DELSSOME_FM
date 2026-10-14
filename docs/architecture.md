@@ -251,6 +251,21 @@ Both cost terms that compare distributions can also be computed **in closed form
 
 **Vary SC in stage 1.** If every sample uses one group-average connectome, the learned representation entangles with it. Each synthetic model is therefore tied to one of the 64 HCP-YA training group SCs, drawn at random, so SC varies across the corpus without being a separate sampling axis (revised 2026-10-05; generation.md §9). Validation and test group SCs stay unseen in stage-1 training. The val and test synthetic models use them (generation.md §9), so held-out evaluation also tests unseen connectomes.
 
+### 7.1 Stage 1 as implemented (2026-10-14)
+
+Code: `train/pack.py` (training store), `train/data.py`, `nn/` (network), `train/losses.py`, `train/stage1.py`; config `configs/stage1.yaml`. Choices this document leaves open, and the decisions taken while building it:
+
+- **Training rows.** A draw of a corpus model that is neither diverged nor flat and whose FCD is complete (every window pair present). Draws with an incomplete or empty FCD are excluded (project lead, 2026-10-14). In the val split, 3.4% of usable draws had an incomplete FCD and 0.1% an empty one.
+- **Target transforms, then z-scores** (project lead, 2026-10-14). The regional statistics become asinh(mean/SD), log10 SD, asinh(skew), log(excess kurtosis + 3), node strength and lag-1 autocorrelation. FC moments become the mean, log10 SD and skewness. The pairwise targets stay as the stable arctanh of FC.
+  - Why transform: observables have arbitrary units, and raw regional SD spans 15 orders of magnitude. A plain z-score would put 60% of the values within 10⁻⁴ of each other, while 0.1% of rows supplied a third of the squared error.
+  - z-score statistics come from the train split: per column for the regional statistics and the FC moments, and one value pooled over all edges for the pairwise targets.
+  - The FCD CDF is *not* z-scored. The monotone head predicts it as a probability, and the uncertainty weighting sets its scale in the loss.
+- **Inputs.** Θ and Ψ enter as log10 of the multipliers, so 10^U(−1, 1) becomes [−1, 1]. Absent parameters are 0 and masked. The structural connectivity C is the group SC divided by its maximum.
+- **Template encoder (Graphormer).** Node input is the 21 features plus learned embeddings of in- and out-degree (clipped at 16). Attention gets a learned per-head bias for the undirected shortest-path length between nodes (clipped at 16, with one more bucket for "no path"). There are 4 pre-LN layers of width d_t = 128. The readouts are taken after projecting to d.
+- **Sequence.** [CLS, 68 regions, M template tokens] with three segment embeddings. Padded template positions are masked out of attention.
+- **Losses.** Mean squared error per group (regional, pairwise on 256 random edges per step, FCD, FC moments), combined by uncertainty weighting. Optimisation is AdamW with linear warm-up and cosine decay, bf16 mixed precision, and gradient clipping at 1.
+- **Validation.** A fixed random subset of 50,000 val rows. Logged: MSE per group, their sum (`val/total`, which also selects checkpoints), and R² of the pairwise targets over all edges.
+
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
 ---

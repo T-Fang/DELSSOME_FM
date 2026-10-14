@@ -32,7 +32,7 @@ against the original DELSSOME (§9).
 | 5. Simulator | **done**: integrate, observe, summary; summary reproduces the empirical pipeline |
 | 6. Reference reproduction (gate) | **passed** (2026-10-14): all 12 checks for FIC, MFM and Hopf (below; docs/data.md §9) |
 | 7. Sampler and corpus | **done** (2026-10-12): train 100,000, val and test 10,000 valid models each (docs/generation.md §9) |
-| 8. Network and training | not started |
+| 8. Network and training | **in progress**: stage 1 implemented (PyTorch + Lightning + MLflow, decided 2026-10-14) |
 
 ## Install
 
@@ -46,6 +46,18 @@ pip install -e ".[test]"
 `pip install -e .` installs CPU JAX. For GPU jobs, also run `pip install "jax[cuda12]"`
 (the `delssome_fm` env on the cluster already has it). Without a GPU, JAX falls back to the
 CPU.
+
+The network and training (build step 8) use PyTorch in a separate env, so that its CUDA
+libraries never meet JAX's:
+
+```bash
+conda create -n delssome_fm_train python=3.12 pip
+conda activate delssome_fm_train
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install -e ".[train,test]"          # lightning, torchmetrics, mlflow; CPU JAX
+```
+
+The tests in `tests/test_network.py` need this env and are skipped in `delssome_fm`.
 
 ## Run
 
@@ -155,12 +167,29 @@ python scripts/submit_job.py --name sim --walltime 02:00:00 --mem 32G --ngpus 1 
     -- python <some script>
 ```
 
+**Build step 8, stage 1** (docs/architecture.md §7.1). Pack each split of the corpus into
+the training store (train reads ~100 GB, so these are jobs), then train on a GPU:
+
+```bash
+for s in train val test; do
+  python scripts/submit_job.py --name pack_$s --walltime 12:00:00 --mem 32G --submit \
+      -- python scripts/pack_training_data.py --split $s
+done
+python scripts/submit_job.py --name stage1 --walltime 48:00:00 --mem 64G --ncpus 9 \
+    --ngpus 1 --gpu-type H100 --conda-env delssome_fm_train --submit \
+    -- env OMP_NUM_THREADS=1 python scripts/train_stage1.py --run-name first
+```
+
+Runs are tracked in MLflow (`mlflow_tracking_uri` in configs/stage1.yaml). To browse them:
+`mlflow ui --backend-store-uri sqlite:////home/ftian/storage/projects/DELSSOME-FM/outputs/mlflow/mlflow.db`
+in the training env, then open the forwarded port.
+
 ## Layout
 
 ```
 configs/            plain YAML, one file per dataclass in src/delssome_fm/config.py
-                    (data, sim, cluster, corpus, reproduce; reproduce_once is a second
-                    ReproduceConfig)
+                    (data, sim, cluster, corpus, reproduce, training_data, stage1;
+                    reproduce_once is a second ReproduceConfig)
 assets/colormaps/   the original DELSSOME colour tables for FC and FCD figures
 docs/               design documents, the codegen brief, data provenance
 scripts/            thin CLI entry points, no logic
@@ -175,7 +204,10 @@ src/delssome_fm/
 tests/
 ```
 
-`nn/` and `train/` are added in build step 8.
+    nn/             the network (PyTorch): template encoder, region tokens, backbone, heads
+    train/          training store packing, data loading, losses, the stage-1 Lightning module
+
+(`nn/` and `train/` belong to build step 8.)
 
 ## Where outputs land
 

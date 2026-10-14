@@ -70,7 +70,7 @@ class CorpusConfig:
     screen_draws: int             # generation.md §6: 4 random draws
     screen_frames: int            # ~3 min of simulated time
     screen_burn_in_frames: int
-    flat_rel_sd: float            # flat if SD <= flat_rel_sd * max(1, |mean|) in every region
+    flat_rel_sd: float            # flat if SD <= flat_rel_sd * |mean| in any region (corpus.py)
     initial_state_scale: float    # x0 ~ U(-s, s), drawn per simulation
     fcd_store_stride: int         # store the FCD CDF at every k-th bin (summary.fcd_levels)
     output_dir: Path
@@ -105,6 +105,60 @@ class ReproduceConfig:
     bias_alpha: float                   # family-wise level of the paired bias t-tests,
                                         # Bonferroni-split over models x cost components
     models: tuple[ReproduceModel, ...]
+
+
+@dataclass(frozen=True)
+class SplitSizes:
+    """A count per split."""
+
+    train: int
+    val: int
+    test: int
+
+
+@dataclass(frozen=True)
+class TrainingDataConfig:
+    """configs/training_data.yaml: the stage-1 training store packed from the corpus
+    (train/pack.py, architecture.md §5.1)."""
+
+    store_dir: Path
+    n_models: SplitSizes        # each split's corpus: its first n valid models (corpus.first_valid)
+
+
+@dataclass(frozen=True)
+class Stage1Config:
+    """configs/stage1.yaml: the stage-1 network and its training (architecture.md §2-§5)."""
+
+    store_dir: Path               # written by scripts/pack_training_data.py
+    output_dir: Path              # checkpoints, one subdirectory per run
+    seed: int
+    # network (architecture.md §1: d = d_t = 128, k = 32, 4 layers, 8 heads)
+    d_model: int                  # transformer width d
+    d_template: int               # template encoder width d_t
+    template_layers: int          # Graphormer layers over the equation DAG
+    backbone_layers: int          # transformer layers over [CLS, regions, template]
+    n_heads: int
+    ffn_multiplier: int           # feed-forward width = ffn_multiplier * width
+    dropout: float
+    fc_rank: int                  # k of the bilinear FC head
+    max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
+    max_degree: int               # node in/out degrees are clipped to this (degree embedding)
+    # optimisation
+    batch_size: int
+    edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)
+    learning_rate: float
+    weight_decay: float
+    warmup_steps: int
+    max_steps: int
+    val_rows: int                 # fixed random subset of the val split used for validation
+    val_every_steps: int
+    num_workers: int              # DataLoader worker processes
+    precision: str                # Lightning precision, e.g. bf16-mixed
+    gradient_clip: float          # max gradient norm
+    # tracking
+    log_every_steps: int           # training metrics are logged every this many steps
+    mlflow_tracking_uri: str
+    mlflow_experiment: str
 
 
 @dataclass(frozen=True)

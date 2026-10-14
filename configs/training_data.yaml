@@ -1,0 +1,7 @@
+# The stage-1 training store, packed from the corpus by scripts/pack_training_data.py
+# (train/pack.py). Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store
+
+# Each split's corpus is its first n valid models (corpus.first_valid; generation.md §9).
+n_models: {train: 100000, val: 10000, test: 10000}

@@ -155,3 +155,27 @@ def depth_from_roots(dag: Dag) -> np.ndarray:
                     nxt.append(c)
         frontier = nxt
     return depth
+
+
+def shortest_paths(dag: Dag) -> np.ndarray:
+    """(M, M) number of edges on the shortest path between every pair of nodes, ignoring edge
+    direction; -1 where no path exists. The template encoder's attention bias (Graphormer)
+    reads it, so that a node can tell how far apart two terms of the equations are."""
+    M = dag.n_nodes
+    neighbours: list[list[int]] = [[] for _ in range(M)]
+    for parent, child in dag.edges():
+        neighbours[parent].append(child)
+        neighbours[child].append(parent)
+    dist = np.full((M, M), -1, dtype=np.int64)
+    for source in range(M):
+        dist[source, source] = 0
+        frontier = [source]
+        while frontier:
+            nxt = []
+            for m in frontier:
+                for n in neighbours[m]:
+                    if dist[source, n] < 0:
+                        dist[source, n] = dist[source, m] + 1
+                        nxt.append(n)
+            frontier = nxt
+    return dist

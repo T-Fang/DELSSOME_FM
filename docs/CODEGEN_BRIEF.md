@@ -147,6 +147,8 @@ Allowed without asking: `jax`, `numpy`, `sympy`, `pandas`, `scipy`, `pyyaml`, `p
 
 Anything else, ask first. In particular do **not** add: diffrax (see §7.2), a config framework beyond plain YAML, a logging framework beyond `logging`, or an experiment tracker.
 
+**Amended 2026-10-14 (project lead).** The network and training code of Phase 4 (`nn/`, `train/`) uses **PyTorch, Lightning, torchmetrics and MLflow** (as the experiment tracker), in a separate env (`delssome_fm_train`, the `train` extra of pyproject.toml). The simulator stays in JAX; the two never share a process (the corpus is on disk).
+
 ### 4.5 Configuration
 
 Plain YAML, loaded into dataclasses with explicit field names. No nested dictionaries passed around as `dict[str, Any]`. If a config field is required, it has no default and loading fails when it is absent.
