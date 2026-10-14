@@ -61,7 +61,7 @@ def test_wrong_tuple_length_raises(tmp_path):
 CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig,
                   "corpus": CorpusConfig, "reproduce": ReproduceConfig,
                   "reproduce_once": ReproduceConfig, "training_data": TrainingDataConfig,
-                  "stage1": Stage1Config}
+                  "stage1": Stage1Config, "stage1_smoke": Stage1Config}
 
 
 @pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))

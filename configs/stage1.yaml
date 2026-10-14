@@ -14,7 +14,7 @@ n_heads: 8
 ffn_multiplier: 4
 dropout: 0.0
 fc_rank: 32             # k
-max_distance: 16        # DAG shortest paths clipped here (longest in the corpus: see store)
+max_distance: 16        # DAG shortest paths clipped here (corpus max 25; 0.02% of pairs > 16)
 max_degree: 16
 
 # optimisation
@@ -23,7 +23,7 @@ edges_per_step: 256     # architecture.md §5.2: ~256 FC edges per step
 learning_rate: 3.0e-4
 weight_decay: 0.01
 warmup_steps: 2000
-max_steps: 200000       # ~6 passes over the ~8.3 M training rows
+max_steps: 200000       # ~6 passes over the 8.0 M training rows (batch 256)
 val_rows: 50000
 val_every_steps: 5000
 num_workers: 8
