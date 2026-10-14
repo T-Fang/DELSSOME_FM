@@ -36,6 +36,7 @@ def setup(tiny_store, tmp_path):
     cfg, _, _ = tiny_store
     store = TrainingStore(cfg.store_dir, "train")
     batch = store[list(range(min(8, len(store))))]
+    torch.manual_seed(0)                                   # deterministic initial weights
     module = Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels).eval()
     return store, batch, module
 
@@ -108,20 +109,25 @@ def test_heads_give_a_cdf_and_a_symmetric_fc(setup):
 
 
 def test_the_network_can_fit_one_batch(setup):
+    """Each group's loss falls when training on one batch. The pairwise loss falls least: a
+    rank-k factorisation cannot fit the near-full-rank FC of the tiny corpus's 40-frame runs."""
     _, batch, module = setup
     module.train()
     optimiser = torch.optim.Adam(module.parameters(), lr=3e-3)
     edges = torch.arange(2278)
-    first = None
-    for _ in range(60):
+    history = []
+    for _ in range(150):
         optimiser.zero_grad()
         losses = group_losses(module.predict_statistics(batch, edges), batch.targets, edges)
-        total = sum(losses.values())
-        total.backward()
+        sum(losses.values()).backward()
         optimiser.step()
-        first = first if first is not None else float(total.detach())
-    assert set(losses) == set(GROUPS)
-    assert float(total) < 0.5 * first
+        history.append({g: float(v.detach()) for g, v in losses.items()})
+    first, last = history[0], history[-1]
+    assert set(first) == set(GROUPS)
+    assert last["regional"] < 0.6 * first["regional"]
+    assert last["fc_moments"] < 0.2 * first["fc_moments"]
+    assert last["fcd"] < 0.2 * first["fcd"]
+    assert last["pairwise"] < first["pairwise"]
 
 
 def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
