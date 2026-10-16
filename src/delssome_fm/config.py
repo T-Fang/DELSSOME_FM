@@ -144,6 +144,9 @@ class Stage1Config:
     fc_offset: bool               # add a per-draw offset b(h_CLS) to the FC head (nn/heads.py)
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
+    # training data (the scaling sweep of architecture.md §7.2 varies these)
+    train_models: int             # use the first n train corpus models (100000: all)
+    draws_per_model: int          # and at most this many usable draws of each (100: all)
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)
@@ -196,6 +199,33 @@ def load_config(path: Path, cls: type[T]) -> T:
     with path.open() as f:
         raw = yaml.safe_load(f)
     return config_from_dict(cls, raw, str(path))
+
+
+def override(cfg: T, assignments: list[str]) -> T:
+    """A copy of the config dataclass `cfg` with "field=value" assignments applied; values are
+    parsed as YAML and checked as strictly as by load_config (e.g. "dropout=0.1")."""
+    raw = _plain(dataclasses.asdict(cfg))
+    for a in assignments:
+        key, sep, value = a.partition("=")
+        if not sep or key not in raw:
+            raise ValueError(f"override {a!r}: expected field=value with a field of "
+                             f"{type(cfg).__name__}, found {key!r}")
+        raw[key] = yaml.safe_load(value)
+    return config_from_dict(type(cfg), raw, f"overrides {assignments}")
+
+
+def to_yaml(cfg: Any) -> str:
+    """The config as YAML that load_config reads back to an equal dataclass."""
+    return yaml.safe_dump(_plain(dataclasses.asdict(cfg)), sort_keys=False)
+
+
+def _plain(value: Any) -> Any:
+    """asdict output -> plain YAML values: Path -> str, tuple -> list."""
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return str(value) if isinstance(value, Path) else value
 
 
 def config_from_dict(cls: type[T], raw: Any, where: str) -> T:

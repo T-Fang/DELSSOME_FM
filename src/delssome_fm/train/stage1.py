@@ -23,7 +23,7 @@ import torchmetrics
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 
-from delssome_fm.config import Stage1Config
+from delssome_fm.config import Stage1Config, to_yaml
 from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
 from delssome_fm.train.data import Stage1Batch, Stage1DataModule
@@ -106,14 +106,18 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     torch.set_float32_matmul_precision("high")   # TF32 tensor cores for the float32 parts
     run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
-                            cfg.seed)
+                            cfg.seed, cfg.train_models, cfg.draws_per_model)
     data.setup()
     module = Stage1Module(cfg, data.train.n_fcd_levels)
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, run_name=run_name,
                           tracking_uri=cfg.mlflow_tracking_uri,
                           artifact_location=cfg.mlflow_artifact_dir.as_uri())
-    logger.experiment.log_artifact(logger.run_id, str(config_path))
     checkpoints = cfg.output_dir / run_name
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    effective = checkpoints / "config.yaml"     # the config file plus any --set overrides
+    effective.write_text(f"# from {config_path}\n" + to_yaml(cfg))
+    logger.experiment.log_artifact(logger.run_id, str(effective))
+    logger.log_hyperparams({"train_rows": len(data.train_rows)})
     trainer = L.Trainer(
         max_steps=cfg.max_steps, val_check_interval=cfg.val_every_steps,
         check_val_every_n_epoch=None, precision=cfg.precision,

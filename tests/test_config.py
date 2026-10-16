@@ -75,3 +75,18 @@ def test_every_config_file_loads(name, cls):
 def test_every_config_file_is_checked():
     files = {p.stem for p in DATA_CONFIG_PATH.parent.glob("*.yaml")}
     assert files == set(CONFIG_CLASSES), f"add {files - set(CONFIG_CLASSES)} to CONFIG_CLASSES"
+
+
+def test_overrides_are_typed_and_strict(tmp_path):
+    from delssome_fm.config import override, to_yaml
+    cfg = load_config(DATA_CONFIG_PATH.parent / "stage1.yaml", Stage1Config)
+    new = override(cfg, ["train_models=10000", "dropout=0.1", "fc_offset=true"])
+    assert (new.train_models, new.dropout, new.fc_offset) == (10000, 0.1, True)
+    assert new.store_dir == cfg.store_dir                       # untouched fields kept
+    with pytest.raises(ValueError, match="field=value"):
+        override(cfg, ["no_such_field=1"])
+    with pytest.raises(TypeError):
+        override(cfg, ["train_models=many"])
+    path = tmp_path / "effective.yaml"                          # to_yaml round-trips
+    path.write_text(to_yaml(new))
+    assert load_config(path, Stage1Config) == new

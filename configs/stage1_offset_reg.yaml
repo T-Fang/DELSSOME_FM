@@ -18,6 +18,10 @@ fc_offset: true         # VARIANT: per-draw offset b(h_CLS) in the FC head
 max_distance: 16        # DAG shortest paths clipped here (corpus max 25; 0.02% of pairs > 16)
 max_degree: 16
 
+# training data: the first train_models models, at most draws_per_model usable draws each
+train_models: 100000
+draws_per_model: 100
+
 # optimisation
 batch_size: 256
 edges_per_step: 256     # architecture.md §5.2: ~256 FC edges per step

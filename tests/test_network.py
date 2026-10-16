@@ -24,7 +24,8 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
     return Stage1Config(
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
-        fc_rank=8, fc_offset=True, max_distance=8, max_degree=8, batch_size=2, edges_per_step=64,
+        fc_rank=8, fc_offset=True, max_distance=8, max_degree=8, train_models=2,
+        draws_per_model=100, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
@@ -56,6 +57,20 @@ def test_batch_shapes_and_targets(setup):
     present = g.regional_par >= 0
     assert (batch.theta[:, :, ~present.all(0)] == 0).all() or present.all()
     assert batch.theta.abs().max() <= 1.0 + 1e-6
+
+
+def test_subset_rows_takes_the_first_models_and_draws(tiny_store):
+    from delssome_fm.train.data import subset_rows
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "train")
+    model = np.asarray(store.rows["model"])
+    n_rows = store.models["n_rows"]
+    rows = subset_rows(store, 2, 1)
+    assert model[rows].tolist() == [m for m in (0, 1) if n_rows[m] > 0]   # one draw each
+    every = subset_rows(store, len(n_rows), 100)
+    assert every.tolist() == list(range(len(model)))
+    with pytest.raises(ValueError, match="train_models"):
+        subset_rows(store, len(n_rows) + 1, 100)
 
 
 def test_outputs_ignore_graph_padding(setup):

@@ -12,7 +12,7 @@ loader worker, far more than the job's CPUs.
 import argparse
 from pathlib import Path
 
-from delssome_fm.config import Stage1Config, load_config
+from delssome_fm.config import Stage1Config, load_config, override
 from delssome_fm.train.stage1 import fit
 
 
@@ -20,8 +20,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--config", type=Path, default=Path("configs/stage1.yaml"))
     p.add_argument("--run-name", default=None, help="MLflow run and checkpoint directory name")
+    p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
+                   help="override config fields, e.g. --set train_models=10000 dropout=0.1")
     args = p.parse_args()
-    checkpoints = fit(load_config(args.config, Stage1Config), args.config, args.run_name)
+    cfg = override(load_config(args.config, Stage1Config), args.set)
+    checkpoints = fit(cfg, args.config, args.run_name)
     print(f"checkpoints in {checkpoints}")
 
 

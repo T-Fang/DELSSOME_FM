@@ -18,7 +18,8 @@ from pathlib import Path
 import lightning as L
 import numpy as np
 import torch
-from torch.utils.data import BatchSampler, DataLoader, Dataset, RandomSampler, SequentialSampler
+from torch.utils.data import (BatchSampler, DataLoader, Dataset, SequentialSampler,
+                              SubsetRandomSampler)
 
 from delssome_fm.nn.template_encoder import GraphBatch
 from delssome_fm.train.pack import TARGETS
@@ -112,25 +113,39 @@ def _log10_or_zero(x: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(np.nan_to_num(out, nan=0.0))
 
 
+def subset_rows(store: TrainingStore, n_models: int, draws_per_model: int) -> np.ndarray:
+    """Rows of the first `n_models` models of the store, at most `draws_per_model` of each
+    (their first usable draws). Rows are ordered by model, then draw (train/pack.py)."""
+    n_rows = store.models["n_rows"]
+    if not 0 < n_models <= len(n_rows):
+        raise ValueError(f"train_models must be in 1..{len(n_rows)}, found {n_models}")
+    start = np.concatenate([[0], np.cumsum(n_rows)])[:n_models]
+    take = np.minimum(n_rows[:n_models], draws_per_model)
+    return np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
+
+
 class Stage1DataModule(L.LightningDataModule):
-    """Shuffled train batches (seeded); a fixed random subset of `val_rows` val rows."""
+    """Shuffled train batches (seeded) over a subset of models and draws (`subset_rows`); a
+    fixed random subset of `val_rows` val rows."""
 
     def __init__(self, store_dir: Path, batch_size: int, val_rows: int, num_workers: int,
-                 seed: int):
+                 seed: int, train_models: int, draws_per_model: int):
         super().__init__()
         self.store_dir, self.batch_size, self.val_rows = Path(store_dir), batch_size, val_rows
         self.num_workers, self.seed = num_workers, seed
+        self.train_models, self.draws_per_model = train_models, draws_per_model
 
     def setup(self, stage: str | None = None) -> None:
         self.train = TrainingStore(self.store_dir, "train")
+        self.train_rows = subset_rows(self.train, self.train_models, self.draws_per_model)
         self.val = TrainingStore(self.store_dir, "val")
         rng = np.random.default_rng(self.seed)
         self.val_subset = np.sort(rng.choice(len(self.val), min(self.val_rows, len(self.val)),
                                              replace=False))
 
     def train_dataloader(self) -> DataLoader:
-        sampler = RandomSampler(range(len(self.train)),
-                                generator=torch.Generator().manual_seed(self.seed))
+        sampler = SubsetRandomSampler(self.train_rows.tolist(),
+                                      generator=torch.Generator().manual_seed(self.seed))
         return self._loader(self.train, BatchSampler(sampler, self.batch_size, drop_last=True))
 
     def val_dataloader(self) -> DataLoader:

@@ -279,6 +279,8 @@ Four runs of 200,000 steps (about 2 h each on one H100 or H200) in MLflow experi
 
 Against `stage1_v1`, with every model weighted equally and a 95% CI from resampling models: `stage1_offset_reg` is better on val by 0.075 [0.019, 0.128] and on unseen models by 0.21 [0.02, 0.43]. `stage1_offset` is better on val by 0.070 [0.026, 0.116]. Regularisation alone is not significant.
 
+**Decision (project lead, 2026-10-16).** Keep the original implementation as the default (`configs/stage1.yaml`: no FC offset, dropout 0, weight decay 0.01): the gains are small, so simplicity wins. The offset remains available as `fc_offset`. Next: a scaling sweep over training models and draws per model (`train_models`, `draws_per_model`), then the corpus composition (coupled models).
+
 **Where the error is** (generalisation diagnostic, `sim/generalisation.py`; 500 train and 500 val models, new draws 100–109, each with a seen and an unseen SC):
 
 - **Parameters and connectomes generalise.** New draws of training models are predicted as well as training rows: total 0.51 against 0.53 for `stage1_v1`. An unseen SC adds only about 0.01.
