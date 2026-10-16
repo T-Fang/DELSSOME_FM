@@ -113,14 +113,54 @@ def _log10_or_zero(x: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(np.nan_to_num(out, nan=0.0))
 
 
-def subset_rows(store: TrainingStore, n_models: int, draws_per_model: int) -> np.ndarray:
-    """Rows of the first `n_models` models of the store, at most `draws_per_model` of each
-    (their first usable draws). Rows are ordered by model, then draw (train/pack.py)."""
+@dataclass(frozen=True)
+class Composition:
+    """Which train models and draws stage 1 trains on (architecture.md §7.2).
+
+    n_models          how many models
+    draws_per_model   at most this many usable draws of each (their first ones)
+    coupled_share     None: the first n_models models of the corpus, as they come. A number:
+                      that share of coupled models, the rest uncoupled, each the first ones
+                      of their kind (models without usable draws are skipped)
+    coupled_threshold a model is coupled if its mean FC, over its stored draws, exceeds this
+    """
+
+    n_models: int
+    draws_per_model: int
+    coupled_share: float | None
+    coupled_threshold: float
+
+
+def model_mean_fc(store: TrainingStore) -> np.ndarray:
+    """(models,) each model's mean off-diagonal FC averaged over its rows; NaN without rows."""
     n_rows = store.models["n_rows"]
-    if not 0 < n_models <= len(n_rows):
-        raise ValueError(f"train_models must be in 1..{len(n_rows)}, found {n_models}")
-    start = np.concatenate([[0], np.cumsum(n_rows)])[:n_models]
-    take = np.minimum(n_rows[:n_models], draws_per_model)
+    fc = np.asarray(store.rows["fc_moments"][:, 0], np.float64)   # column 0: mean FC
+    sums = np.bincount(np.asarray(store.rows["model"]), weights=fc, minlength=len(n_rows))
+    with np.errstate(invalid="ignore"):
+        return sums / n_rows
+
+
+def subset_rows(store: TrainingStore, c: Composition) -> np.ndarray:
+    """Row indices of the models and draws chosen by `c`. Rows are ordered by model, then
+    draw (train/pack.py), so a model's first k rows are its first k usable draws."""
+    n_rows = store.models["n_rows"]
+    if c.coupled_share is None:
+        if not 0 < c.n_models <= len(n_rows):
+            raise ValueError(f"train_models must be in 1..{len(n_rows)}, found {c.n_models}")
+        models = np.arange(c.n_models)
+    else:
+        coupled = model_mean_fc(store) > c.coupled_threshold          # NaN (no rows): False
+        n_coupled = int(round(c.n_models * c.coupled_share))
+        pools = {"coupled": np.flatnonzero(coupled),
+                 "uncoupled": np.flatnonzero(~coupled & (n_rows > 0))}
+        wanted = {"coupled": n_coupled, "uncoupled": c.n_models - n_coupled}
+        for kind, pool in pools.items():
+            if len(pool) < wanted[kind]:
+                raise ValueError(f"{wanted[kind]} {kind} models wanted, the store has "
+                                 f"{len(pool)} (coupled: mean FC > {c.coupled_threshold})")
+        models = np.sort(np.concatenate([pools[k][:wanted[k]] for k in pools]))
+    start = np.concatenate([[0], np.cumsum(n_rows)])[models]
+    take = np.minimum(n_rows[models], c.draws_per_model)
     return np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
 
 
@@ -129,15 +169,14 @@ class Stage1DataModule(L.LightningDataModule):
     fixed random subset of `val_rows` val rows."""
 
     def __init__(self, store_dir: Path, batch_size: int, val_rows: int, num_workers: int,
-                 seed: int, train_models: int, draws_per_model: int):
+                 seed: int, composition: Composition):
         super().__init__()
         self.store_dir, self.batch_size, self.val_rows = Path(store_dir), batch_size, val_rows
-        self.num_workers, self.seed = num_workers, seed
-        self.train_models, self.draws_per_model = train_models, draws_per_model
+        self.num_workers, self.seed, self.composition = num_workers, seed, composition
 
     def setup(self, stage: str | None = None) -> None:
         self.train = TrainingStore(self.store_dir, "train")
-        self.train_rows = subset_rows(self.train, self.train_models, self.draws_per_model)
+        self.train_rows = subset_rows(self.train, self.composition)
         self.val = TrainingStore(self.store_dir, "val")
         rng = np.random.default_rng(self.seed)
         self.val_subset = np.sort(rng.choice(len(self.val), min(self.val_rows, len(self.val)),

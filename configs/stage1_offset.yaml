@@ -21,6 +21,9 @@ max_degree: 16
 # training data: the first train_models models, at most draws_per_model usable draws each
 train_models: 100000
 draws_per_model: 100
+oversample_coupled: false  # true: coupled_share of the models are coupled
+coupled_share: 0.5
+coupled_threshold: 0.05     # coupled: model mean FC > this
 
 # optimisation
 batch_size: 256

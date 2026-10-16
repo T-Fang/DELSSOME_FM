@@ -26,7 +26,7 @@ from lightning.pytorch.loggers import MLFlowLogger
 from delssome_fm.config import Stage1Config, to_yaml
 from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
-from delssome_fm.train.data import Stage1Batch, Stage1DataModule
+from delssome_fm.train.data import Composition, Stage1Batch, Stage1DataModule
 from delssome_fm.train.losses import GROUPS, UncertaintyWeighting, group_losses
 
 N_REGIONS = 68
@@ -105,8 +105,11 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("high")   # TF32 tensor cores for the float32 parts
     run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
+    composition = Composition(cfg.train_models, cfg.draws_per_model,
+                              cfg.coupled_share if cfg.oversample_coupled else None,
+                              cfg.coupled_threshold)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
-                            cfg.seed, cfg.train_models, cfg.draws_per_model)
+                            cfg.seed, composition)
     data.setup()
     module = Stage1Module(cfg, data.train.n_fcd_levels)
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, run_name=run_name,

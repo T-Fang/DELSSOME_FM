@@ -145,8 +145,11 @@ class Stage1Config:
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
     # training data (the scaling sweep of architecture.md §7.2 varies these)
-    train_models: int             # use the first n train corpus models (100000: all)
+    train_models: int             # number of train corpus models to use
     draws_per_model: int          # and at most this many usable draws of each (100: all)
+    oversample_coupled: bool      # false: the first train_models models, natural composition
+    coupled_share: float          # if oversample_coupled: share of coupled models
+    coupled_threshold: float      # coupled: the model's mean FC over its draws exceeds this
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)

@@ -25,7 +25,8 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
         fc_rank=8, fc_offset=True, max_distance=8, max_degree=8, train_models=2,
-        draws_per_model=100, batch_size=2, edges_per_step=64,
+        draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
+        coupled_threshold=0.05, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
@@ -60,17 +61,25 @@ def test_batch_shapes_and_targets(setup):
 
 
 def test_subset_rows_takes_the_first_models_and_draws(tiny_store):
-    from delssome_fm.train.data import subset_rows
+    from delssome_fm.train.data import Composition, model_mean_fc, subset_rows
     cfg, _, _ = tiny_store
     store = TrainingStore(cfg.store_dir, "train")
     model = np.asarray(store.rows["model"])
     n_rows = store.models["n_rows"]
-    rows = subset_rows(store, 2, 1)
+    natural = lambda n, k: Composition(n, k, None, 0.05)                 # noqa: E731
+    rows = subset_rows(store, natural(2, 1))
     assert model[rows].tolist() == [m for m in (0, 1) if n_rows[m] > 0]   # one draw each
-    every = subset_rows(store, len(n_rows), 100)
+    every = subset_rows(store, natural(len(n_rows), 100))
     assert every.tolist() == list(range(len(model)))
     with pytest.raises(ValueError, match="train_models"):
-        subset_rows(store, len(n_rows) + 1, 100)
+        subset_rows(store, natural(len(n_rows) + 1, 100))
+    # composition: split the models at their median mean FC, then ask for 1 of each kind
+    fc = model_mean_fc(store)
+    threshold = float(np.nanmedian(fc))
+    chosen = np.unique(model[subset_rows(store, Composition(2, 100, 0.5, threshold))])
+    assert len(chosen) == 2 and (fc[chosen] > threshold).sum() == 1
+    with pytest.raises(ValueError, match="coupled models wanted"):
+        subset_rows(store, Composition(2, 100, 1.0, float(np.nanmax(fc))))
 
 
 def test_outputs_ignore_graph_padding(setup):
@@ -162,3 +171,7 @@ def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
     from delssome_fm.train.evaluate import evaluate, load_stage1
     metrics = evaluate(load_stage1(checkpoints / "last.ckpt"), cfg.store_dir, "val")
     assert metrics["rows"] > 0 and all(np.isfinite(metrics[k]) for k in ("total", "r2_pairwise"))
+    from delssome_fm.train.evaluate import per_model_errors
+    per_model = per_model_errors(load_stage1(checkpoints / "last.ckpt"), cfg.store_dir, "val")
+    assert len(per_model["total"]) == len(per_model["model"]) == len(per_model["mean_fc"]) > 0
+    assert np.isfinite(per_model["total"]).all()
