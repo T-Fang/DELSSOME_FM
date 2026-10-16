@@ -47,7 +47,7 @@ class Stage1Module(L.LightningModule):
             template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
             n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
             max_distance=cfg.max_distance, max_degree=cfg.max_degree))
-        self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels)
+        self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset)
         self.weighting = UncertaintyWeighting(GROUPS)
         self.register_buffer("edges", upper_triangle(), persistent=False)
         self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError() for g in GROUPS})

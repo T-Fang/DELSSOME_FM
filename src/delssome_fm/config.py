@@ -141,6 +141,7 @@ class Stage1Config:
     ffn_multiplier: int           # feed-forward width = ffn_multiplier * width
     dropout: float
     fc_rank: int                  # k of the bilinear FC head
+    fc_offset: bool               # add a per-draw offset b(h_CLS) to the FC head (nn/heads.py)
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
     # optimisation

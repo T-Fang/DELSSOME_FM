@@ -24,7 +24,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
     return Stage1Config(
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
-        fc_rank=8, max_distance=8, max_degree=8, batch_size=2, edges_per_step=64,
+        fc_rank=8, fc_offset=True, max_distance=8, max_degree=8, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
@@ -102,7 +102,7 @@ def test_heads_give_a_cdf_and_a_symmetric_fc(setup):
     with torch.no_grad():
         out = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
         pred = module.heads(out, upper_triangle()[:10])
-        swapped = module.heads.pairwise(out.regions, upper_triangle()[:10].flip(1))
+        swapped = module.heads.pairwise(out, upper_triangle()[:10].flip(1))
     assert (pred.fcd.diff(dim=-1) >= -1e-6).all()
     torch.testing.assert_close(pred.fcd[:, -1], torch.ones(len(pred.fcd)))
     torch.testing.assert_close(pred.pairwise, swapped)
