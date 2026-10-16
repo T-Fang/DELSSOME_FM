@@ -63,7 +63,8 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "reproduce_once": ReproduceConfig, "training_data": TrainingDataConfig,
                   "stage1": Stage1Config, "stage1_smoke": Stage1Config,
                   "stage1_reg": Stage1Config, "stage1_offset": Stage1Config,
-                  "stage1_offset_reg": Stage1Config, "generalisation": GeneralisationConfig}
+                  "stage1_offset_reg": Stage1Config, "generalisation": GeneralisationConfig,
+                  "corpus_d10": CorpusConfig}
 
 
 @pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))

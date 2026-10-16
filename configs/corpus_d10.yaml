@@ -1,0 +1,22 @@
+# Stage-1 corpus with 10 draws per model (decided 2026-10-17): the scaling sweep showed that
+# the number of distinct models matters far more than draws per model (docs/architecture.md
+# §7.2). Same seed and streams as configs/corpus.yaml, so candidate i is the same model with
+# the same screen and draws 0..9; a model is valid if >= 1 of its 10 draws is usable. It is
+# simulated afresh rather than cut from the 100-draw corpus: a different batch size changes
+# float32 rounding of the summaries (~1e-5), and the corpus must follow from its config.
+# Every field is required.
+
+seed: 20261005
+n_param_sets: 10
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 10                # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_d10
