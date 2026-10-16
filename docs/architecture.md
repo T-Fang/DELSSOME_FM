@@ -266,6 +266,25 @@ Code: `train/pack.py` (training store), `train/data.py`, `nn/` (network), `train
 - **Losses.** Mean squared error per group (regional, pairwise on 256 random edges per step, FCD, FC moments), combined by uncertainty weighting. Optimisation is AdamW with linear warm-up and cosine decay, bf16 mixed precision, and gradient clipping at 1.
 - **Validation.** A fixed random subset of 50,000 val rows. Logged: MSE per group, their sum (`val/total`, which also selects checkpoints), and R² of the pairwise targets over all edges.
 
+### 7.2 Stage-1 results so far (2026-10-16)
+
+Four runs of 200,000 steps (about 2 h each on one H100 or H200) in MLflow experiment `stage1`; checkpoints in `outputs/stage1/<run>/`. "Best" is the lowest val/total.
+
+| Run | FC offset | Dropout / weight decay | Best val total | Val pairwise | R² pairwise |
+|---|---|---|---|---|---|
+| `stage1_v1` | no | 0 / 0.01 | 1.251 | 0.422 | 0.585 |
+| `stage1_reg` | no | 0.1 / 0.05 | 1.232 | 0.426 | 0.582 |
+| `stage1_offset` | yes | 0 / 0.01 | 1.169 | 0.351 | 0.656 |
+| `stage1_offset_reg` | yes | 0.1 / 0.05 | **1.162** | 0.361 | 0.646 |
+
+Against `stage1_v1`, with every model weighted equally and a 95% CI from resampling models: `stage1_offset_reg` is better on val by 0.075 [0.019, 0.128] and on unseen models by 0.21 [0.02, 0.43]. `stage1_offset` is better on val by 0.070 [0.026, 0.116]. Regularisation alone is not significant.
+
+**Where the error is** (generalisation diagnostic, `sim/generalisation.py`; 500 train and 500 val models, new draws 100–109, each with a seen and an unseen SC):
+
+- **Parameters and connectomes generalise.** New draws of training models are predicted as well as training rows: total 0.51 against 0.53 for `stage1_v1`. An unseen SC adds only about 0.01.
+- **Equations do not generalise.** Unseen models cost 2.6× as much: total 1.35, pairwise R² 0.57 against 0.78. The train/val gap is generalisation across equations.
+- **Error is concentrated in a few models.** The hardest 5% of val models carry 56% of the error (per-model total: median 0.22, 95th percentile 4.9). They are the coupled models: median per-model error is 0.12 at mean FC < 0.05, 0.37 at 0.05–0.5, 1.77 at 0.5–0.9, and 1.34 at 0.9 or above. V = 2 makes up 66% of them, and their DAGs are larger (median 49 nodes against 36). Their error is pairwise (42%) and FC moments (35%).
+
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
 ---
