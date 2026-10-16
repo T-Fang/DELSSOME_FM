@@ -38,13 +38,15 @@ This module only reads the corpus and writes the store. It does not know about t
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from delssome_fm.config import CorpusConfig, SimConfig, TrainingDataConfig
+from delssome_fm.config import CorpusConfig, GeneralisationConfig, SimConfig, TrainingDataConfig
 from delssome_fm.sim.corpus import K_MAX, P_MAX, first_valid
+from delssome_fm.sim.generalisation import CELLS, read_sample
 from delssome_fm.spec.card import card_from_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.dag import Dag, node_features, shortest_paths
@@ -115,16 +117,24 @@ def pack_split(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: TrainingDataCo
     scs: (G, N, N) the split's group SCs (corpus.split_scs)."""
     members = first_valid(corpus_cfg, split, getattr(cfg.n_models, split))
     chunks = sorted((corpus_cfg.output_dir / split).glob("candidates*_draws0-*.npz"))
-    full = n_window_pairs(sim_cfg)
+    return pack_chunks(chunks, members, n_window_pairs(sim_cfg), cfg.store_dir / split, scs,
+                       {"split": split, "last_candidate": members[-1]})
+
+
+def pack_chunks(chunks: list[Path], members: list[int], full: int, out: Path, scs: np.ndarray,
+                info: dict[str, Any]) -> dict[str, Any]:
+    """Pack the draws of `members` found in `chunks` (arrays .npz with a `model` column, each
+    beside a .cards.jsonl) into a store split at `out`. full: the number of FCD window pairs
+    of a complete FCD. scs: (G, N, N), indexed by the cards' sc_group. `info` is added to
+    summary.json. Used by pack_split and by the generalisation diagnostic."""
     keep, summary = _select_rows(chunks, np.array(members), full)
-    out = cfg.store_dir / split
     out.mkdir(parents=True, exist_ok=True)
     rows = _write_rows(chunks, keep, members, full, out)
     summary.update(rows)
     _write_models(chunks, members, rows["rows_per_model"], out)
     np.save(out / "sc.npy", (scs / scs.max(axis=(1, 2), keepdims=True)).astype(np.float32))
     summary = {k: v for k, v in summary.items() if k != "rows_per_model"}
-    summary.update(split=split, n_models=len(members), last_candidate=members[-1])
+    summary.update(n_models=len(members), **info)
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
 
@@ -239,3 +249,28 @@ def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.nda
         stats[f"{name}_sd"] = np.asarray(np.sqrt(total_sq / count - mean ** 2), np.float32)
     np.savez(store_dir / "normalisation.npz", **stats)
     return stats
+
+
+# ---------------------------------------------------------------- generalisation diagnostic
+
+
+def pack_generalisation(cfg: GeneralisationConfig, sim_cfg: SimConfig,
+                        scs: dict[str, np.ndarray], training_store: Path) -> dict[str, Any]:
+    """Pack the four cells of sim/generalisation.py into a store at <output_dir>/store, one
+    split per cell, z-scored with the training store's statistics. scs: split -> (G, N, N)
+    group SCs. Raises if a cell's chunks do not hold every sampled model."""
+    sample = read_sample(cfg)
+    store = cfg.output_dir / "store"
+    summaries = {}
+    for cell, (model_split, sc_split) in CELLS.items():
+        chunks = sorted((cfg.output_dir / "chunks" / cell).glob("*.npz"))
+        found = sorted(json.loads(line)["index"] for c in chunks
+                       for line in c.with_suffix(".cards.jsonl").read_text().splitlines())
+        if found != sample[model_split]:
+            missing = sorted(set(sample[model_split]) - set(found))
+            raise ValueError(f"{cell}: {len(missing)} sampled models have no chunk, e.g. "
+                             f"{missing[:5]}; rerun their simulation jobs")
+        summaries[cell] = pack_chunks(chunks, sample[model_split], n_window_pairs(sim_cfg),
+                                      store / cell, scs[sc_split], {"cell": cell})
+    shutil.copy(training_store / "normalisation.npz", store / "normalisation.npz")
+    return summaries

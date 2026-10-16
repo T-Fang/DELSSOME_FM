@@ -1,0 +1,8 @@
+# Generalisation diagnostic (sim/generalisation.py, 2026-10-16): stage 1's train/val gap,
+# split into new equations vs new connectomes. Every field is required.
+
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/generalisation
+seed: 20261016
+n_models: 500           # from each of the train and val corpora
+first_draw: 100         # draws 0..99 are the corpus (and stage 1's training rows)
+n_draws: 10             # per model and cell: ~5,000 draws per cell before filtering

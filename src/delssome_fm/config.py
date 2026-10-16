@@ -164,6 +164,18 @@ class Stage1Config:
 
 
 @dataclass(frozen=True)
+class GeneralisationConfig:
+    """configs/generalisation.yaml: the 2 x 2 diagnostic of sim/generalisation.py (seen or
+    unseen model x seen or unseen SC), decided 2026-10-16."""
+
+    output_dir: Path
+    seed: int
+    n_models: int                 # models sampled from each of the train and val corpora
+    first_draw: int               # new draws only: stage 1 trained on draws 0..99
+    n_draws: int                  # draws per model and cell
+
+
+@dataclass(frozen=True)
 class ClusterConfig:
     """configs/cluster.yaml: how jobs are submitted through CBIG_pbsubmit (cluster/submit.py)."""
 
@@ -183,7 +195,13 @@ def load_config(path: Path, cls: type[T]) -> T:
         raise FileNotFoundError(f"config file not found: {path}")
     with path.open() as f:
         raw = yaml.safe_load(f)
-    return _build(cls, raw, str(path))
+    return config_from_dict(cls, raw, str(path))
+
+
+def config_from_dict(cls: type[T], raw: Any, where: str) -> T:
+    """Build the dataclass `cls` from plain values (as YAML gives them), with the same strict
+    checks as load_config; `where` names the source in error messages."""
+    return _build(cls, raw, where)
 
 
 def _build(tp: Any, value: Any, where: str) -> Any:

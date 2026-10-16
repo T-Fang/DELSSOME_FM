@@ -143,3 +143,7 @@ def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
     assert {"train/total", "val/total", "val/r2_pairwise"} <= set(run.data.metrics)
     assert np.isfinite(run.data.metrics["val/total"])
     assert (tmp_path / "artifacts").is_dir() and not Path("mlruns").exists()
+    # the checkpoint rebuilds the module and evaluates on a packed split
+    from delssome_fm.train.evaluate import evaluate, load_stage1
+    metrics = evaluate(load_stage1(checkpoints / "last.ckpt"), cfg.store_dir, "val")
+    assert metrics["rows"] > 0 and all(np.isfinite(metrics[k]) for k in ("total", "r2_pairwise"))
