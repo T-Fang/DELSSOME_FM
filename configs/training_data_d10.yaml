@@ -1,0 +1,9 @@
+# The stage-1 training store packed from configs/corpus_d10.yaml (10 draws per model,
+# 2026-10-17). Only the train split is packed: <store_dir>/val is a link to the val split of
+# configs/training_data.yaml's store, so every run is validated on the same rows.
+# Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_d10
+
+# train: every valid model of candidates 0..2,519,999 (corpus_status, 2026-10-18).
+n_models: {train: 367697, val: 10000, test: 10000}
