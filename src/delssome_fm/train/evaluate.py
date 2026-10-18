@@ -50,10 +50,12 @@ def load_stage1(checkpoint: Path) -> Stage1Module:
 
 @torch.no_grad()
 def evaluate(module: Stage1Module, store_dir: Path, split: str, batch_size: int = 512,
-             max_rows: int | None = None, seed: int = 0) -> dict[str, float]:
-    """Metrics of `module` on store_dir/split (all rows, or a seeded subset of max_rows)."""
+             max_rows: int | None = None, seed: int = 0,
+             candidates: np.ndarray | None = None) -> dict[str, float]:
+    """Metrics of `module` on store_dir/split: on all rows (or `candidates`, e.g. a run's own
+    training rows), or on a seeded subset of max_rows of them."""
     store = TrainingStore(store_dir, split)
-    rows = np.arange(len(store))
+    rows = np.arange(len(store)) if candidates is None else np.asarray(candidates)
     if max_rows is not None and max_rows < len(rows):
         rows = np.sort(np.random.default_rng(seed).choice(rows, max_rows, replace=False))
     batches = [rows[b].tolist() for b in BatchSampler(SequentialSampler(rows), batch_size, False)]
