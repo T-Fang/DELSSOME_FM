@@ -11,6 +11,8 @@ over the 100 stored FCD levels (data.md §8: within 0.0004 of the 10,000-bin KS)
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import torch
 from lightning.fabric.utilities.apply_func import move_data_to_device
@@ -76,6 +78,42 @@ def scaling_metrics(module: Stage1Module, max_rows: int, seed: int = 0) -> dict[
             "test": evaluate(module, store, "test", max_rows=max_rows, seed=seed)}
 
 
+def training_average(module: Stage1Module, max_rows: int, seed: int = 0,
+                     ) -> tuple[np.ndarray, np.ndarray]:
+    """The average simulated FC (E,) and FCD CDF (L,) over a seeded sample of the rows
+    `module` trained on: the reference prediction that ignores the model and parameters."""
+    rows = training_rows(module)
+    rows = np.sort(np.random.default_rng(seed).choice(rows, min(max_rows, len(rows)),
+                                                      replace=False))
+    ref = predict_fc_fcd(module, TrainingStore(module.cfg.store_dir, "train"), rows)
+    return ref["fc_true"].mean(0), ref["cdf_true"].mean(0)
+
+
+def reference_comparison(module: Stage1Module, store_dir: Path, name: str,
+                         fc_avg: np.ndarray, cdf_avg: np.ndarray) -> dict[str, np.ndarray]:
+    """Cost terms on one reference model's fitted sets (sim/reference_eval.py): the model's
+    prediction vs simulation repeat 0, repeat 1 vs repeat 0 (the noise floor: the same
+    parameters, other noise), and the training average vs repeat 0. Only sets usable in both
+    repeats count. Also keeps the set with the median prediction 1 - r as an example."""
+    stores = [TrainingStore(store_dir, f"{name}_r{k}") for k in (0, 1)]
+    draws = [np.load(Path(store_dir) / f"{name}_r{k}" / "draw.npy") for k in (0, 1)]
+    common = np.intersect1d(*draws)
+    rows = [np.searchsorted(d, common) for d in draws]   # draws are stored in increasing order
+    a = predict_fc_fcd(module, stores[0], rows[0])
+    b = predict_fc_fcd(module, stores[1], rows[1])
+    model = cost_terms(a["fc_pred"], a["fc_true"], a["cdf_pred"], a["cdf_true"])
+    floor = cost_terms(b["fc_true"], a["fc_true"], b["cdf_true"], a["cdf_true"])
+    ref = cost_terms(np.broadcast_to(fc_avg, a["fc_true"].shape), a["fc_true"],
+                     np.broadcast_to(cdf_avg, a["cdf_true"].shape), a["cdf_true"])
+    pick = int(np.argsort(model["corr"])[len(common) // 2])
+    out = {f"model_{k}": v for k, v in model.items()}
+    out.update({f"floor_{k}": v for k, v in floor.items()})
+    out.update({f"reference_{k}": v for k, v in ref.items()})
+    out.update(sets=common, example_set=common[pick], true_mean_fc=a["fc_true"].mean(1),
+               **{f"example_{k}": v[pick] for k, v in a.items()})
+    return out
+
+
 def prediction_vs_simulation(module: Stage1Module, split: str, max_rows: int, seed: int = 0,
                              coupled_threshold: float = 0.05) -> dict[str, np.ndarray]:
     """Cost terms between the model's predictions and the simulations on `split`, and between
@@ -87,12 +125,9 @@ def prediction_vs_simulation(module: Stage1Module, split: str, max_rows: int, se
     rows = np.sort(np.random.default_rng(seed).choice(len(store), min(max_rows, len(store)),
                                                       replace=False))
     p = predict_fc_fcd(module, store, rows)
-    train = TrainingStore(module.cfg.store_dir, "train")
-    ref_rows = np.sort(np.random.default_rng(seed).choice(training_rows(module), max_rows,
-                                                          replace=False))
-    ref = predict_fc_fcd(module, train, ref_rows)
-    fc_ref = np.broadcast_to(ref["fc_true"].mean(0), p["fc_true"].shape)
-    cdf_ref = np.broadcast_to(ref["cdf_true"].mean(0), p["cdf_true"].shape)
+    fc_avg, cdf_avg = training_average(module, max_rows, seed)
+    fc_ref = np.broadcast_to(fc_avg, p["fc_true"].shape)
+    cdf_ref = np.broadcast_to(cdf_avg, p["cdf_true"].shape)
     model = cost_terms(p["fc_pred"], p["fc_true"], p["cdf_pred"], p["cdf_true"])
     reference = cost_terms(fc_ref, p["fc_true"], cdf_ref, p["cdf_true"])
     true_mean_fc = p["fc_true"].mean(1)

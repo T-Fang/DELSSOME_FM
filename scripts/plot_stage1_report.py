@@ -9,6 +9,9 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     fcd_examples.png    simulated vs predicted FCD CDF for the same draws, with the KS gap
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic: seen/unseen model x seen/unseen SC
+    reference_cost_terms.png, reference_examples.png
+                        MFM, FIC, Hopf at their published test fits: prediction vs simulation
+                        (from scripts/reference_eval_compare.py; skipped if not yet run)
 
 Needs matplotlib (the delssome_fm_train env has it):
     python scripts/plot_stage1_report.py --data outputs/report
@@ -238,11 +241,83 @@ def generalisation_figure(path: Path, out: Path):
     save(fig, out, "generalisation.png")
 
 
+REFERENCE_MODELS = [("mfm", "MFM"), ("fic", "FIC"), ("hopf", "Hopf")]
+
+
+def reference_cost_figure(r: dict, out: Path):
+    """Per reference model: prediction vs simulation, the noise floor (simulation vs simulation)
+    and the training average, on the model's fitted test sets."""
+    terms = [("corr", "1 − r  (FC pattern)"), ("mean", "d = |Δ mean FC|"), ("ks", "KS (FCD CDF)")]
+    kinds = [("model", BLUE, "stage-1 prediction"), ("floor", AQUA, "noise floor (2nd simulation)"),
+             ("reference", MUTED, "training-average reference")]
+    rng = np.random.default_rng(0)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
+    for ax, (k, title) in zip(axes, terms):
+        for g, (m, label) in enumerate(REFERENCE_MODELS):
+            for j, (kind, color, _) in enumerate(kinds):
+                v = r[f"{m}_{kind}_{k}"]
+                x = g * 3.4 + j
+                bp = ax.boxplot([v], positions=[x], widths=0.7, showfliers=False,
+                                patch_artist=True, medianprops=dict(color=INK, lw=2),
+                                whiskerprops=dict(color=INK2), capprops=dict(color=INK2))
+                bp["boxes"][0].set(facecolor=color, alpha=0.3, edgecolor=color, lw=1.5)
+                ax.scatter(x + rng.uniform(-0.18, 0.18, len(v)), v, s=9, color=color,
+                           edgecolor="none", zorder=3)
+        ax.set_xticks([g * 3.4 + 1 for g in range(3)],
+                      [f"{label}\n(n={len(r[f'{m}_sets'])} sets)" for m, label in REFERENCE_MODELS])
+        ax.set_title(title, loc="left")
+        style(ax)
+    axes[0].legend([plt.Rectangle((0, 0), 1, 1, fc=c, alpha=0.3, ec=c) for _, c, _ in kinds],
+                   [l for _, _, l in kinds], frameon=False, fontsize=9, loc="upper left")
+    fig.suptitle("Reference models at their published test fits: stage-1 prediction vs numerical "
+                 "simulation (corpus protocol)", x=0.01, ha="left", color=INK, fontsize=12)
+    fig.tight_layout()
+    save(fig, out, "reference_cost_terms.png")
+
+
+def reference_examples_figure(r: dict, out: Path):
+    """Per reference model, the set with the median prediction 1 - r: FC simulated and predicted,
+    and the FCD CDFs with the KS gap."""
+    cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
+    fig, axes = plt.subplots(3, 3, figsize=(13, 12))
+    for row, (m, label) in enumerate(REFERENCE_MODELS):
+        sim, pred = r[f"{m}_example_fc_true"], r[f"{m}_example_fc_pred"]
+        lo = min(sim.min(), pred.min())
+        for col, (mat, who) in enumerate(((sim, "simulated FC"), (pred, "predicted FC"))):
+            ax = axes[row, col]
+            im = ax.imshow(_matrix(mat), cmap=cmap, vmin=lo, vmax=1.0)
+            ax.set_xticks([]), ax.set_yticks([])
+            ax.set_title(f"{label}, set {int(r[f'{m}_example_set']) + 1}: {who}", fontsize=10)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+        axes[row, 1].set_xlabel(f"1 − r = {1 - np.corrcoef(sim, pred)[0, 1]:.2f},  "
+                                f"d = {abs(sim.mean() - pred.mean()):.2f}", color=INK2)
+        ax = axes[row, 2]
+        cs, cp = r[f"{m}_example_cdf_true"], r[f"{m}_example_cdf_pred"]
+        k = int(np.argmax(np.abs(cs - cp)))
+        ax.plot(FCD_LEVELS, cs, color=BLUE, lw=2, label="simulated")
+        ax.plot(FCD_LEVELS, cp, color=ORANGE, lw=2, ls="--", label="predicted")
+        ax.vlines(FCD_LEVELS[k], min(cs[k], cp[k]), max(cs[k], cp[k]), color=INK, lw=1.5)
+        ax.annotate(f"KS = {abs(cs[k] - cp[k]):.3f}", (FCD_LEVELS[k], (cs[k] + cp[k]) / 2),
+                    xytext=(-8, 0), textcoords="offset points", ha="right", va="center",
+                    fontsize=9, color=INK)
+        ax.set_title(f"{label}: FCD CDF", loc="left", fontsize=10)
+        ax.set_xlabel("FCD value")
+        ax.legend(frameon=False, fontsize=9, loc="upper left")
+        style(ax, "both")
+    fig.suptitle("Reference models, the fitted set with the median prediction 1 − r",
+                 x=0.01, ha="left", color=INK, fontsize=12)
+    fig.tight_layout()
+    save(fig, out, "reference_examples.png")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--data", type=Path, default=Path("outputs/report"))
     p.add_argument("--generalisation", type=Path,
                    default=Path("outputs/generalisation/eval_stage1_v1.json"))
+    p.add_argument("--reference", type=Path,
+                   default=Path("outputs/reference_eval/comparison.npz"),
+                   help="scripts/reference_eval_compare.py output; skipped if absent")
     args = p.parse_args()
     out = args.data / "figures"
     out.mkdir(parents=True, exist_ok=True)
@@ -253,6 +328,10 @@ def main():
     fcd_examples_figure(d, out)
     composition_figure(d, out)
     generalisation_figure(args.generalisation, out)
+    if args.reference.is_file():
+        r = dict(np.load(args.reference))
+        reference_cost_figure(r, out)
+        reference_examples_figure(r, out)
 
 
 if __name__ == "__main__":
