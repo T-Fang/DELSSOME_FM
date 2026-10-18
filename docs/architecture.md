@@ -287,6 +287,22 @@ Against `stage1_v1`, with every model weighted equally and a 95% CI from resampl
 - **Equations do not generalise.** Unseen models cost 2.6× as much: total 1.35, pairwise R² 0.57 against 0.78. The train/val gap is generalisation across equations.
 - **Error is concentrated in a few models.** The hardest 5% of val models carry 56% of the error (per-model total: median 0.22, 95th percentile 4.9). They are the coupled models: median per-model error is 0.12 at mean FC < 0.05, 0.37 at 0.05–0.5, 1.77 at 0.5–0.9, and 1.34 at 0.9 or above. V = 2 makes up 66% of them, and their DAGs are larger (median 49 nodes against 36). Their error is pairwise (42%) and FC moments (35%).
 
+### 7.3 Scaling and composition (2026-10-17 to 2026-10-19)
+
+**Scaling.** All runs use the stage-1 defaults and 200,000 steps, and report the best val total. With all draws (~80 per model): 10k models 1.867, 30k 1.529, 100k 1.251 (`stage1_v1`). With 10 draws per model: 10k 1.927, 30k 1.644, 100k 1.282, then on the 10-draw pool (`configs/corpus_d10.yaml`, `training_store_d10`) 150k 1.163 and **300k 1.068** (pairwise R² 0.636). Distinct models matter much more than draws per model, and the curve has not flattened at 300k. The project lead therefore decided on 10 draws per model (2026-10-17).
+
+**Composition** (150k models, 10 draws; "coupled" means the model's mean FC over its draws is above 0.05; the pool is 36.4% coupled). Paired per-model differences from the natural share on val (20k rows), with 95% CIs over models (`scripts/compare_by_regime.py`):
+
+| Coupled share | Uncoupled models (5,003) | Coupled models (2,943) |
+|---|---|---|
+| 36.4% (natural; reference) | 0.799 | 1.995 |
+| 50% | +0.053 [+0.004, +0.100] | −0.075 [−0.202, +0.048] |
+| 70% | +0.138 [+0.080, +0.195] | −0.118 [−0.236, −0.002] |
+| 85% | +0.244 [+0.175, +0.315] | −0.134 [−0.269, +0.000] |
+| 300k models, natural | −0.060 [−0.101, −0.023] | −0.159 [−0.270, −0.049] |
+
+Oversampling coupled models buys a small, saturating gain on coupled models (at most about 7%) at a steep cost on uncoupled ones (up to 31%). Doubling the number of models at the natural composition improves both regimes, and helps coupled models more than any oversampling does.
+
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
 ---
