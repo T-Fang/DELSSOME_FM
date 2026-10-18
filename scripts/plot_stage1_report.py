@@ -1,7 +1,8 @@
 """Figures for the stage-1 progress report, from scripts/stage1_report_data.py's output and the
 generalisation diagnostic. Writes PNGs to <data>/figures/:
 
-    scaling.png         total MSE vs number of training models (train / val / test), and
+    scaling.png         total MSE vs number of training models (train / val / test; val as
+                        logged in MLflow at the best step, 50k rows), and
                         pairwise R^2; 10 draws per model vs all draws
     cost_terms.png      1 - r, d and KS between the best model's prediction and the numerical
                         simulation, test draws, by regime; vs a training-average reference
@@ -50,6 +51,22 @@ def save(fig, out, name):
     fig.savefig(out / name, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out / name}")
+
+
+def mlflow_val(scaling: dict, tracking_uri: str) -> dict:
+    """Replace each run's val metrics with those MLflow logged at its best step (val/total):
+    the fixed 50k-row val subset used during training, the numbers quoted elsewhere."""
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    runs = {r.info.run_name: r.info.run_id
+            for r in client.search_runs([client.get_experiment_by_name("stage1").experiment_id])}
+    for name, v in scaling.items():
+        hist = {k: {m.step: m.value for m in client.get_metric_history(runs[name], f"val/{k}")}
+                for k in ("total", "r2_pairwise")}
+        best = min(hist["total"], key=hist["total"].get)
+        v["val"] = {**v["val"], "total": hist["total"][best],
+                    "r2_pairwise": hist["r2_pairwise"][best]}
+    return scaling
 
 
 def scaling_figure(scaling: dict, out: Path):
@@ -318,11 +335,14 @@ def main():
     p.add_argument("--reference", type=Path,
                    default=Path("outputs/reference_eval/comparison.npz"),
                    help="scripts/reference_eval_compare.py output; skipped if absent")
+    p.add_argument("--mlflow", default="sqlite:////home/ftian/storage/projects/DELSSOME-FM/"
+                   "outputs/mlflow/mlflow.db", help="tracking URI holding the runs' val metrics")
     args = p.parse_args()
     out = args.data / "figures"
     out.mkdir(parents=True, exist_ok=True)
     d = dict(np.load(args.data / "report_data.npz"))
-    scaling_figure(json.loads((args.data / "scaling.json").read_text()), out)
+    scaling = mlflow_val(json.loads((args.data / "scaling.json").read_text()), args.mlflow)
+    scaling_figure(scaling, out)
     cost_terms_figure(d, out)
     fc_examples_figure(d, out)
     fcd_examples_figure(d, out)

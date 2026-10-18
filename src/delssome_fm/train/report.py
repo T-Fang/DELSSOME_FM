@@ -38,16 +38,20 @@ def training_rows(module: Stage1Module) -> np.ndarray:
 def predict_fc_fcd(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
                    batch_size: int = 512) -> dict[str, np.ndarray]:
     """For each row: predicted and simulated FC upper triangles (raw r, (R, E)) and FCD CDFs
-    ((R, L)). The store must be one z-scored like the module's training store."""
+    ((R, L)). Predictions are de-z-scored with the statistics of the module's training store,
+    simulations with those of `store` (they differ slightly between stores)."""
     device = next(module.parameters()).device
     edges = torch.arange(len(module.edges), device=device)
-    mean, sd = store.norm["pairwise_mean"], store.norm["pairwise_sd"]
+    with np.load(Path(module.cfg.store_dir) / "normalisation.npz") as n:
+        own = {"fc_pred": (n["pairwise_mean"], n["pairwise_sd"])}
+    own["fc_true"] = (store.norm["pairwise_mean"], store.norm["pairwise_sd"])
     out = {k: [] for k in ("fc_pred", "fc_true", "cdf_pred", "cdf_true")}
     batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
     for batch in DataLoader(store, sampler=batches, batch_size=None):
         batch = move_data_to_device(batch, device)
         pred = module.predict_statistics(batch, edges)
         for name, z in (("fc_pred", pred.pairwise), ("fc_true", batch.targets["pairwise"])):
+            mean, sd = own[name]
             out[name].append(np.tanh(z.float().cpu().numpy() * sd + mean))
         out["cdf_pred"].append(pred.fcd.float().cpu().numpy())
         out["cdf_true"].append(batch.targets["fcd"].float().cpu().numpy())

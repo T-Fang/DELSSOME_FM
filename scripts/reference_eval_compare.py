@@ -22,6 +22,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--config", type=Path, default=Path("configs/reference_eval.yaml"))
     p.add_argument("--checkpoint", type=Path, default=BEST)
+    p.add_argument("--out", type=Path, default=None, help="default <output_dir>/comparison.npz")
     args = p.parse_args()
 
     torch.set_num_threads(8)
@@ -36,7 +37,8 @@ def main() -> None:
             f"{k} median: model {np.median(r[f'model_{k}']):.3f} floor "
             f"{np.median(r[f'floor_{k}']):.3f} reference {np.median(r[f'reference_{k}']):.3f}"
             for k in ("corr", "mean", "ks")))
-    np.savez(cfg.output_dir / "comparison.npz", checkpoint=str(args.checkpoint), **arrays)
+    np.savez(args.out or cfg.output_dir / "comparison.npz", checkpoint=str(args.checkpoint),
+             **arrays)
 
 
 if __name__ == "__main__":
