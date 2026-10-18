@@ -8,7 +8,7 @@ import yaml
 from conftest import DATA_CONFIG_PATH
 from delssome_fm.config import (ClusterConfig, CorpusConfig, DataConfig, GeneralisationConfig,
                                  ReproduceConfig, SimConfig, SplitBounds, Stage1Config,
-                                 TrainingDataConfig, load_config)
+                                 TrainingDataConfig, ReferenceEvalConfig, load_config)
 
 
 def _write(tmp_path, raw) -> Path:
@@ -66,7 +66,8 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "stage1_offset_reg": Stage1Config, "generalisation": GeneralisationConfig,
                   "corpus_d10": CorpusConfig,
                   "training_data_d10": TrainingDataConfig,
-                  "stage1_d10": Stage1Config}
+                  "stage1_d10": Stage1Config,
+                  "reference_eval": ReferenceEvalConfig}
 
 
 @pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))

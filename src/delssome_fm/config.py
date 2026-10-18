@@ -182,6 +182,18 @@ class GeneralisationConfig:
 
 
 @dataclass(frozen=True)
+class ReferenceEvalConfig:
+    """configs/reference_eval.yaml: stage-1 predictions vs simulations of the reference models
+    at their published test fits (sim/reference_eval.py), decided 2026-10-19."""
+
+    output_dir: Path
+    seed: int
+    n_repeats: int                # simulations per parameter set, independent noise
+    models: tuple[str, ...]       # reference cards with fitted sets in configs/reproduce.yaml
+    training_store: Path          # its normalisation.npz z-scores the targets
+
+
+@dataclass(frozen=True)
 class ClusterConfig:
     """configs/cluster.yaml: how jobs are submitted through CBIG_pbsubmit (cluster/submit.py)."""
 

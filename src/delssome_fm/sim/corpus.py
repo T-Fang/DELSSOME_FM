@@ -187,6 +187,18 @@ def simulate_draws(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel, 
     """Draws first..first+n-1 of one model at full length, summarised: per-draw arrays
     (float32 statistics; diverged and flat flags; NaN statistics where diverged)."""
     theta, psi, x0, keys = draws(cfg, model.card, split, index, _DRAW, first, n)
+    res = simulate_given(cfg, sim_cfg, model, theta, psi, x0, keys, sc)
+    res["draw"] = np.arange(first, first + n)
+    return res
+
+
+def simulate_given(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel,
+                   theta: np.ndarray, psi: np.ndarray, x0: np.ndarray, keys: jax.Array,
+                   sc: np.ndarray) -> dict[str, np.ndarray]:
+    """Simulate and summarise given parameters, exactly as the corpus does (simulate_draws).
+    theta (n, N, P), psi (n, K), x0 (n, N, V), keys (n,), sc (N, N). Returns the per-draw
+    arrays of simulate_draws except `draw`."""
+    n = len(keys)
     simulate = make_batch_simulate(model, sim_cfg)
     summarise = _summariser(sim_cfg, cfg.fcd_store_stride)
     parts = []
@@ -207,7 +219,6 @@ def simulate_draws(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel, 
         res[name][res["diverged"]] = np.nan
     res["flat"] = flat_draws(res, cfg.flat_rel_sd)
     res["theta"], res["psi"] = _pad(theta, P_MAX), _pad(psi, K_MAX)
-    res["draw"] = np.arange(first, first + n)
     del res["fc"]  # pairwise holds arctanh(FC) upper triangle; fc_moments its summary
     return res
 

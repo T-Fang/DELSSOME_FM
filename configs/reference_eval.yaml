@@ -1,0 +1,10 @@
+# Stage-1 test on the reference models (sim/reference_eval.py, 2026-10-19): the 50 fitted test
+# parameter sets of each model (configs/reproduce.yaml), simulated with the corpus protocol
+# (configs/sim.yaml) and compared with the stage-1 prediction. Every field is required.
+
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/reference_eval
+seed: 20261019
+n_repeats: 2            # two simulations per set: the second gives the noise floor
+models: [mfm, fic, hopf]
+# z-score statistics of the evaluated model's training store (d10_n300k_natural)
+training_store: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_d10
