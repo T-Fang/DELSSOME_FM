@@ -33,6 +33,9 @@ LEGACY_DEFAULTS = {
     "oversample_coupled": False,     # added 2026-10-17
     "coupled_share": 0.5,            # unused when oversample_coupled is False
     "coupled_threshold": 0.05,
+    "pair_head": "bilinear",         # added 2026-10-19: the only head before
+    "pair_hidden": 128,              # unused by the bilinear head
+    "final_eval_rows": 200_000,      # added 2026-10-19; evaluation only
 }
 
 
@@ -42,8 +45,12 @@ def load_stage1(checkpoint: Path) -> Stage1Module:
     hp = dict(ckpt["hyper_parameters"])
     n_fcd_levels = hp.pop("n_fcd_levels")
     hp.pop("train_rows", None)           # logged for information, not a config field
-    hp = {**LEGACY_DEFAULTS, **hp}
-    module = Stage1Module(config_from_dict(Stage1Config, hp, str(checkpoint)), n_fcd_levels)
+    norm = (hp.pop("pairwise_mean", None), hp.pop("pairwise_sd", None))
+    cfg = config_from_dict(Stage1Config, {**LEGACY_DEFAULTS, **hp}, str(checkpoint))
+    if norm[0] is None:                  # checkpoints before 2026-10-19: from the store
+        with np.load(cfg.store_dir / "normalisation.npz") as n:
+            norm = (float(n["pairwise_mean"]), float(n["pairwise_sd"]))
+    module = Stage1Module(cfg, n_fcd_levels, norm)
     module.load_state_dict(ckpt["state_dict"])
     return module.eval()
 
@@ -114,3 +121,62 @@ def bootstrap_mean(x: np.ndarray, n_boot: int = 2000, seed: int = 1) -> tuple[fl
     idx = np.random.default_rng(seed).integers(0, len(x), (n_boot, len(x)))
     boot = x[idx].mean(1)
     return float(x.mean()), float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))
+
+
+# ---------------------------------------------------------------- one pass, every number
+
+
+@torch.no_grad()
+def row_metrics(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
+                batch_size: int = 512, num_workers: int = 0) -> dict[str, np.ndarray]:
+    """One pass over `rows` of `store`. Per row: the MSE of each group (z-scored units; raw
+    CDF for the FCD), the pairwise sums needed for R^2 over all rows and edges (squared error,
+    target sum and sum of squares), the raw-unit cost terms between prediction and simulation
+    (train/costs.py), whether the simulated draw is coupled, and its model."""
+    rows = np.sort(np.asarray(rows))     # a batch is read sorted; keep rows in that order
+    device = next(module.parameters()).device
+    edges = torch.arange(len(module.edges), device=device)
+    keys = (*GROUPS, "sse_pairwise", "sum_pairwise", "sumsq_pairwise", "corr", "mean", "ks",
+            "coupled")
+    out = {k: [] for k in keys}
+    batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
+    for batch in DataLoader(store, sampler=batches, batch_size=None, num_workers=num_workers):
+        batch = move_data_to_device(batch, device)
+        pred = module.predict_statistics(batch, edges)
+        for g in GROUPS:
+            d = (getattr(pred, g).float() - batch.targets[g].float()) ** 2
+            out[g].append(d.reshape(len(d), -1).mean(1))
+        t = batch.targets["pairwise"].float()
+        out["sse_pairwise"].append(((pred.pairwise.float() - t) ** 2).sum(1))
+        out["sum_pairwise"].append(t.sum(1))
+        out["sumsq_pairwise"].append((t ** 2).sum(1))
+        for k, v in module.raw_costs(pred, batch).items():
+            out[k].append(v)
+    res = {k: torch.cat(v).cpu().numpy() for k, v in out.items()}
+    res["model"] = np.asarray(store.rows["model"][rows])
+    return res
+
+
+def summarise_rows(r: dict[str, np.ndarray], n_edges: int = 2278) -> dict[str, float]:
+    """Row metrics -> the logged numbers: MSE per group and their total, pairwise R^2, and the
+    median cost terms over uncoupled and coupled rows."""
+    out = {g: float(r[g].mean()) for g in GROUPS}
+    out["total"] = sum(out[g] for g in GROUPS)
+    n = len(r["sse_pairwise"]) * n_edges
+    sst = r["sumsq_pairwise"].sum() - r["sum_pairwise"].sum() ** 2 / n
+    out["r2_pairwise"] = float(1 - r["sse_pairwise"].sum() / sst)
+    for regime, mask in (("uncoupled", ~r["coupled"]), ("coupled", r["coupled"])):
+        out[f"rows_{regime}"] = int(mask.sum())
+        for t in ("corr", "mean", "ks"):
+            if mask.any():
+                out[f"cost_{t}_{regime}"] = float(np.nanmedian(r[t][mask]))
+    return out
+
+
+def per_model(r: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Row metrics -> each model's mean total MSE and mean coupledness (models weigh the same)."""
+    models, inverse = np.unique(r["model"], return_inverse=True)
+    counts = np.bincount(inverse)
+    total = sum(r[g] for g in GROUPS)
+    return {"model": models, "total": np.bincount(inverse, total) / counts,
+            "coupled_share": np.bincount(inverse, r["coupled"].astype(float)) / counts}

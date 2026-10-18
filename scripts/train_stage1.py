@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 
 from delssome_fm.config import Stage1Config, load_config, override
-from delssome_fm.train.stage1 import fit
+from delssome_fm.train.fit import fit
 
 
 def main() -> None:

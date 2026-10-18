@@ -2,31 +2,31 @@
 statistics of the synthetic corpus.
 
 `Stage1Module` is the LightningModule: backbone + stage-1 heads, the uncertainty-weighted
-loss, AdamW with linear warm-up and cosine decay. `fit` wires it to the data, MLflow and
-checkpointing; scripts/train_stage1.py only parses arguments and calls it.
+loss, AdamW with linear warm-up and cosine decay. train/fit.py wires it to the data, MLflow
+and checkpointing, and evaluates the best checkpoint after training.
 
 Logged to MLflow, per step: train/<group> MSE, train/total, train/s_<group> (the learned
-loss scales), the learning rate. Per validation: val/<group> MSE over the fixed val subset,
-val/total (their sum), val/r2_pairwise (R^2 of the z-scored arctanh FC over all edges).
+loss scales), the learning rate. Per validation, over the fixed val subset: val/<group> MSE,
+val/total (their sum), val/r2_pairwise (R^2 of the z-scored arctanh FC over all edges), and
+the DELSSOME cost terms between prediction and simulation in raw units (train/costs.py), as
+medians over uncoupled and coupled draws: val/cost_<corr|mean|ks>_<uncoupled|coupled>.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
-from datetime import datetime
 from pathlib import Path
 
 import lightning as L
 import torch
 import torchmetrics
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
-from lightning.pytorch.loggers import MLFlowLogger
 
-from delssome_fm.config import Stage1Config, to_yaml
+from delssome_fm.config import Stage1Config
 from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
-from delssome_fm.train.data import Composition, Stage1Batch, Stage1DataModule
+from delssome_fm.train.costs import TERMS, cost_terms, raw_fc
+from delssome_fm.train.data import Stage1Batch
 from delssome_fm.train.losses import GROUPS, UncertaintyWeighting, group_losses
 
 N_REGIONS = 68
@@ -38,20 +38,27 @@ def upper_triangle(n: int = N_REGIONS) -> torch.Tensor:
 
 
 class Stage1Module(L.LightningModule):
-    def __init__(self, cfg: Stage1Config, n_fcd_levels: int):
+    def __init__(self, cfg: Stage1Config, n_fcd_levels: int, pairwise_norm: tuple[float, float]):
+        """pairwise_norm: (mean, SD) of arctanh FC in the training store, to map predictions
+        back to raw FC (kept with the checkpoint)."""
         super().__init__()
-        self.save_hyperparameters({**_flat(cfg), "n_fcd_levels": n_fcd_levels})
+        self.save_hyperparameters({**_flat(cfg), "n_fcd_levels": n_fcd_levels,
+                                   "pairwise_mean": float(pairwise_norm[0]),
+                                   "pairwise_sd": float(pairwise_norm[1])})
         self.cfg = cfg
+        self.pairwise_norm = (float(pairwise_norm[0]), float(pairwise_norm[1]))
         self.backbone = Backbone(BackboneSize(
             n_regions=N_REGIONS, d_model=cfg.d_model, d_template=cfg.d_template,
             template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
             n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
             max_distance=cfg.max_distance, max_degree=cfg.max_degree))
-        self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset)
+        self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset,
+                                 cfg.pair_head, cfg.pair_hidden)
         self.weighting = UncertaintyWeighting(GROUPS)
         self.register_buffer("edges", upper_triangle(), persistent=False)
         self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError() for g in GROUPS})
         self.val_r2_pairwise = torchmetrics.R2Score()
+        self._val_costs: list[dict[str, torch.Tensor]] = []
 
     def predict_statistics(self, batch: Stage1Batch, edge_index: torch.Tensor):
         out = self.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
@@ -76,8 +83,24 @@ class Stage1Module(L.LightningModule):
             self.val_mse[g].update(getattr(pred, g).float().flatten(), batch.targets[g].flatten())
         self.val_r2_pairwise.update(pred.pairwise.float().flatten(),
                                     batch.targets["pairwise"].flatten())
+        self._val_costs.append(self.raw_costs(pred, batch))
+
+    def raw_costs(self, pred, batch: Stage1Batch) -> dict[str, torch.Tensor]:
+        """Per row: the cost terms between prediction and simulation in raw units, and whether
+        the simulated draw is coupled (mean FC > coupled_threshold)."""
+        fc_pred = raw_fc(pred.pairwise, *self.pairwise_norm)
+        fc_true = raw_fc(batch.targets["pairwise"], *self.pairwise_norm)
+        out = cost_terms(fc_pred, fc_true, pred.fcd.float(), batch.targets["fcd"].float())
+        out["coupled"] = fc_true.mean(1) > self.cfg.coupled_threshold
+        return out
 
     def on_validation_epoch_end(self) -> None:
+        costs = {k: torch.cat([c[k] for c in self._val_costs]) for k in (*TERMS, "coupled")}
+        self._val_costs.clear()
+        for regime, mask in (("uncoupled", ~costs["coupled"]), ("coupled", costs["coupled"])):
+            if mask.any():
+                self.log_dict({f"val/cost_{t}_{regime}": torch.nanmedian(costs[t][mask])
+                               for t in TERMS})
         mse = {g: self.val_mse[g].compute() for g in GROUPS}
         self.log_dict({f"val/{g}": v for g, v in mse.items()})
         self.log("val/total", torch.stack(list(mse.values())).sum(), prog_bar=True)
@@ -98,40 +121,6 @@ class Stage1Module(L.LightningModule):
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
-
-
-def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Path:
-    """Train stage 1 as configured; returns the run's checkpoint directory."""
-    L.seed_everything(cfg.seed, workers=True)
-    torch.set_float32_matmul_precision("high")   # TF32 tensor cores for the float32 parts
-    run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
-    composition = Composition(cfg.train_models, cfg.draws_per_model,
-                              cfg.coupled_share if cfg.oversample_coupled else None,
-                              cfg.coupled_threshold)
-    data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
-                            cfg.seed, composition)
-    data.setup()
-    module = Stage1Module(cfg, data.train.n_fcd_levels)
-    logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, run_name=run_name,
-                          tracking_uri=cfg.mlflow_tracking_uri,
-                          artifact_location=cfg.mlflow_artifact_dir.as_uri())
-    checkpoints = cfg.output_dir / run_name
-    checkpoints.mkdir(parents=True, exist_ok=True)
-    effective = checkpoints / "config.yaml"     # the config file plus any --set overrides
-    effective.write_text(f"# from {config_path}\n" + to_yaml(cfg))
-    logger.experiment.log_artifact(logger.run_id, str(effective))
-    logger.log_hyperparams({"train_rows": len(data.train_rows)})
-    trainer = L.Trainer(
-        max_steps=cfg.max_steps, val_check_interval=cfg.val_every_steps,
-        check_val_every_n_epoch=None, precision=cfg.precision,
-        gradient_clip_val=cfg.gradient_clip, logger=logger,
-        log_every_n_steps=cfg.log_every_steps,
-        callbacks=[ModelCheckpoint(dirpath=checkpoints, monitor="val/total", save_top_k=3,
-                                   save_last=True, filename="step{step}",
-                                   auto_insert_metric_name=False),
-                   LearningRateMonitor(logging_interval="step")])
-    trainer.fit(module, datamodule=data)
-    return checkpoints
 
 
 def _flat(cfg: Stage1Config) -> dict:

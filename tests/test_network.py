@@ -17,18 +17,21 @@ from delssome_fm.config import Stage1Config                             # noqa: 
 from delssome_fm.nn.template_encoder import GraphBatch                  # noqa: E402
 from delssome_fm.train.data import TrainingStore                        # noqa: E402
 from delssome_fm.train.losses import GROUPS, group_losses               # noqa: E402
-from delssome_fm.train.stage1 import Stage1Module, fit, upper_triangle  # noqa: E402
+from delssome_fm.train.fit import fit                                    # noqa: E402
+from delssome_fm.train.stage1 import Stage1Module, upper_triangle        # noqa: E402
 
 
 def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
     return Stage1Config(
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
-        fc_rank=8, fc_offset=True, max_distance=8, max_degree=8, train_models=2,
+        fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, max_distance=8,
+        max_degree=8, train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
         coupled_threshold=0.05, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
-        val_every_steps=1, num_workers=0, precision="32-true", gradient_clip=1.0,
+        val_every_steps=1, final_eval_rows=16, num_workers=0, precision="32-true",
+        gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
         mlflow_artifact_dir=tmp_path / "artifacts", mlflow_experiment="test")
 
@@ -39,7 +42,8 @@ def setup(tiny_store, tmp_path):
     store = TrainingStore(cfg.store_dir, "train")
     batch = store[list(range(min(8, len(store))))]
     torch.manual_seed(0)                                   # deterministic initial weights
-    module = Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels).eval()
+    module = Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels,
+                          (0.4, 1.3)).eval()
     return store, batch, module
 
 
@@ -121,8 +125,20 @@ def test_outputs_do_not_depend_on_parameter_order(setup):
     torch.testing.assert_close(a.h_cls, b.h_cls, rtol=1e-4, atol=1e-5)
 
 
-def test_heads_give_a_cdf_and_a_symmetric_fc(setup):
-    _, batch, module = setup
+HEADS = [("bilinear", True), ("mlp_symmetric", False), ("mlp_concat", False)]
+
+
+def _module_with_head(store, tmp_path, head, offset):
+    cfg = dataclasses.replace(tiny_config(tmp_path, tmp_path),
+                              pair_head=head, fc_offset=offset)
+    torch.manual_seed(0)
+    return Stage1Module(cfg, store.n_fcd_levels, (0.4, 1.3)).eval()
+
+
+@pytest.mark.parametrize("head,offset", HEADS)
+def test_heads_give_a_cdf_and_a_symmetric_fc(setup, tmp_path, head, offset):
+    store, batch, _ = setup
+    module = _module_with_head(store, tmp_path, head, offset)
     with torch.no_grad():
         out = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
         pred = module.heads(out, upper_triangle()[:10])
@@ -132,10 +148,21 @@ def test_heads_give_a_cdf_and_a_symmetric_fc(setup):
     torch.testing.assert_close(pred.pairwise, swapped)
 
 
-def test_the_network_can_fit_one_batch(setup):
-    """Each group's loss falls when training on one batch. The pairwise loss falls least: a
-    rank-k factorisation cannot fit the near-full-rank FC of the tiny corpus's 40-frame runs."""
-    _, batch, module = setup
+def test_an_offset_belongs_to_the_bilinear_head_only():
+    from delssome_fm.nn.heads import Stage1Heads
+    with pytest.raises(ValueError, match="bilinear"):
+        Stage1Heads(16, 4, 10, fc_offset=True, pair_head="mlp_symmetric")
+    with pytest.raises(ValueError, match="pair_head"):
+        Stage1Heads(16, 4, 10, fc_offset=False, pair_head="mlp")
+
+
+@pytest.mark.parametrize("head,offset", HEADS)
+def test_the_network_can_fit_one_batch(setup, tmp_path, head, offset):
+    """Each group's loss falls when training on one batch. The pairwise loss falls least with
+    the bilinear head: a rank-k factorisation cannot fit the near-full-rank FC of the tiny
+    corpus's 40-frame runs."""
+    store, batch, _ = setup
+    module = _module_with_head(store, tmp_path, head, offset)
     module.train()
     optimiser = torch.optim.Adam(module.parameters(), lr=3e-3)
     edges = torch.arange(2278)
@@ -166,6 +193,11 @@ def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
     run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
     assert {"train/total", "val/total", "val/r2_pairwise"} <= set(run.data.metrics)
     assert np.isfinite(run.data.metrics["val/total"])
+    # raw-unit cost terms at validation, and the evaluation of the best checkpoint
+    assert any(k.startswith("val/cost_ks_") for k in run.data.metrics)
+    for split in ("train", "val", "test"):
+        assert np.isfinite(run.data.metrics[f"final/{split}/total"])
+    assert (checkpoints / "final_eval.npz").is_file()
     assert (tmp_path / "artifacts").is_dir() and not Path("mlruns").exists()
     # the checkpoint rebuilds the module and evaluates on a packed split
     from delssome_fm.train.evaluate import evaluate, load_stage1

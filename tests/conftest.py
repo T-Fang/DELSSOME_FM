@@ -53,4 +53,5 @@ def tiny_store(tmp_path_factory):
     pack_split(corpus_cfg, sim_cfg, cfg, "train", scs)
     normalisation(cfg.store_dir)
     shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "val")
+    shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "test")
     return cfg, corpus_cfg, sim_cfg

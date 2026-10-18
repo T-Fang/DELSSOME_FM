@@ -142,6 +142,8 @@ class Stage1Config:
     dropout: float
     fc_rank: int                  # k of the bilinear FC head
     fc_offset: bool               # add a per-draw offset b(h_CLS) to the FC head (nn/heads.py)
+    pair_head: str                # FC head: bilinear | mlp_symmetric | mlp_concat (nn/heads.py)
+    pair_hidden: int              # hidden width of the MLP pair heads
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
     # training data (the scaling sweep of architecture.md §7.2 varies these)
@@ -159,6 +161,7 @@ class Stage1Config:
     max_steps: int
     val_rows: int                 # fixed random subset of the val split used for validation
     val_every_steps: int
+    final_eval_rows: int          # rows per split in the evaluation after training (train/fit.py)
     num_workers: int              # DataLoader worker processes
     precision: str                # Lightning precision, e.g. bf16-mixed
     gradient_clip: float          # max gradient norm
