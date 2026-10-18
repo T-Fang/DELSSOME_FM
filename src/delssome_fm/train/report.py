@@ -80,8 +80,9 @@ def prediction_vs_simulation(module: Stage1Module, split: str, max_rows: int, se
                              coupled_threshold: float = 0.05) -> dict[str, np.ndarray]:
     """Cost terms between the model's predictions and the simulations on `split`, and between
     a reference prediction (the average FC and CDF of the training rows) and the simulations.
-    Also keeps four examples: coupled draws at the 10th, 50th and 90th percentile of the
-    model's 1 - r, and the median uncoupled draw."""
+    Also keeps four examples: draws in the realistic coupled range (coupled_threshold < mean
+    FC < 0.9; above it FC is near-uniform synchronisation) at the 10th, 50th and 90th
+    percentile of the model's 1 - r, and the median uncoupled draw."""
     store = TrainingStore(module.cfg.store_dir, split)
     rows = np.sort(np.random.default_rng(seed).choice(len(store), min(max_rows, len(store)),
                                                       replace=False))
@@ -96,7 +97,8 @@ def prediction_vs_simulation(module: Stage1Module, split: str, max_rows: int, se
     reference = cost_terms(fc_ref, p["fc_true"], cdf_ref, p["cdf_true"])
     true_mean_fc = p["fc_true"].mean(1)
     coupled = true_mean_fc > coupled_threshold
-    order = np.flatnonzero(coupled)[np.argsort(model["corr"][coupled])]
+    realistic = coupled & (true_mean_fc < 0.9)
+    order = np.flatnonzero(realistic)[np.argsort(model["corr"][realistic])]
     uncoupled = np.flatnonzero(~coupled)[np.argsort(model["corr"][~coupled])]
     picks = [order[int(q * (len(order) - 1))] for q in (0.1, 0.5, 0.9)]
     picks.append(uncoupled[len(uncoupled) // 2])
