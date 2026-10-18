@@ -303,6 +303,21 @@ Against `stage1_v1`, with every model weighted equally and a 95% CI from resampl
 
 Oversampling coupled models buys a small, saturating gain on coupled models (at most about 7%) at a steep cost on uncoupled ones (up to 31%). Doubling the number of models at the natural composition improves both regimes, and helps coupled models more than any oversampling does.
 
+### 7.4 Zero-shot test on the reference models (2026-10-19)
+
+MFM, FIC and Hopf at their 50 published test fits (`sim/reference_eval.py`, `configs/reference_eval.yaml`):
+
+- **Setup.** Each card is re-expressed in the corpus convention (constant = signed median of the fits, multiplier around 1; equations unchanged, tested). MFM keeps 36 sets: 14 have a drive whose sign changes across regions. Each set is simulated twice with the corpus protocol; under it the sets keep their original-protocol mean FC (MFM 0.23, FIC 0.49, Hopf 0.30).
+- **Results for `d10_n300k_natural`** (medians over sets; the noise floor is a second simulation, the baseline is the training average):
+
+| Model | 1 − r: model / floor / baseline | d: model / floor / baseline | KS: model / floor / baseline |
+|---|---|---|---|
+| MFM | 0.32 / 0.08 / 0.54 | 0.17 / 0.01 / 0.12 | 0.34 / 0.09 / 0.72 |
+| FIC | 0.99 / 0.06 / 0.49 | 0.13 / 0.03 / 0.36 | 0.89 / 0.14 / 0.74 |
+| Hopf | 0.18 / 0.05 / 0.44 | 0.09 / 0.03 / 0.17 | 0.53 / 0.16 / 0.74 |
+
+- **The predicted FC is nearly constant** (≈ 0.39, i.e. z ≈ 0): its range within a set is 0.03 for MFM, 0.003 for Hopf and 0.0004 for FIC. Its pattern still correlates with the simulation for MFM and Hopf. With the FC offset (100k-model runs), FIC's 1 − r drops to 0.44, but the other terms are mixed. Every variant stays far above the noise floor, which is what stage 2 is for.
+
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
 ---

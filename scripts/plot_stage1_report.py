@@ -78,8 +78,6 @@ def scaling_figure(scaling: dict, out: Path):
     for split, color in (("train", BLUE), ("val", ORANGE), ("test", AQUA)):
         y = [v[split]["total"] for _, v in ten]
         ax.plot(x, y, "-o", color=color, lw=2, ms=7, label=split, mec=SURFACE, mew=1.5)
-        ax.annotate(split, (x[-1], y[-1]), xytext=(6, 0), textcoords="offset points",
-                    va="center", color=INK2, fontsize=9)
     ax.set_title("Total MSE vs training models (10 draws each)", loc="left")
     ax.set_ylabel("total MSE (sum of 4 groups)")
     ax = axes[1]
@@ -293,22 +291,28 @@ def reference_cost_figure(r: dict, out: Path):
 
 
 def reference_examples_figure(r: dict, out: Path):
-    """Per reference model, the set with the median prediction 1 - r: FC simulated and predicted,
-    and the FCD CDFs with the KS gap."""
+    """Per reference model, a typical fitted set (median simulated mean FC): FC simulated and
+    predicted on a shared colour range, the prediction on its own range (its pattern), and the
+    FCD CDFs with the KS gap."""
     cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
-    fig, axes = plt.subplots(3, 3, figsize=(13, 12))
+    fig, axes = plt.subplots(3, 4, figsize=(17, 12))
     for row, (m, label) in enumerate(REFERENCE_MODELS):
         sim, pred = r[f"{m}_example_fc_true"], r[f"{m}_example_fc_pred"]
         lo = min(sim.min(), pred.min())
-        for col, (mat, who) in enumerate(((sim, "simulated FC"), (pred, "predicted FC"))):
+        panels = ((sim, "simulated FC", lo, 1.0), (pred, "predicted FC", lo, 1.0),
+                  (pred, "predicted FC, own colour range", pred.min(), pred.max()))
+        for col, (mat, who, vmin, vmax) in enumerate(panels):
             ax = axes[row, col]
-            im = ax.imshow(_matrix(mat), cmap=cmap, vmin=lo, vmax=1.0)
+            m_ = _matrix(mat)
+            if col == 2:
+                np.fill_diagonal(m_, np.nan)          # the diagonal (1) would set the range
+            im = ax.imshow(m_, cmap=cmap, vmin=vmin, vmax=vmax)
             ax.set_xticks([]), ax.set_yticks([])
             ax.set_title(f"{label}, set {int(r[f'{m}_example_set']) + 1}: {who}", fontsize=10)
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
         axes[row, 1].set_xlabel(f"1 − r = {1 - np.corrcoef(sim, pred)[0, 1]:.2f},  "
                                 f"d = {abs(sim.mean() - pred.mean()):.2f}", color=INK2)
-        ax = axes[row, 2]
+        ax = axes[row, 3]
         cs, cp = r[f"{m}_example_cdf_true"], r[f"{m}_example_cdf_pred"]
         k = int(np.argmax(np.abs(cs - cp)))
         ax.plot(FCD_LEVELS, cs, color=BLUE, lw=2, label="simulated")
@@ -321,7 +325,8 @@ def reference_examples_figure(r: dict, out: Path):
         ax.set_xlabel("FCD value")
         ax.legend(frameon=False, fontsize=9, loc="upper left")
         style(ax, "both")
-    fig.suptitle("Reference models, the fitted set with the median prediction 1 − r",
+    fig.suptitle("Reference models, a typical fitted set (median simulated mean FC): simulation "
+                 "vs stage-1 prediction",
                  x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
     save(fig, out, "reference_examples.png")
