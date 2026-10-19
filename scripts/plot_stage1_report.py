@@ -242,9 +242,7 @@ GENERALISATION_RANGE = (0.0, 1.8)    # fixed, so the matrices of different model
 
 def generalisation_figure(path: Path, out: Path, model_label: str):
     """2 x 2 matrix: equations (seen in training / new) x connectome (seen / new). Each cell
-    is the mean over models of each model's total MSE on draws 100-109, with a 95% bootstrap
-    interval over models."""
-    from delssome_fm.train.evaluate import bootstrap_mean
+    is the mean over models of each model's total MSE on draws 100-109."""
     d = dict(np.load(path))
     rows, cols = ("seen", "unseen"), ("seen", "unseen")
     fig, ax = plt.subplots(figsize=(6.2, 4.6))
@@ -252,15 +250,10 @@ def generalisation_figure(path: Path, out: Path, model_label: str):
     vmin, vmax = GENERALISATION_RANGE
     means = np.array([[d[f"{r}_model_{c}_sc_total"].mean() for c in cols] for r in rows])
     im = ax.imshow(means, cmap=cmap, vmin=vmin, vmax=vmax)
-    for i, r in enumerate(rows):
-        for j, c in enumerate(cols):
-            x = d[f"{r}_model_{c}_sc_total"]
-            m, lo, hi = bootstrap_mean(x)
-            dark = (m - vmin) / (vmax - vmin) > 0.55
-            ax.text(j, i - 0.08, f"{m:.2f}", ha="center", va="center", fontsize=16,
-                    color="white" if dark else INK)
-            ax.text(j, i + 0.17, f"[{lo:.2f}, {hi:.2f}]\n{len(x)} models", ha="center",
-                    va="center", fontsize=9, color="white" if dark else INK2)
+    for (i, j), m in np.ndenumerate(means):
+        dark = (m - vmin) / (vmax - vmin) > 0.55
+        ax.text(j, i, f"{m:.2f}", ha="center", va="center", fontsize=16,
+                color="white" if dark else INK)
     ax.set_xticks([0, 1], ["seen in training", "new"])
     ax.set_yticks([0, 1], ["seen in training", "new"])
     ax.set_xlabel("connectome (SC group)")
@@ -272,7 +265,7 @@ def generalisation_figure(path: Path, out: Path, model_label: str):
     cb.set_label("total MSE, mean over models")
     cb.outline.set_visible(False)
     ax.set_title(f"Generalisation gap: new equations, not new connectomes\n({model_label})\n"
-                 "new parameter draws 100-109 in every cell; 95% bootstrap CI over models",
+                 "new parameter draws 100-109 in every cell",
                  loc="left", fontsize=10)
     fig.tight_layout()
     save(fig, out, "generalisation.png")
