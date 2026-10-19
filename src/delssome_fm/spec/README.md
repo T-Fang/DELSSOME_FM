@@ -126,7 +126,7 @@ Node features, `node_features(dag)` → (M, 21):
 
 This replaces architecture.md §1's "1 parameter index, 1 scope tag". Which `Par` node is which
 parameter is not a feature. It is `Dag.regional_par_nodes` / `global_par_nodes`, in Θ and Ψ
-order, which the encoder needs for the κ_p and λ_κ readouts.
+order, which the encoder needs for the κ_p and λ_k readouts.
 
 **Sharing.** Identical subexpressions are one node, so the "graph" is a DAG. The exception is
 `Const`: each occurrence gets its own node, so that unrelated subtrees are not joined through a

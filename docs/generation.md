@@ -179,7 +179,7 @@ Regional values are drawn i.i.d. per region. The known cost of dropping spatial 
 
 A selected candidate still gets a sampled nominal constant c, drawn from the constant prior above (log-uniform over 8 decades, sign from the slot). The card stores the slot as `scale × parameter` with scale = c. $\Theta$ and $\Psi$ then hold **dimensionless multipliers**:
 
-$$\Theta[i,p] \sim 10^{\,\mathcal{U}[-1,\,1]} \text{ i.i.d. over regions and draws}, \qquad \Psi[\kappa] \sim 10^{\,\mathcal{U}[-1,\,1]}$$
+$$\Theta[i,p] \sim 10^{\,\mathcal{U}[-1,\,1]} \text{ i.i.d. over regions and draws}, \qquad \Psi[k] \sim 10^{\,\mathcal{U}[-1,\,1]}$$
 
 so the effective coefficient is $c\,\Theta[i,p]$, within one decade of its nominal value. The magnitude reaches the encoder through the `Const` node's $\log_{10}|c|$ feature, and $\Theta$ stays $O(1)$ for the network.
 

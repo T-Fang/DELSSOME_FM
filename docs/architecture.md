@@ -27,7 +27,7 @@
 | $\text{FC}^{\text{emp}}$ | $N \times N$ | empirical functional connectivity |
 | $\text{FCD}^{\text{emp}}$ | 100 | empirical FCD, as a CDF at 100 fixed levels |
 
-Indices: $i, j$ over regions; $p$ over regional parameters; $\kappa$ over globals; $v$ over state variables; $m$ over DAG nodes.
+Indices: $i, j$ over regions; $p$ over regional parameters; $k$ over globals; $v$ over state variables; $m$ over DAG nodes.
 
 ---
 
@@ -42,7 +42,7 @@ Four readouts are extracted by node role:
 | Readout | Shape | Extracted from |
 |---|---|---|
 | $\kappa_p$ | $P \times d$ | the `Par` node for the $p$-th **regional** free parameter |
-| $\lambda_\kappa$ | $K \times d$ | the `Par` node for the $\kappa$-th **global** free parameter |
+| $\lambda_k$ | $K \times d$ | the `Par` node for the $k$-th **global** free parameter |
 | $u$ | $d$ | mean over the $V$ `Deriv` root nodes |
 | $o$ | $d$ | the single `Out` node |
 | $m_{\text{agg}}$ | $d$ | mean over the `Agg` nodes (1 or 2); zero if the model has none |
@@ -110,7 +110,7 @@ $m_{\text{agg}}$ does something the template tokens cannot: it puts a summary of
 
 ### 3.3 Globals and assembly
 
-$$s_\kappa = W^{\text{glob}}\,\Psi[\kappa] + \lambda_\kappa, \qquad g = \text{MLP}_g\Big(\tfrac{1}{K}\textstyle\sum_\kappa s_\kappa\Big) + z_M + u + o + m_{\text{agg}} \;\in\; \mathbb{R}^{d}$$
+$$s_k = W^{\text{glob}}\,\Psi[k] + \lambda_k, \qquad g = \text{MLP}_g\Big(\tfrac{1}{K}\textstyle\sum_k s_k\Big) + z_M + u + o + m_{\text{agg}} \;\in\; \mathbb{R}^{d}$$
 
 $$\boxed{\;\text{token}_i = \big[\,t^{\text{par}}_i \,\|\, t^{\text{SC}}_i\,\big] + g \;\in\; \mathbb{R}^{d}\;}$$
 

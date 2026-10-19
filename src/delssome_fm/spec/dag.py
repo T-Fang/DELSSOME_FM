@@ -13,7 +13,7 @@ structure and turns nodes into the M x 21 feature matrix X_dag of docs/architect
 This layout was fixed by the project lead on 2026-10-05; it replaces architecture.md §1's
 "1 parameter index, 1 scope tag" with parameter scope and variable scope. Which Par node is
 which parameter is not a feature: it is recorded in `Dag.regional_par_nodes` and
-`Dag.global_par_nodes`, which the encoder uses for the kappa_p and lambda_kappa readouts.
+`Dag.global_par_nodes`, which the encoder uses for the kappa_p and lambda_k readouts.
 """
 
 from __future__ import annotations
