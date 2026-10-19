@@ -27,7 +27,7 @@ from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
 from delssome_fm.train.costs import TERMS, cost_terms, raw_fc
 from delssome_fm.train.data import Stage1Batch
-from delssome_fm.train.losses import GROUPS, UncertaintyWeighting, group_losses
+from delssome_fm.train.losses import COST_GROUPS, GROUPS, UncertaintyWeighting, group_losses
 
 N_REGIONS = 68
 
@@ -54,7 +54,7 @@ class Stage1Module(L.LightningModule):
             max_distance=cfg.max_distance, max_degree=cfg.max_degree))
         self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset,
                                  cfg.pair_head, cfg.pair_hidden)
-        self.weighting = UncertaintyWeighting(GROUPS)
+        self.weighting = UncertaintyWeighting(GROUPS + (COST_GROUPS if cfg.cost_loss else ()))
         self.register_buffer("edges", upper_triangle(), persistent=False)
         self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError() for g in GROUPS})
         self.val_r2_pairwise = torchmetrics.R2Score()
@@ -65,10 +65,17 @@ class Stage1Module(L.LightningModule):
         return self.heads(out, self.edges[edge_index])
 
     def training_step(self, batch: Stage1Batch, batch_idx: int) -> torch.Tensor:
-        # a fresh random subset of FC edges each step (architecture.md §5.2)
-        edge_index = torch.randperm(len(self.edges), device=self.device)[:self.cfg.edges_per_step]
+        if self.cfg.cost_loss:
+            # 1 - r and d are defined on the whole FC upper triangle: predict every edge
+            edge_index = torch.arange(len(self.edges), device=self.device)
+        else:
+            # a fresh random subset of FC edges each step (architecture.md §5.2)
+            edge_index = torch.randperm(len(self.edges), device=self.device)[:self.cfg.edges_per_step]
         pred = self.predict_statistics(batch, edge_index)
         losses = group_losses(pred, batch.targets, edge_index)
+        if self.cfg.cost_loss:
+            costs = self.raw_costs(pred, batch, eps=1e-8)
+            losses.update({f"cost_{t}": costs[t].mean() for t in TERMS})
         total = self.weighting(losses)
         B = len(batch.theta)
         self.log_dict({f"train/{g}": v for g, v in losses.items()}, batch_size=B)
@@ -85,12 +92,12 @@ class Stage1Module(L.LightningModule):
                                     batch.targets["pairwise"].flatten())
         self._val_costs.append(self.raw_costs(pred, batch))
 
-    def raw_costs(self, pred, batch: Stage1Batch) -> dict[str, torch.Tensor]:
-        """Per row: the cost terms between prediction and simulation in raw units, and whether
-        the simulated draw is coupled (mean FC > coupled_threshold)."""
+    def raw_costs(self, pred, batch: Stage1Batch, eps: float = 0.0) -> dict[str, torch.Tensor]:
+        """Per row: the cost terms between prediction and simulation in raw units (all edges
+        predicted), and whether the simulated draw is coupled (mean FC > coupled_threshold)."""
         fc_pred = raw_fc(pred.pairwise, *self.pairwise_norm)
         fc_true = raw_fc(batch.targets["pairwise"], *self.pairwise_norm)
-        out = cost_terms(fc_pred, fc_true, pred.fcd.float(), batch.targets["fcd"].float())
+        out = cost_terms(fc_pred, fc_true, pred.fcd.float(), batch.targets["fcd"].float(), eps)
         out["coupled"] = fc_true.mean(1) > self.cfg.coupled_threshold
         return out
 

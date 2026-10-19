@@ -3,6 +3,10 @@ uncertainty weighting rather than hand-tuned weights,
 
     L = sum_g  L_g / (2 s_g^2) + log s_g,      s_g learned (as log s_g, for stability)
 
+With cost_loss (decided 2026-10-19), the DELSSOME cost terms between prediction and
+simulation (1 - r, d, KS in raw units over all edges, train/costs.py) join as three more
+groups, COST_GROUPS, each a mean over the batch's rows.
+
 Every training row is a usable draw (train/pack.py), so no per-statistic masking is needed.
 """
 
@@ -14,6 +18,7 @@ from torch import nn
 from delssome_fm.nn.heads import Stage1Prediction
 
 GROUPS: tuple[str, ...] = ("regional", "pairwise", "fcd", "fc_moments")
+COST_GROUPS: tuple[str, ...] = ("cost_corr", "cost_mean", "cost_ks")
 
 
 def group_losses(pred: Stage1Prediction, targets: dict[str, torch.Tensor],

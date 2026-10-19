@@ -25,7 +25,8 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
     return Stage1Config(
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
-        fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, max_distance=8,
+        fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, cost_loss=False,
+        max_distance=8,
         max_degree=8, train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
         coupled_threshold=0.05, batch_size=2, edges_per_step=64,
@@ -207,3 +208,20 @@ def test_two_step_lightning_run_logs_to_mlflow(tiny_store, tmp_path):
     per_model = per_model_errors(load_stage1(checkpoints / "last.ckpt"), cfg.store_dir, "val")
     assert len(per_model["total"]) == len(per_model["model"]) == len(per_model["mean_fc"]) > 0
     assert np.isfinite(per_model["total"]).all()
+
+
+@pytest.mark.parametrize("head,offset", HEADS)
+def test_cost_loss_trains_with_finite_gradients(setup, tmp_path, head, offset):
+    """With cost_loss, the step adds 1 - r, d and KS on all edges; a flat initial FC must
+    not make the correlation's gradient NaN."""
+    store, batch, _ = setup
+    cfg = dataclasses.replace(tiny_config(tmp_path, tmp_path), pair_head=head, fc_offset=offset,
+                              cost_loss=True)
+    torch.manual_seed(0)
+    module = Stage1Module(cfg, store.n_fcd_levels, (0.4, 1.3)).train()
+    module.log = module.log_dict = lambda *a, **k: None          # no trainer attached
+    loss = module.training_step(batch, 0)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(torch.isfinite(p.grad).all() for p in module.parameters() if p.grad is not None)
+    assert len(module.weighting.groups) == 7

@@ -36,6 +36,7 @@ LEGACY_DEFAULTS = {
     "pair_head": "bilinear",         # added 2026-10-19: the only head before
     "pair_hidden": 128,              # unused by the bilinear head
     "final_eval_rows": 200_000,      # added 2026-10-19; evaluation only
+    "cost_loss": False,              # added 2026-10-19
 }
 
 

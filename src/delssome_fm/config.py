@@ -144,6 +144,7 @@ class Stage1Config:
     fc_offset: bool               # add a per-draw offset b(h_CLS) to the FC head (nn/heads.py)
     pair_head: str                # FC head: bilinear | mlp_symmetric | mlp_concat (nn/heads.py)
     pair_hidden: int              # hidden width of the MLP pair heads
+    cost_loss: bool               # add 1 - r, d and KS (raw units, all edges) to the loss
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
     # training data (the scaling sweep of architecture.md §7.2 varies these)

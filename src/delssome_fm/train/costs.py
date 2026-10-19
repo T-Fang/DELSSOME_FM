@@ -22,10 +22,11 @@ def raw_fc(z: torch.Tensor, mean: float, sd: float) -> torch.Tensor:
 
 
 def cost_terms(fc_a: torch.Tensor, fc_b: torch.Tensor, cdf_a: torch.Tensor,
-               cdf_b: torch.Tensor) -> dict[str, torch.Tensor]:
-    """fc (R, E) raw FC upper triangles, cdf (R, L) CDFs -> each term, (R,)."""
+               cdf_b: torch.Tensor, eps: float = 0.0) -> dict[str, torch.Tensor]:
+    """fc (R, E) raw FC upper triangles, cdf (R, L) CDFs -> each term, (R,). eps > 0 keeps
+    1 - r and its gradient finite for a flat FC (used when the terms are a training loss)."""
     a = fc_a - fc_a.mean(1, keepdim=True)
     b = fc_b - fc_b.mean(1, keepdim=True)
-    r = (a * b).sum(1) / torch.sqrt((a ** 2).sum(1) * (b ** 2).sum(1))
+    r = (a * b).sum(1) / torch.sqrt((a ** 2).sum(1) * (b ** 2).sum(1) + eps)
     return {"corr": 1 - r, "mean": (fc_a.mean(1) - fc_b.mean(1)).abs(),
             "ks": (cdf_a - cdf_b).abs().amax(1)}
