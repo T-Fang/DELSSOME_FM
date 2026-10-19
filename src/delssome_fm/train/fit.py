@@ -65,7 +65,9 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
         log_every_n_steps=cfg.log_every_steps,
         callbacks=[best, LearningRateMonitor(logging_interval="step")])
     trainer.fit(module, datamodule=data)
-    device = module.device
+    # Lightning moves the module back to the CPU when fit ends, so module.device is no longer
+    # the training device: choose the GPU explicitly (else this runs on 1 CPU thread for hours)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     final_evaluation(load_stage1(Path(best.best_model_path)).to(device), data, logger, checkpoints)
     return checkpoints
 
