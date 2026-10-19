@@ -17,7 +17,7 @@ import numpy as np
 RUNS = {
     "stage1_v1": ("100k models × ~80 draws, bilinear head", "outputs/report/stage1_v1/comparison.npz"),
     "d10_n300k_natural": ("300k models × 10 draws, bilinear head",
-                          "outputs/reference_eval/comparison_d10_n300k_natural.npz"),
+                          "outputs/report/d10_n300k_natural/comparison.npz"),
     "d10_n300k_costloss": ("300k × 10, bilinear head + cost loss",
                            "outputs/report/d10_n300k_costloss/comparison.npz"),
     "d10_n300k_mlp_sym": ("300k × 10, pair-MLP head (symmetric)",

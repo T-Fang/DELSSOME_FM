@@ -106,7 +106,7 @@ def scaling_figure(scaling: dict, out: Path):
     save(fig, out, "scaling.png")
 
 
-def cost_terms_figure(d: dict, out: Path, label: str, note: str):
+def cost_terms_figure(d: dict, out: Path, model_label: str, note: str):
     coupled = d["best_true_mean_fc"] > 0.05
     terms = [("corr", "1 − r  (FC pattern)"), ("mean", "d = |Δ mean FC|"), ("ks", "KS (FCD CDF)")]
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
@@ -134,7 +134,7 @@ def cost_terms_figure(d: dict, out: Path, label: str, note: str):
                     plt.Rectangle((0, 0), 1, 1, fc=MUTED, alpha=0.35, ec=MUTED)],
                    ["stage-1 prediction", "training-average reference"], frameon=False,
                    fontsize=9, loc="lower left")
-    fig.suptitle(f"{label} vs numerical simulation, held-out test models: the original DELSSOME "
+    fig.suptitle(f"{model_label} vs numerical simulation, held-out test models: the original DELSSOME "
                  "cost terms", x=0.01, ha="left", color=INK, fontsize=12)
     fig.text(0.01, -0.03, "Uncoupled draws' simulated FC is mostly sampling noise, so 1 − r ≈ 1 for "
              "any predictor." + (f" {note}" if note else ""), color=INK2, fontsize=9)
@@ -149,7 +149,7 @@ def _matrix(upper: np.ndarray, n: int = 68) -> np.ndarray:
     return m
 
 
-def fc_examples_figure(d: dict, out: Path, label: str):
+def fc_examples_figure(d: dict, out: Path, model_label: str):
     cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
     labels = ["coupled, good (10th pct of 1 − r)", "coupled, typical (median)",
               "coupled, poor (90th pct)", "uncoupled, typical"]   # coupled: 0.05 < mean FC < 0.9
@@ -167,14 +167,14 @@ def fc_examples_figure(d: dict, out: Path, label: str):
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
         axes[1, col].set_xlabel(f"1 − r = {1 - r:.2f},  d = {abs(sim.mean() - pred.mean()):.2f}",
                                 color=INK2)
-    fig.suptitle(f"FC: numerical simulation (top) vs {label} (bottom), held-out test "
+    fig.suptitle(f"FC: numerical simulation (top) vs {model_label} (bottom), held-out test "
                  "draws (coupled: 0.05 < mean FC < 0.9); colour range shared per column",
                  x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
     save(fig, out, "fc_examples.png")
 
 
-def fcd_examples_figure(d: dict, out: Path, label: str):
+def fcd_examples_figure(d: dict, out: Path, model_label: str):
     labels = ["coupled, good", "coupled, typical", "coupled, poor", "uncoupled, typical"]
     fig, axes = plt.subplots(1, 4, figsize=(16, 3.9), sharey=True)
     for col, (ax, label) in enumerate(zip(axes, labels)):
@@ -192,7 +192,7 @@ def fcd_examples_figure(d: dict, out: Path, label: str):
         style(ax, "both")
     axes[0].set_ylabel("CDF")
     axes[0].legend(frameon=False, fontsize=9, loc="upper left")
-    fig.suptitle(f"FCD CDF: numerical simulation vs {label} (same draws as the FC "
+    fig.suptitle(f"FCD CDF: numerical simulation vs {model_label} (same draws as the FC "
                  "figure); the black bar marks the KS distance", x=0.01, ha="left", color=INK,
                  fontsize=12)
     fig.tight_layout()
@@ -258,7 +258,7 @@ def generalisation_figure(path: Path, out: Path):
 REFERENCE_MODELS = [("mfm", "MFM"), ("fic", "FIC"), ("hopf", "Hopf")]
 
 
-def reference_cost_figure(r: dict, out: Path, label: str):
+def reference_cost_figure(r: dict, out: Path, model_label: str):
     """Per reference model: prediction vs simulation, the noise floor (simulation vs simulation)
     and the training average, on the model's fitted test sets."""
     terms = [("corr", "1 − r  (FC pattern)"), ("mean", "d = |Δ mean FC|"), ("ks", "KS (FCD CDF)")]
@@ -283,13 +283,13 @@ def reference_cost_figure(r: dict, out: Path, label: str):
         style(ax)
     axes[0].legend([plt.Rectangle((0, 0), 1, 1, fc=c, alpha=0.3, ec=c) for _, c, _ in kinds],
                    [l for _, _, l in kinds], frameon=False, fontsize=9, loc="upper left")
-    fig.suptitle(f"Reference models at their published test fits: {label} vs numerical "
+    fig.suptitle(f"Reference models at their published test fits: {model_label} vs numerical "
                  "simulation (corpus protocol)", x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
     save(fig, out, "reference_cost_terms.png")
 
 
-def reference_examples_figure(r: dict, out: Path, label: str):
+def reference_examples_figure(r: dict, out: Path, model_label: str):
     """Per reference model, a typical fitted set (median simulated mean FC): FC simulated and
     predicted on a shared colour range, the prediction on its own range (its pattern), and the
     FCD CDFs with the KS gap."""
@@ -325,7 +325,7 @@ def reference_examples_figure(r: dict, out: Path, label: str):
         ax.legend(frameon=False, fontsize=9, loc="upper left")
         style(ax, "both")
     fig.suptitle(f"Reference models, a typical fitted set (median simulated mean FC): simulation "
-                 f"vs {label}",
+                 f"vs {model_label}",
                  x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
     save(fig, out, "reference_examples.png")
