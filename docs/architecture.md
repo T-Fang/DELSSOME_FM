@@ -318,6 +318,33 @@ MFM, FIC and Hopf at their 50 published test fits (`sim/reference_eval.py`, `con
 
 - **The predicted FC is nearly constant** (≈ 0.39, i.e. z ≈ 0): its range within a set is 0.03 for MFM, 0.003 for Hopf and 0.0004 for FIC. Its pattern still correlates with the simulation for MFM and Hopf. With the FC offset (100k-model runs), FIC's 1 − r drops to 0.44, but the other terms are mixed. Every variant stays far above the noise floor, which is what stage 2 is for.
 
+### 7.5 FC heads and the cost loss (2026-10-19)
+
+Same setup (300k models × 10 draws, 200k steps). Each run is evaluated on the same 200k test rows (`final/test/*`, the final evaluation of `train/fit.py`); the cost terms are medians between prediction and simulation, in raw units (`scripts/comparison_table.py`).
+
+#### Held-out test models (synthetic; medians of cost terms over draws)
+
+| model | MSE total | R² FC | 1−r coupled | d coupled | KS coupled | d uncoupled | KS uncoupled |
+|---|---|---|---|---|---|---|---|
+| 100k models × ~80 draws, bilinear head | 1.266 | 0.575 | 0.728 | 0.199 | 0.287 | 0.386 | 0.046 |
+| 300k models × 10 draws, bilinear head | 1.083 | 0.631 | 0.724 | 0.190 | 0.286 | 0.386 | 0.050 |
+| 300k × 10, bilinear head + cost loss | 1.076 | 0.628 | 0.549 | 0.183 | 0.261 | 0.386 | 0.040 |
+| 300k × 10, pair-MLP head (symmetric) | 1.033 | 0.679 | 0.555 | 0.053 | 0.287 | 0.004 | 0.047 |
+| 300k × 10, pair-MLP head (concat) | 1.009 | 0.690 | 0.590 | 0.045 | 0.271 | 0.005 | 0.044 |
+
+#### Reference models at their published test fits (medians over sets)
+
+| model | MFM 1−r | MFM d | MFM KS | FIC 1−r | FIC d | FIC KS | Hopf 1−r | Hopf d | Hopf KS |
+|---|---|---|---|---|---|---|---|---|---|
+| 100k models × ~80 draws, bilinear head | 0.423 | 0.161 | 0.894 | 1.042 | 0.131 | 0.897 | 0.291 | 0.084 | 0.631 |
+| 300k models × 10 draws, bilinear head | 0.323 | 0.168 | 0.337 | 0.992 | 0.130 | 0.888 | 0.181 | 0.085 | 0.530 |
+| 300k × 10, bilinear head + cost loss | 0.401 | 0.164 | 0.355 | 0.522 | 0.130 | 0.874 | 0.238 | 0.087 | 0.318 |
+| 300k × 10, pair-MLP head (symmetric) | 0.500 | 0.097 | 0.521 | 1.159 | 0.495 | 0.899 | 0.378 | 0.252 | 0.750 |
+| 300k × 10, pair-MLP head (concat) | 0.365 | 0.147 | 0.563 | 0.453 | 0.485 | 0.901 | 0.192 | 0.261 | 0.705 |
+| a 2nd simulation of the same parameters | 0.077 | 0.011 | 0.092 | 0.058 | 0.029 | 0.139 | 0.048 | 0.030 | 0.156 |
+
+**Synthetic test models.** The pair-MLP heads beat the bilinear head on every term. `mlp_concat` is best overall, and both remove the FC-level bias (*d* on uncoupled draws from 0.39 to 0.005). The cost loss improves 1 − r and KS but keeps the bilinear head's *d* bias. **Reference models.** None of the gains carries over consistently. The MLP heads predict FIC's FC level near 0 (*d* 0.49), and the cost loss is best on Hopf KS and FIC 1 − r. All runs remain far above the noise floor: zero-shot transfer to the real models is the open problem.
+
 **Primary metric.** Target-model simulations needed to reach a given optimization regret, pretrained versus from scratch. Secondary: top-$k$ candidate recall under CMA-ES. Cost MSE is diagnostic only — a surrogate with low MSE that misorders the top candidates is useless to the optimizer.
 
 ---
