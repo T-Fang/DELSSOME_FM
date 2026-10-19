@@ -26,7 +26,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--rows", type=int, default=20_000, help="test rows and training-average rows")
+    p.add_argument("--rows", type=int, default=20_000,
+                   help="training rows averaged for the reference prediction (the test rows are "
+                        "those of the final evaluation)")
     p.add_argument("--reference-config", type=Path, default=Path("configs/reference_eval.yaml"))
     args = p.parse_args()
 

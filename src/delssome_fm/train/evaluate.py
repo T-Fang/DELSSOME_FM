@@ -40,6 +40,16 @@ LEGACY_DEFAULTS = {
 }
 
 
+def evaluation_rows(pool: np.ndarray, cfg: Stage1Config) -> np.ndarray:
+    """The rows of `pool` that a run is evaluated on after training: a subset of
+    cfg.final_eval_rows drawn with the run's seed, sorted. The final evaluation and the report
+    figures both use it, so their numbers come from the same rows; for val and test the pool
+    is the whole split, so every run with the same seed sees the same rows."""
+    pool = np.asarray(pool)
+    rng = np.random.default_rng(cfg.seed)
+    return np.sort(rng.choice(pool, min(cfg.final_eval_rows, len(pool)), replace=False))
+
+
 def load_stage1(checkpoint: Path) -> Stage1Module:
     """The Stage1Module of a Lightning checkpoint, rebuilt from the config it recorded."""
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)

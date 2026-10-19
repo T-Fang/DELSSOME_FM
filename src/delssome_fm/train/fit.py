@@ -27,7 +27,8 @@ from lightning.pytorch.loggers import MLFlowLogger
 
 from delssome_fm.config import Stage1Config, to_yaml
 from delssome_fm.train.data import Composition, Stage1DataModule, TrainingStore
-from delssome_fm.train.evaluate import load_stage1, per_model, row_metrics, summarise_rows
+from delssome_fm.train.evaluate import (evaluation_rows, load_stage1, per_model, row_metrics,
+                                       summarise_rows)
 from delssome_fm.train.report import predict_fc_fcd
 from delssome_fm.train.stage1 import Stage1Module
 
@@ -81,9 +82,7 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
               "test": (TrainingStore(cfg.store_dir, "test"), None)}
     summary, arrays = {}, {}
     for split, (store, candidates) in splits.items():
-        pool = np.arange(len(store)) if candidates is None else np.asarray(candidates)
-        rng = np.random.default_rng(cfg.seed)
-        rows = np.sort(rng.choice(pool, min(cfg.final_eval_rows, len(pool)), replace=False))
+        rows = evaluation_rows(np.arange(len(store)) if candidates is None else candidates, cfg)
         r = row_metrics(module, store, rows, num_workers=cfg.num_workers)
         summary[split] = summarise_rows(r)
         logger.log_metrics({f"final/{split}/{k}": v for k, v in summary[split].items()})

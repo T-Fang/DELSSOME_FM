@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 
 from delssome_fm.train import costs
 from delssome_fm.train.data import Composition, TrainingStore, subset_rows
+from delssome_fm.train.evaluate import evaluation_rows
 from delssome_fm.train.stage1 import Stage1Module
 
 
@@ -119,18 +120,20 @@ def reference_comparison(module: Stage1Module, store_dir: Path, name: str,
     return out
 
 
-def prediction_vs_simulation(module: Stage1Module, split: str, max_rows: int, seed: int = 0,
-                             coupled_threshold: float = 0.05) -> dict[str, np.ndarray]:
-    """Cost terms between the model's predictions and the simulations on `split`, and between
-    a reference prediction (the average FC and CDF of the training rows) and the simulations.
+def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: int,
+                             seed: int = 0, coupled_threshold: float = 0.05,
+                             ) -> dict[str, np.ndarray]:
+    """Cost terms between the model's predictions and the simulations on `split`, on the rows
+    of the final evaluation (evaluate.evaluation_rows, so they match final/<split>/*), and
+    between a reference prediction (the average FC and CDF of `reference_rows` training rows)
+    and the simulations.
     Also keeps four examples: draws in the realistic coupled range (coupled_threshold < mean
     FC < 0.9; above it FC is near-uniform synchronisation) at the 10th, 50th and 90th
     percentile of the model's 1 - r, and the median uncoupled draw."""
     store = TrainingStore(module.cfg.store_dir, split)
-    rows = np.sort(np.random.default_rng(seed).choice(len(store), min(max_rows, len(store)),
-                                                      replace=False))
+    rows = evaluation_rows(np.arange(len(store)), module.cfg)
     p = predict_fc_fcd(module, store, rows)
-    fc_avg, cdf_avg = training_average(module, max_rows, seed)
+    fc_avg, cdf_avg = training_average(module, reference_rows, seed)
     fc_ref = np.broadcast_to(fc_avg, p["fc_true"].shape)
     cdf_ref = np.broadcast_to(cdf_avg, p["cdf_true"].shape)
     model = cost_terms(p["fc_pred"], p["fc_true"], p["cdf_pred"], p["cdf_true"])
