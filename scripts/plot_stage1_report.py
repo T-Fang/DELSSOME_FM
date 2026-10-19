@@ -9,7 +9,8 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     fc_examples.png     simulated vs predicted FC for four test draws
     fcd_examples.png    simulated vs predicted FCD CDF for the same draws, with the KS gap
     composition.png     per-model error vs the share of coupled models in training
-    generalisation.png  the 2 x 2 diagnostic: seen/unseen model x seen/unseen SC
+    generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
+                        (from scripts/generalisation_report_data.py)
     reference_cost_terms.png, reference_examples.png
                         MFM, FIC, Hopf at their published test fits: prediction vs simulation
                         (from scripts/reference_eval_compare.py; skipped if not yet run)
@@ -27,7 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.io as spio
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 
 REPO = Path(__file__).resolve().parents[1]
 # reference palette (dataviz skill, light mode): categorical slots 1-3, ink, chrome
@@ -234,23 +235,45 @@ def composition_figure(d: dict, out: Path):
     save(fig, out, "composition.png")
 
 
-def generalisation_figure(path: Path, out: Path):
-    rows = {r["split"]: r for r in json.loads(path.read_text())}
-    cells = [("seen_model_seen_sc", "seen model\nseen SC"), ("seen_model_unseen_sc", "seen model\nunseen SC"),
-             ("unseen_model_seen_sc", "unseen model\nseen SC"), ("unseen_model_unseen_sc", "unseen model\nunseen SC")]
-    fig, ax = plt.subplots(figsize=(7, 4.2))
-    vals = [rows[c]["total"] for c, _ in cells]
-    colors = [BLUE, BLUE, ORANGE, ORANGE]
-    ax.bar(range(4), vals, color=colors, width=0.6)
-    for i, v in enumerate(vals):
-        ax.annotate(f"{v:.2f}", (i, v), xytext=(0, 3), textcoords="offset points", ha="center",
-                    fontsize=9, color=INK2)
-    ax.set_xticks(range(4), [l for _, l in cells])
-    ax.set_ylabel("total MSE (new parameter draws)")
-    ax.set_title("Where the train/val gap comes from: new equations, not new SC\n"
-                 "(stage1_v1, 100k models; 500 models per cell, draws never trained on)",
+# sequential blue ramp (dataviz reference palette), light -> dark
+BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6aa5ec", "#3d86e0", "#2a78d6", "#1f62b5", "#184f95"]
+GENERALISATION_RANGE = (0.0, 1.8)    # fixed, so the matrices of different models compare
+
+
+def generalisation_figure(path: Path, out: Path, model_label: str):
+    """2 x 2 matrix: equations (seen in training / new) x connectome (seen / new). Each cell
+    is the mean over models of each model's total MSE on draws 100-109, with a 95% bootstrap
+    interval over models."""
+    from delssome_fm.train.evaluate import bootstrap_mean
+    d = dict(np.load(path))
+    rows, cols = ("seen", "unseen"), ("seen", "unseen")
+    fig, ax = plt.subplots(figsize=(6.2, 4.6))
+    cmap = LinearSegmentedColormap.from_list("blue", BLUE_RAMP)
+    vmin, vmax = GENERALISATION_RANGE
+    means = np.array([[d[f"{r}_model_{c}_sc_total"].mean() for c in cols] for r in rows])
+    im = ax.imshow(means, cmap=cmap, vmin=vmin, vmax=vmax)
+    for i, r in enumerate(rows):
+        for j, c in enumerate(cols):
+            x = d[f"{r}_model_{c}_sc_total"]
+            m, lo, hi = bootstrap_mean(x)
+            dark = (m - vmin) / (vmax - vmin) > 0.55
+            ax.text(j, i - 0.08, f"{m:.2f}", ha="center", va="center", fontsize=16,
+                    color="white" if dark else INK)
+            ax.text(j, i + 0.17, f"[{lo:.2f}, {hi:.2f}]\n{len(x)} models", ha="center",
+                    va="center", fontsize=9, color="white" if dark else INK2)
+    ax.set_xticks([0, 1], ["seen in training", "new"])
+    ax.set_yticks([0, 1], ["seen in training", "new"])
+    ax.set_xlabel("connectome (SC group)")
+    ax.set_ylabel("model equations")
+    ax.tick_params(length=0)
+    for s in ax.spines.values():
+        s.set_visible(False)
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label("total MSE, mean over models")
+    cb.outline.set_visible(False)
+    ax.set_title(f"Generalisation gap: new equations, not new connectomes\n({model_label})\n"
+                 "new parameter draws 100-109 in every cell; 95% bootstrap CI over models",
                  loc="left", fontsize=10)
-    style(ax)
     fig.tight_layout()
     save(fig, out, "generalisation.png")
 
@@ -335,7 +358,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--data", type=Path, default=Path("outputs/report"))
     p.add_argument("--generalisation", type=Path, default=None,
-                   help="the 2 x 2 diagnostic's results, e.g. outputs/generalisation/eval_stage1_v1.json")
+                   help="scripts/generalisation_report_data.py output, e.g. "
+                   "outputs/report/generalisation_stage1_v1.npz")
+    p.add_argument("--generalisation-label", default=None,
+                   help="how the generalisation figure names its model (default: --label)")
     p.add_argument("--label", default="best stage-1 model (300k models)",
                    help="how titles name the model")
     p.add_argument("--note", default="d is biased for the bilinear head without the FC offset "
@@ -359,7 +385,7 @@ def main():
     if "comp_d10_n150k_c36_total" in d:
         composition_figure(d, out)
     if args.generalisation is not None:
-        generalisation_figure(args.generalisation, out)
+        generalisation_figure(args.generalisation, out, args.generalisation_label or args.label)
     if args.reference.is_file():
         r = dict(np.load(args.reference))
         reference_cost_figure(r, out, args.label)
