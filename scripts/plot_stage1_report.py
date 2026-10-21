@@ -2,12 +2,15 @@
 generalisation diagnostic. Writes PNGs to <data>/figures/:
 
     scaling.png         total MSE vs number of training models (train / val / test; val as
-                        logged in MLflow at the best step, 50k rows), and
-                        pairwise R^2; 10 draws per model vs all draws
+                        logged in MLflow at the best step, 50k rows), pairwise R^2, and
+                        train and val MSE for 10 draws per model vs all draws
     cost_terms.png      1 - r, d and KS between the best model's prediction and the numerical
                         simulation, test draws, by regime; vs a training-average reference
     fc_examples.png     simulated vs predicted FC for four test draws
     fcd_examples.png    simulated vs predicted FCD CDF for the same draws, with the KS gap
+    cost_terms_train.png, fc_examples_train.png, fcd_examples_train.png
+                        the same on rows the model trained on (from report_data_train.npz,
+                        scripts/model_report_data.py --split train; skipped if absent)
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
                         (from scripts/generalisation_report_data.py)
@@ -90,10 +93,12 @@ def scaling_figure(scaling: dict, out: Path):
     ax = axes[2]
     for series, color, label in ((ten, ORANGE, "10 draws per model"),
                                  (allr, BLUE, "all draws (~80 per model)")):
-        ax.plot([n for n, _ in series], [v["val"]["total"] for _, v in series], "-o",
-                color=color, lw=2, ms=7, label=label, mec=SURFACE, mew=1.5)
-    ax.set_title("Val MSE: models vs draws per model", loc="left")
-    ax.set_ylabel("val total MSE")
+        for split, ls, marker in (("val", "-", "o"), ("train", "--", "s")):
+            ax.plot([n for n, _ in series], [v[split]["total"] for _, v in series], ls,
+                    marker=marker, color=color, lw=2, ms=7, label=f"{split}, {label}",
+                    mec=SURFACE, mew=1.5)
+    ax.set_title("Train and val MSE: models vs draws per model", loc="left")
+    ax.set_ylabel("total MSE (train: the model's own training rows)")
     for ax in axes:
         style(ax)
         ax.set_xscale("log")
@@ -101,13 +106,19 @@ def scaling_figure(scaling: dict, out: Path):
         ax.minorticks_off()
         ax.set_xlabel("training models")
         ax.legend(frameon=False, fontsize=9)
+    axes[2].legend(frameon=False, fontsize=9, loc="lower left", bbox_to_anchor=(0, 0.2))
     fig.suptitle("Stage 1 scaling: more distinct models helps; more draws per model barely does",
                  x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
     save(fig, out, "scaling.png")
 
 
-def cost_terms_figure(d: dict, out: Path, model_label: str, note: str):
+# split -> (how titles name the draws, file-name suffix)
+SPLITS = {"test": ("held-out test draws", ""),
+          "train": ("training draws (rows the model trained on)", "_train")}
+
+
+def cost_terms_figure(d: dict, out: Path, model_label: str, note: str, split: str = "test"):
     coupled = d["best_true_mean_fc"] > 0.05
     terms = [("corr", "1 − r  (FC pattern)"), ("mean", "d = |Δ mean FC|"), ("ks", "KS (FCD CDF)")]
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
@@ -135,12 +146,12 @@ def cost_terms_figure(d: dict, out: Path, model_label: str, note: str):
                     plt.Rectangle((0, 0), 1, 1, fc=MUTED, alpha=0.35, ec=MUTED)],
                    ["stage-1 prediction", "training-average reference"], frameon=False,
                    fontsize=9, loc="lower left")
-    fig.suptitle(f"{model_label} vs numerical simulation, held-out test models: the original DELSSOME "
-                 "cost terms", x=0.01, ha="left", color=INK, fontsize=12)
+    fig.suptitle(f"{model_label} vs numerical simulation, {SPLITS[split][0]}: the original "
+                 "DELSSOME cost terms", x=0.01, ha="left", color=INK, fontsize=12)
     fig.text(0.01, -0.03, "Uncoupled draws' simulated FC is mostly sampling noise, so 1 − r ≈ 1 for "
              "any predictor." + (f" {note}" if note else ""), color=INK2, fontsize=9)
     fig.tight_layout()
-    save(fig, out, "cost_terms.png")
+    save(fig, out, f"cost_terms{SPLITS[split][1]}.png")
 
 
 def _matrix(upper: np.ndarray, n: int = 68) -> np.ndarray:
@@ -150,7 +161,7 @@ def _matrix(upper: np.ndarray, n: int = 68) -> np.ndarray:
     return m
 
 
-def fc_examples_figure(d: dict, out: Path, model_label: str):
+def fc_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"):
     cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
     labels = ["coupled, good (10th pct of 1 − r)", "coupled, typical (median)",
               "coupled, poor (90th pct)", "uncoupled, typical"]   # coupled: 0.05 < mean FC < 0.9
@@ -168,14 +179,15 @@ def fc_examples_figure(d: dict, out: Path, model_label: str):
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
         axes[1, col].set_xlabel(f"1 − r = {1 - r:.2f},  d = {abs(sim.mean() - pred.mean()):.2f}",
                                 color=INK2)
-    fig.suptitle(f"FC: numerical simulation (top) vs {model_label} (bottom), held-out test "
-                 "draws (coupled: 0.05 < mean FC < 0.9); colour range shared per column",
+    fig.suptitle(f"FC: numerical simulation (top) vs {model_label} (bottom), {SPLITS[split][0]}"
+                 "\n(coupled: 0.05 < mean FC < 0.9; percentiles of 1 − r among those draws); "
+                 "colour range shared per column",
                  x=0.01, ha="left", color=INK, fontsize=12)
     fig.tight_layout()
-    save(fig, out, "fc_examples.png")
+    save(fig, out, f"fc_examples{SPLITS[split][1]}.png")
 
 
-def fcd_examples_figure(d: dict, out: Path, model_label: str):
+def fcd_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"):
     labels = ["coupled, good", "coupled, typical", "coupled, poor", "uncoupled, typical"]
     fig, axes = plt.subplots(1, 4, figsize=(16, 3.9), sharey=True)
     for col, (ax, label) in enumerate(zip(axes, labels)):
@@ -193,11 +205,11 @@ def fcd_examples_figure(d: dict, out: Path, model_label: str):
         style(ax, "both")
     axes[0].set_ylabel("CDF")
     axes[0].legend(frameon=False, fontsize=9, loc="upper left")
-    fig.suptitle(f"FCD CDF: numerical simulation vs {model_label} (same draws as the FC "
-                 "figure); the black bar marks the KS distance", x=0.01, ha="left", color=INK,
+    fig.suptitle(f"FCD CDF: numerical simulation vs {model_label}, {SPLITS[split][0]} (same "
+                 "draws as the FC figure); the black bar marks the KS distance", x=0.01, ha="left", color=INK,
                  fontsize=12)
     fig.tight_layout()
-    save(fig, out, "fcd_examples.png")
+    save(fig, out, f"fcd_examples{SPLITS[split][1]}.png")
 
 
 def composition_figure(d: dict, out: Path):
@@ -375,6 +387,11 @@ def main():
     cost_terms_figure(d, out, args.label, args.note)
     fc_examples_figure(d, out, args.label)
     fcd_examples_figure(d, out, args.label)
+    if (args.data / "report_data_train.npz").is_file():
+        t = dict(np.load(args.data / "report_data_train.npz"))
+        cost_terms_figure(t, out, args.label, args.note, "train")
+        fc_examples_figure(t, out, args.label, "train")
+        fcd_examples_figure(t, out, args.label, "train")
     if "comp_d10_n150k_c36_total" in d:
         composition_figure(d, out)
     if args.generalisation is not None:
