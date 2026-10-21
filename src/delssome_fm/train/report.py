@@ -124,14 +124,16 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
                              seed: int = 0, coupled_threshold: float = 0.05,
                              ) -> dict[str, np.ndarray]:
     """Cost terms between the model's predictions and the simulations on `split`, on the rows
-    of the final evaluation (evaluate.evaluation_rows, so they match final/<split>/*), and
+    of the final evaluation (evaluate.evaluation_rows, so they match final/<split>/*; for
+    "train", drawn from the rows the module trained on), and
     between a reference prediction (the average FC and CDF of `reference_rows` training rows)
     and the simulations.
     Also keeps four examples: draws in the realistic coupled range (coupled_threshold < mean
     FC < 0.9; above it FC is near-uniform synchronisation) at the 10th, 50th and 90th
     percentile of the model's 1 - r, and the median uncoupled draw."""
     store = TrainingStore(module.cfg.store_dir, split)
-    rows = evaluation_rows(np.arange(len(store)), module.cfg)
+    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    rows = evaluation_rows(pool, module.cfg)
     p = predict_fc_fcd(module, store, rows)
     fc_avg, cdf_avg = training_average(module, reference_rows, seed)
     fc_ref = np.broadcast_to(fc_avg, p["fc_true"].shape)

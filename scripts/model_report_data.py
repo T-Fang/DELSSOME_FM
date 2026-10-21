@@ -2,12 +2,15 @@
 simulations on test draws, with the training-average reference and examples
 (train/report.prediction_vs_simulation), and the reference-model comparison
 (train/report.reference_comparison). Writes <out>/report_data.npz and <out>/comparison.npz,
-which scripts/plot_stage1_report.py draws:
+which scripts/plot_stage1_report.py draws. With --split train it writes only
+<out>/report_data_train.npz: the same cost terms and examples on rows the model trained on.
 
     python scripts/model_report_data.py --checkpoint outputs/stage1/d10_n300k_mlp_cat/step150000.ckpt \\
         --out outputs/report/d10_n300k_mlp_cat
     python scripts/plot_stage1_report.py --data outputs/report/d10_n300k_mlp_cat \\
         --reference outputs/report/d10_n300k_mlp_cat/comparison.npz --label "pair-MLP head (concat)"
+
+The final evaluation's 200k rows take ~30 min on 16 CPU threads (a GPU job is faster).
 """
 
 import argparse
@@ -29,14 +32,19 @@ def main() -> None:
     p.add_argument("--rows", type=int, default=20_000,
                    help="training rows averaged for the reference prediction (the test rows are "
                         "those of the final evaluation)")
+    p.add_argument("--split", choices=("test", "train"), default="test")
     p.add_argument("--reference-config", type=Path, default=Path("configs/reference_eval.yaml"))
     args = p.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     module = load_stage1(args.checkpoint).to(device)
-    test = prediction_vs_simulation(module, "test", args.rows)
-    np.savez(args.out / "report_data.npz", **{f"best_{k}": v for k, v in test.items()})
+    result = prediction_vs_simulation(module, args.split, args.rows)
+    name = "report_data.npz" if args.split == "test" else "report_data_train.npz"
+    np.savez(args.out / name, **{f"best_{k}": v for k, v in result.items()})
+    if args.split == "train":
+        print(f"wrote {args.out / name}")
+        return
     ref_cfg = load_config(args.reference_config, ReferenceEvalConfig)
     fc_avg, cdf_avg = training_average(module, args.rows)
     arrays = {}
