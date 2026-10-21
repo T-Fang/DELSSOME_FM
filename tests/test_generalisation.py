@@ -12,7 +12,8 @@ from delssome_fm.sim.generalisation import CELLS, cell_sc_group, simulate_cell
 def _cfgs(tmp_path):
     corpus = CorpusConfig(seed=11, n_param_sets=3, first_draw=0, batch_size=100, screen_draws=2,
                           screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
-                          initial_state_scale=0.1, fcd_store_stride=10, output_dir=tmp_path)
+                          initial_state_scale=0.1, fcd_store_stride=10,
+                          parameter_policy="multiplier", output_dir=tmp_path)
     gen = GeneralisationConfig(output_dir=tmp_path / "gen", seed=3, n_models=2, first_draw=100,
                                n_draws=2)
     return corpus, gen

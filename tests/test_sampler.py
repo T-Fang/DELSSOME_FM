@@ -130,3 +130,89 @@ def test_sc_row_sum_constant_matches_the_training_groups(data_cfg):
         pytest.skip("HCP-YA data not reachable")
     from delssome_fm.sim.corpus import split_scs
     assert split_scs(data_cfg, "train").sum(axis=2).mean() == pytest.approx(SC_ROW_SUM, abs=0.005)
+
+
+# ---------------------------------------------------------------- the direct policy (pilot)
+
+DIRECT = [sample_card(123, 0, i, "direct") for i in range(400)]
+
+
+def _slots(card):
+    """Every coefficient slot as (where, param name or None)."""
+    out = [(("L", v, u), c and c.param) for v, row in enumerate(card.linear)
+           for u, c in enumerate(row)]
+    out += [(("beta", v), c and c.param) for v, c in enumerate(card.bias)]
+    for v, t in enumerate(card.nonlinear):
+        if t is not None:
+            out += [(("w", v, u), c and c.param) for u, c in enumerate(t.weights)]
+            out += [(("I", v), t.drive and t.drive.param)]
+    return out
+
+
+def test_direct_policy_samples_the_same_equations():
+    """Only the free slots' scales differ: same slots, same free parameters, same constants."""
+    for a, b in zip(CARDS, DIRECT):
+        assert _slots(a) == _slots(b) and a.parameters == b.parameters
+        assert a.observable == b.observable and len(a.channels) == len(b.channels)
+        assert [s is None for s in a.noise] == [s is None for s in b.noise]
+    assert all(c.scale == 1.0 for card in DIRECT for c in card.noise if c is not None)
+    assert all(ch.gain.scale == 1.0 for card in DIRECT for ch in card.channels)
+
+
+def test_direct_policy_free_scales_are_signs():
+    """A free L diagonal keeps the card's sign in its scale; every other free slot has 1."""
+    for a, b in zip(CARDS, DIRECT):
+        for v in range(b.n_states):
+            for u in range(b.n_states):
+                c = b.linear[v][u]
+                if c is not None and c.param is not None:
+                    expected = np.sign(a.linear[v][u].scale) if u == v else 1.0
+                    assert c.scale == expected
+
+
+def test_direct_draws_cover_eight_decades_per_region_with_signs():
+    card = next(c for c in DIRECT if len(c.regional_params) >= 3)
+    theta, psi = draw_parameters(card, np.random.default_rng(0), 50, 68, "direct")
+    assert theta.shape == (50, 68, len(card.regional_params))
+    logs = np.log10(np.abs(theta))
+    assert logs.min() >= -4 and logs.max() <= 4
+    assert np.ptp(logs, axis=1).mean() > 7                  # regions independent: ~8 decades
+    diagonal = {card.linear[v][v].param for v in range(card.n_states)}
+    for j, p in enumerate(card.regional_params):
+        if p == "sigma" or p in diagonal:
+            assert (theta[..., j] > 0).all()
+        else:
+            assert 0.3 < (theta[..., j] < 0).mean() < 0.7     # sign per region
+    assert (psi > 0).all()
+
+
+def test_direct_gain_is_relative_to_the_draws_competing_term():
+    for card in DIRECT[:100]:
+        theta, psi = draw_parameters(card, np.random.default_rng(1), 5, 68, "direct")
+        index = {p: j for j, p in enumerate(card.regional_params)}
+
+        def magnitude(c, t):
+            return abs(c.value) if c.param is None else \
+                abs(c.scale) * np.median(np.abs(t[:, index[c.param]]))
+
+        for d in range(5):
+            for k, ch in enumerate(card.channels):
+                if ch.into_derivative:
+                    v = ch.into_derivative[0]
+                    reference = magnitude(card.linear[v][v], theta[d])
+                else:
+                    t = card.nonlinear[ch.into_input[0]]
+                    vals = [magnitude(w, theta[d]) for w in t.weights if w is not None]
+                    vals += [magnitude(t.drive, theta[d])] if t.drive is not None else []
+                    reference = max(vals, default=1.0)
+                ratio = np.log10(psi[d, k] * SC_ROW_SUM / reference)
+                assert COUPLING_RATIO_LOG10[0] - 1e-9 <= ratio <= COUPLING_RATIO_LOG10[1] + 1e-9
+
+
+def test_direct_cards_compile_and_unknown_policies_raise():
+    for card in DIRECT[:50]:
+        compile_card(card)
+    with pytest.raises(ValueError, match="policy"):
+        sample_card(123, 0, 0, "flat")
+    with pytest.raises(ValueError, match="policy"):
+        draw_parameters(CARDS[0], np.random.default_rng(0), 1, 68, "flat")

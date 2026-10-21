@@ -19,6 +19,14 @@ not, gets a nominal constant c, log10|c| ~ U[-4, 4] with the slot's sign. A free
 stored as scale x parameter with scale = c, and `draw_parameters` gives the dimensionless
 multipliers Theta, Psi ~ 10^U(-1, 1) (decided 2026-10-05).
 
+That is the "multiplier" policy. The "direct" policy (pilot, 2026-10-21) samples the same
+equations (the same random stream, so card i has the same structure under both) but drops
+the free slots' nominal constants: Theta holds each region's actual coefficient, drawn
+independently per region and draw, log10|theta| ~ U[-4, 4], sign +-1 with equal probability
+unless the slot fixes it. Two slots fix it: sigma is positive, and a free L diagonal keeps
+the sign sampled for the card (leak or growth, P_LEAK), carried by its scale +-1. Every other
+free slot (and sigma's per-variable scale, and each gain) has scale 1.
+
 Coupling gains are the one exception to the flat constant prior (decided 2026-10-05). Drawn
 independently over 8 decades, the coupling was usually negligible next to the leak: in a
 60-candidate pilot, 6 of 7 usable kept models had mean FC ~ 0, so their FC carried no SC.
@@ -29,7 +37,9 @@ site:
     reference = |L_vv| of the target v           (injected at the derivative, D)
               = largest |w_vu| or |I_v| of u^v    (injected into u^v, U; 1 if neither)
 
-so coupling ranges from 1% to 10x the competing term for a typical region.
+so coupling ranges from 1% to 10x the competing term for a typical region. Under the
+direct policy the gain is a draw-level value with the same rule, with the reference taken
+from that draw's values (median over regions of |coefficient| for a free slot).
 
 Probabilities the design documents leave open are module constants below, marked "choice".
 This module does not simulate or screen (sim/corpus.py does).
@@ -64,6 +74,7 @@ P_LEAK = 0.8                     # choice: L diagonal positive (leak) vs negativ
 N_FREE = (1, 2, 3, 4)            # §4 step 3
 LOG10_RANGE = (-4.0, 4.0)        # §4 constants
 MULTIPLIER_LOG10 = (-1.0, 1.0)   # Theta, Psi ~ 10^U(-1, 1)
+POLICIES = ("multiplier", "direct")
 COUPLING_RATIO_LOG10 = (-2.0, 1.0)
 # Mean row sum of the 64 HCP-YA training group SCs rescaled to max 0.02 (range over groups
 # 0.356-0.365; tests/test_sampler.py checks it against the data on the cluster).
@@ -93,8 +104,10 @@ def _constant(rng: np.random.Generator, sign: float | None = None) -> float:
     return float(s * 10.0 ** rng.uniform(*LOG10_RANGE))
 
 
-def sample_card(seed: int, stream: int, index: int) -> ModelCard:
-    """The `index`-th synthetic card of population `stream` under `seed`."""
+def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier") -> ModelCard:
+    """The `index`-th synthetic card of population `stream` under `seed`; `policy` sets how
+    free slots are stored (module docstring), not the equations."""
+    _check_policy(policy)
     rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
     d = _Draft(V=V, L=np.full((V, V), np.nan))
@@ -107,7 +120,12 @@ def sample_card(seed: int, stream: int, index: int) -> ModelCard:
     _sample_L(rng, d)
     _set_gains(rng, d)
     observable = _sample_observable(rng, d)
-    return _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}")
+    return _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}", policy=policy)
+
+
+def _check_policy(policy: str) -> None:
+    if policy not in POLICIES:
+        raise ValueError(f"parameter policy must be one of {POLICIES}, found {policy!r}")
 
 
 def _sample_nonlinear(rng: np.random.Generator, v: int, V: int) -> dict:
@@ -231,7 +249,8 @@ def _distinguishable(d: _Draft, a: int, b: int) -> bool:
 
 
 def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | None],
-              name: str) -> ModelCard:
+              name: str, policy: str) -> ModelCard:
+    direct = policy == "direct"
     V = d.V
     candidates = [("L", v, u) for v in range(V) for u in range(V) if not np.isnan(d.L[v, u])]
     candidates += [("beta", v, None) for v in range(V) if d.bias[v] is not None]
@@ -247,7 +266,10 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
             return None
         if slot in free:
             kind, v, u = slot
-            return Coef(param=f"{kind}_{v}" + ("" if u is None else f"_{u}"), scale=value)
+            # direct: the value is drawn per region; only an L diagonal keeps its sign here
+            scale = (float(np.sign(value)) if kind == "L" and u == v else 1.0) if direct \
+                else value
+            return Coef(param=f"{kind}_{v}" + ("" if u is None else f"_{u}"), scale=scale)
         return Coef(value=value)
 
     nonlinear = []
@@ -272,11 +294,12 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
                                 ("L", v, u)) for u in range(V)) for v in range(V)),
         bias=tuple(coef(d.bias[v], ("beta", v, None)) for v in range(V)),
         nonlinear=tuple(nonlinear),
-        noise=tuple(None if s is None else Coef(param="sigma", scale=s) for s in d.noise),
+        noise=tuple(None if s is None else Coef(param="sigma", scale=1.0 if direct else s)
+                    for s in d.noise),
         channels=tuple(Channel(
             name=ch["name"], source=tuple(1.0 if u == ch["source"] else 0.0 for u in range(V)),
             transfer=ch["transfer"], diffusive=ch["diffusive"],
-            gain=Coef(param=f"G_{ch['name']}", scale=ch["gain"]),
+            gain=Coef(param=f"G_{ch['name']}", scale=1.0 if direct else ch["gain"]),
             into_input=tuple(ch["into_input"]), into_derivative=tuple(ch["into_derivative"]))
             for ch in d.channels),
         observable=Observable(observable[0], observable[1],
@@ -286,9 +309,45 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
 
 
 def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
-                    n_regions: int) -> tuple[np.ndarray, np.ndarray]:
-    """returns: theta (n_draws, N, P), psi (n_draws, K), multipliers 10^U(-1, 1)."""
+                    n_regions: int, policy: str = "multiplier") -> tuple[np.ndarray, np.ndarray]:
+    """returns: theta (n_draws, N, P), psi (n_draws, K). multiplier: 10^U(-1, 1) each.
+    direct: theta the regions' coefficients, psi the gains (module docstring)."""
+    _check_policy(policy)
     P, K = len(card.regional_params), len(card.global_params)
-    theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
-    psi = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, K))
-    return theta, psi
+    if policy == "multiplier":
+        theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
+        psi = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, K))
+        return theta, psi
+    theta = 10.0 ** rng.uniform(*LOG10_RANGE, size=(n_draws, n_regions, P))
+    signed = np.array([p not in _positive_params(card) for p in card.regional_params])
+    signs = rng.choice([-1.0, 1.0], size=theta.shape)
+    theta = np.where(signed, signs * theta, theta)
+    ratio = 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10, size=(n_draws, K))
+    reference = np.array([[_gain_reference(card, ch, t) for ch in card.channels] for t in theta])
+    return theta, (ratio * reference / SC_ROW_SUM).reshape(n_draws, K)
+
+
+def _positive_params(card: ModelCard) -> set[str]:
+    """Regional parameters whose sign the slot fixes: sigma and free L diagonals."""
+    diagonal = {card.linear[v][v].param for v in range(card.n_states)
+                if card.linear[v][v] is not None}
+    return ({"sigma"} | diagonal) - {None}
+
+
+def _gain_reference(card: ModelCard, ch, theta: np.ndarray) -> float:
+    """The competing term at a channel's injection site for one draw's theta (N, P), as in
+    _set_gains, with a free slot's magnitude = |scale| x median over regions of |theta|."""
+    index = {p: j for j, p in enumerate(card.regional_params)}
+
+    def magnitude(c: Coef) -> float:
+        if c.param is None:
+            return abs(c.value)
+        return abs(c.scale) * float(np.median(np.abs(theta[:, index[c.param]])))
+
+    if ch.into_derivative:
+        v = ch.into_derivative[0]
+        return magnitude(card.linear[v][v])
+    t = card.nonlinear[ch.into_input[0]]
+    inputs = [magnitude(w) for w in t.weights if w is not None]
+    inputs += [magnitude(t.drive)] if t.drive is not None else []
+    return max(inputs, default=1.0)

@@ -25,6 +25,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
     return CorpusConfig(seed=11, n_param_sets=n_param_sets, first_draw=first_draw, batch_size=2,
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
+                        parameter_policy="multiplier",
                         output_dir=tmp_path)
 
 

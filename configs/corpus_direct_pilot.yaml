@@ -1,0 +1,22 @@
+# Pilot of the "direct" parameter policy (2026-10-21, spec/sampler.py): each region's
+# coefficient is drawn independently, log10|theta| ~ U[-4, 4], sign +-1 unless the slot fixes
+# it (sigma positive; a free L diagonal keeps the card's sign); no per-model nominal constant
+# or multiplier. Otherwise identical to configs/corpus_d10.yaml (same seed and streams, so
+# candidate i has the same equations), to compare screen acceptance and validity candidate by
+# candidate. Every field is required.
+
+seed: 20261005
+n_param_sets: 10
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 10                # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: direct      # spec/sampler.py: Theta = each region's coefficient
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_direct_pilot

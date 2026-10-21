@@ -73,6 +73,7 @@ class CorpusConfig:
     flat_rel_sd: float            # flat if SD <= flat_rel_sd * |mean| in any region (corpus.py)
     initial_state_scale: float    # x0 ~ U(-s, s), drawn per simulation
     fcd_store_stride: int         # store the FCD CDF at every k-th bin (summary.fcd_levels)
+    parameter_policy: str         # spec/sampler.py: "multiplier" (corpus, d10) or "direct" (pilot)
     output_dir: Path
 
 

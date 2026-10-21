@@ -102,7 +102,7 @@ def _key(cfg: CorpusConfig, split: str, index: int, *more: int) -> list[int]:
 
 
 def card_for(cfg: CorpusConfig, split: str, index: int) -> ModelCard:
-    return sample_card(cfg.seed, SPLIT_STREAM[split], index)
+    return sample_card(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy)
 
 
 def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
@@ -115,7 +115,7 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
     thetas, psis, x0s = [], [], []
     for j in range(first, first + n):
         rng = np.random.default_rng(_key(cfg, split, index, tag, j))
-        theta, psi = draw_parameters(card, rng, 1, N_REGIONS)
+        theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy)
         thetas.append(theta[0])
         psis.append(psi[0])
         x0s.append(rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
