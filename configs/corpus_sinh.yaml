@@ -1,0 +1,23 @@
+# Stage-1 corpus under the "sinh" parameter policy (decided 2026-10-23, spec/sampler.py):
+# constants, per-draw regional means with a relative Gaussian spread, and coupling gains, all
+# in the signed log domain x = 1e-4 sinh(y); rules N1/N2 (noise reaches the observable).
+# Target: 100,000 valid train models x 100 draws (val and test: 10,000 each); every draw also
+# stores catch24 features per region (sim/summary.py). Same seed and streams as the earlier
+# corpora, so candidate i has the same equation structure unless N1/N2 resampled its noise.
+# Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh

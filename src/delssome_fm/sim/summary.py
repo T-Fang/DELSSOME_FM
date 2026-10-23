@@ -26,6 +26,11 @@ corpus stores it reduced by `fcd_levels`: the CDF at every k-th bin's right edge
 k = 100 that is 100 levels at FCD values -0.98, -0.96, ..., 1.00 (decided 2026-10-05).
 Stage 2 must reduce empirical CDFs with the same function. The cost functions of build step 6
 live in cost.py.
+
+`catch24` (added 2026-10-23) is the exception to "pure jax.numpy": the 24 catch24 features
+(the 22 of catch22, chosen from hctsa, plus mean and SD) of each region's signal, from the
+pycatch22 C library on the host, about 0.1 s per (1200, 68) signal. Stage 2 must compute the
+empirical data's features with the same function.
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pycatch22
 
 from delssome_fm.config import SimConfig
 
@@ -157,3 +164,30 @@ def fcd_levels(cdf: Array, stride: int) -> Array:
     if stride < 1 or B % stride:
         raise ValueError(f"fcd stride {stride} must divide the {B} bins")
     return cdf[..., stride - 1::stride]
+
+
+# pycatch22 1.0.2's order and names (catch24=True): the 22 catch22 features, then mean and SD
+CATCH24_NAMES = (
+    "DN_HistogramMode_5", "DN_HistogramMode_10", "DN_OutlierInclude_p_001_mdrmd",
+    "DN_OutlierInclude_n_001_mdrmd", "CO_FirstCrossing_acf_1e_pointOfCrossing", "CO_FirstMin_ac",
+    "SP_Summaries_fft_area_5_1", "SP_Summaries_fft_wq_50", "FC_LocalSimple_mean3_stde",
+    "FC_LocalSimple_mean1_taurat", "MD_pNN_pnn40", "SB_BinaryStats_mean_longstretch1",
+    "SB_BinaryStats_diff_longstretch0", "SB_MotifThree_quantile_hh",
+    "CO_HistogramAMI_even_5bin_ami2", "CO_trev_1_num", "IN_AutoMutualInfoStats_40_gaussian_fmmi",
+    "SB_TransitionMatrix_quantile_3_ac_sumdiagcov", "PD_PeriodicityWang_th0_01",
+    "CO_Embed2_Dist_tau_d_expfit_meandiff", "SC_FluctAnal_2_rsrangefit_50_1_logi_prop_r1",
+    "SC_FluctAnal_2_dfa_50_1_2_logi_prop_r1", "DN_mean", "DN_Spread_std")
+
+
+def catch24(x: np.ndarray) -> np.ndarray:
+    """x: (T, N) observed signal at TR -> (N, 24) float32, the catch24 features of each
+    region's signal in CATCH24_NAMES order (numpy on the host, not jit-able)."""
+    x = np.asarray(x, np.float64)
+    out = np.empty((x.shape[1], len(CATCH24_NAMES)), np.float32)
+    for i in range(x.shape[1]):
+        r = pycatch22.catch22_all(x[:, i].tolist(), catch24=True)
+        if tuple(r["names"]) != CATCH24_NAMES:
+            raise RuntimeError(f"pycatch22 returned features {r['names']}, expected "
+                               f"{CATCH24_NAMES} (a different pycatch22 version?)")
+        out[i] = r["values"]
+    return out

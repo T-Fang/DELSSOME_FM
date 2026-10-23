@@ -180,3 +180,16 @@ def test_fcd_matrix_matches_numpy():
     iu = np.triu_indices(8, 1)
     vecs = np.stack([np.corrcoef(x[t:t + 30].T)[iu] for t in range(150 - 30 + 1)])
     np.testing.assert_allclose(got, np.corrcoef(vecs), rtol=1e-10, atol=1e-12)
+
+
+def test_catch24_is_pycatch22_per_region_with_mean_and_sd_last():
+    import pycatch22
+    from delssome_fm.sim.summary import CATCH24_NAMES, catch24
+    x = np.random.default_rng(0).standard_normal((300, 3)).cumsum(0)
+    f = catch24(x)
+    assert f.shape == (3, 24) and f.dtype == np.float32 and len(CATCH24_NAMES) == 24
+    direct = pycatch22.catch22_all(x[:, 1].tolist(), catch24=True)["values"]
+    np.testing.assert_allclose(f[1], np.float32(direct))
+    np.testing.assert_allclose(f[:, 22], x.mean(0), rtol=1e-5)          # DN_mean
+    assert np.allclose(f[:, 23], x.std(0, ddof=1), rtol=1e-4) or \
+        np.allclose(f[:, 23], x.std(0), rtol=1e-4)                        # DN_Spread_std

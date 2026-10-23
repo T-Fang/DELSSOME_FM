@@ -21,6 +21,10 @@ more candidate indices. More draws per model: `extend_models` simulates draws
 first_draw .. for models already found valid, without re-screening. Draw j of a model is the
 same whichever job, chunk or extension computes it.
 
+Each base draw also stores `catch24` (N, 24): the catch24 features of every region's observed
+signal (summary.catch24; NaN where diverged; added 2026-10-23). They are not part of the flat
+rule below: a catch22 feature can be NaN for an ordinary signal.
+
 Diverged and flat, precisely (a draw is usable when it is neither):
     diverged  any state or recorded value of any region non-finite, or |value| >
               divergence_bound, at any frame boundary, burn-in included (sim/integrate.py);
@@ -54,7 +58,7 @@ from delssome_fm.config import CorpusConfig, DataConfig, SimConfig
 from delssome_fm.data.empirical import N_REGIONS, load_reference_group
 from delssome_fm.data.groups import SPLIT_NAMES, groups_from_config
 from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
-from delssome_fm.sim.summary import fcd_levels, summarize
+from delssome_fm.sim.summary import catch24, fcd_levels, summarize
 from delssome_fm.spec.card import ModelCard, card_to_dict
 from delssome_fm.spec.compile import CompiledModel, compile_card
 from delssome_fm.spec.sampler import draw_parameters, sample_card
@@ -212,10 +216,15 @@ def simulate_given(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel,
                                 for a in (x0, theta, psi))
         out = simulate(k, x0_b, theta_b, psi_b, np.broadcast_to(sc, (cfg.batch_size, *sc.shape)))
         s = summarise(out.observed)
-        parts.append({"diverged": np.asarray(out.diverged)[:m],
-                      **{name: np.asarray(v, np.float32)[:m] for name, v in s._asdict().items()}})
+        diverged = np.asarray(out.diverged)[:m]
+        observed = np.asarray(out.observed)[:m]
+        parts.append({"diverged": diverged,
+                      **{name: np.asarray(v, np.float32)[:m] for name, v in s._asdict().items()},
+                      "catch24": np.stack([np.full((observed.shape[2], 24), np.nan, np.float32)
+                                           if d else catch24(y)
+                                           for y, d in zip(observed, diverged)])})
     res = {name: np.concatenate([p[name] for p in parts]) for name in parts[0]}
-    for name in ("fc", *STAT_NAMES):
+    for name in ("fc", *STAT_NAMES, "catch24"):
         res[name][res["diverged"]] = np.nan
     res["flat"] = flat_draws(res, cfg.flat_rel_sd)
     res["theta"], res["psi"] = _pad(theta, P_MAX), _pad(psi, K_MAX)

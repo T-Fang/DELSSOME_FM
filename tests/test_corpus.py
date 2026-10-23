@@ -140,6 +140,7 @@ def test_simulate_draws_with_a_stable_card(tmp_path):
     assert np.isnan(res["theta"][..., 3:]).all() and np.isfinite(res["theta"][..., :3]).all()
     assert np.all(np.diff(res["fcd_cdf"], axis=1) >= 0)
     assert res["regional"].dtype == np.float32 and res["theta"].dtype == np.float32
+    assert res["catch24"].shape == (3, N, 24) and np.isfinite(res["catch24"]).all()
 
 
 def test_rebuild_of_an_old_chunk_equals_a_fresh_run(tmp_path, monkeypatch):
@@ -149,6 +150,7 @@ def test_rebuild_of_an_old_chunk_equals_a_fresh_run(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     scs = np.random.default_rng(0).uniform(0, 0.02, (64, N, N))
     logs, arrays, cards = run_candidates(cfg, SIM, "train", scs, 0, 12)
+    assert np.isnan(arrays["catch24"][arrays["diverged"]]).all()      # NaN where diverged
     valid = [r.index for r in logs if r.valid]
     assert len(valid) >= 2 and any(not r.kept and r.screen_diverged == cfg.screen_draws
                                    for r in logs)

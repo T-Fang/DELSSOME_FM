@@ -15,6 +15,7 @@ dependencies = [
     "sympy",
     "jax",
     "equinox",
+    "pycatch22",       # catch24 features of the corpus (sim/summary.py), added 2026-10-23
 ]
 
 [project.optional-dependencies]
