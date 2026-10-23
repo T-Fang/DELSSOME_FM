@@ -207,7 +207,7 @@ Recurrent gain, drive, noise. Five times, across four traditions. Two of the fiv
 
 ## 5. Sampling rules
 
-Three rules, all cheap and all applied before any simulation.
+Five rules, all cheap and all applied before any simulation.
 
 **R1. Dissipativity, on the eigenvalues.** With dense off-diagonals, stability is a property of $L$'s spectrum, not its diagonal: an all-positive diagonal can still leave $-L$ expansive. Require $\min_k \mathrm{Re}\,\lambda_k(L) > 0$ unless at least one variable carries a quadratic gate to supply saturation. A $6\times6$ eigendecomposition costs microseconds and is strictly better than the diagonal check.
 
@@ -216,6 +216,8 @@ Without this, the acceptance rate drops noticeably once off-diagonals are dense,
 **R2. No affine-only nonlinear term.** If $\Phi_v$ is the identity and $g_v = 1$, the term is affine and fully absorbed by $L$, $\beta_v$ and $D_v$. Omit the term instead. This is also the correct card for the Linear model, whose earlier listing (identity transfer, no gate) was the forbidden combination and worked only because its channel injects at the derivative.
 
 **R3. Quadratic gate normalisation.** Fix the first nonzero $s_u = 1$, since the overall scale is degenerate with $\gamma_v$.
+
+**N1, N2. Noise-driven models (decided 2026-10-23, `sinh` policy only).** The models of interest are noise-driven, so a card must have at least one noisy variable (N1). That noise must also reach what is observed (N2): some noisy variable is an observed variable, or drives one through $L$, a weight $w_{vu}$, a state or quadratic gate, or a channel, directly or via other variables. A card that fails either has its noise pattern resampled; a card that passes is unchanged. Under the earlier rules 4.0% of candidates fail: 3.4% have no noise at all (9.8% at $V=1$, where $P_\text{noiseless}=0.1$ removes the only variable's noise), and 0.6% have noise only on variables that never reach the observable, so their BOLD is deterministic. The `multiplier` corpora (`corpus`, `corpus_d10`) predate the rule and are left as they are, so they stay reproducible.
 
 ---
 

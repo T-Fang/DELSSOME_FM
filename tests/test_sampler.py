@@ -153,9 +153,21 @@ def _slots(card):
     return out
 
 
+def _passes_n1_n2(card):
+    reach = _card_reach(card)
+    observed = [v for v in (card.observable.plus, card.observable.minus) if v is not None]
+    noisy = [u for u, c in enumerate(card.noise) if c is not None]
+    return bool(noisy) and bool(reach[noisy][:, observed].any())
+
+
+def _same_structure():
+    """Pairs (multiplier card, sinh card) whose multiplier card already satisfies N1/N2."""
+    return [(a, b) for a, b in zip(CARDS, SINH) if _passes_n1_n2(a)]
+
+
 def test_sinh_policy_samples_the_same_equations():
     """Same slots, free parameters, transfers and constant signs; only magnitudes differ."""
-    for a, b in zip(CARDS, SINH):
+    for a, b in _same_structure():
         assert _slots(a) == _slots(b) and a.parameters == b.parameters
         assert a.observable == b.observable and len(a.channels) == len(b.channels)
         assert [s is None for s in a.noise] == [s is None for s in b.noise]
@@ -174,7 +186,7 @@ def test_sinh_constants_are_sinh_uniform():
 
 def test_sinh_free_scales_are_signs():
     """A free L diagonal keeps the card's leak/growth sign in its scale; others have 1."""
-    for a, b in zip(CARDS, SINH):
+    for a, b in _same_structure():
         for v in range(b.n_states):
             for u in range(b.n_states):
                 c = b.linear[v][u]
@@ -208,3 +220,38 @@ def test_sinh_cards_compile_and_unknown_policies_raise():
         sample_card(123, 0, 0, "flat")
     with pytest.raises(ValueError, match="policy"):
         draw_parameters(CARDS[0], np.random.default_rng(0), 1, 68, "flat")
+
+
+def _card_reach(card):
+    """Influence between variables, read off the card (independently of the sampler)."""
+    V = card.n_states
+    A = np.eye(V, dtype=bool)
+    for v in range(V):
+        for u in range(V):
+            if card.linear[v][u] is not None:
+                A[u, v] = True
+        t = card.nonlinear[v]
+        if t is not None:
+            A[[u for u, w in enumerate(t.weights) if w is not None], v] = True
+            if t.gate.kind == "state":
+                A[t.gate.state, v] = True
+            if t.gate.kind == "quadratic":
+                A[np.flatnonzero(t.gate.weights), v] = True
+    for ch in card.channels:
+        A[np.flatnonzero(ch.source), list(ch.into_input) + list(ch.into_derivative)] = True
+    for _ in range(V):
+        A = A | ((A.astype(int) @ A.astype(int)) > 0)
+    return A
+
+
+def test_sinh_noise_reaches_the_observable():
+    """N1 and N2 (sinh policy): a noisy variable exists and drives what is observed."""
+    assert all(_passes_n1_n2(card) for card in SINH)
+
+
+def test_n1_n2_change_only_the_cards_that_fail_them():
+    """Cards that already satisfy N1/N2 are identical to before the rule (same structure as
+    the multiplier card); the rest differ only from their noise pattern on."""
+    failing = [a for a in CARDS if not _passes_n1_n2(a)]
+    assert 0 < len(failing) < 0.1 * len(CARDS)
+    assert len(_same_structure()) == len(CARDS) - len(failing)    # the rest: checked above

@@ -11,6 +11,10 @@ applies, before any simulation:
     R3  the first nonzero quadratic-gate weight is 1
     two channels must differ in source, delta or injection (resample the channel)
     a difference observable needs structurally distinguishable variables (else single)
+    N1  at least one variable is noisy                        (sinh policy only, 2026-10-23)
+    N2  noise reaches the observable: some noisy variable is, or drives through L, w, a gate
+        or a channel, a variable the observable reads        (sinh policy only; resample
+        the noise pattern otherwise)
 
 and the free-parameter assignment of §4: candidates are the present L, beta, w and I slots,
 n ~ U{1..4} of them become regional parameters; sigma is one shared regional parameter for
@@ -143,6 +147,8 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier") 
     _sample_L(rng, d)
     _set_gains(rng, d)
     observable = _sample_observable(rng, d)
+    if policy == "sinh":
+        _ensure_observed_noise(rng, d, observable)
     return _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}", policy=policy)
 
 
@@ -252,6 +258,41 @@ def _set_gains(rng: np.random.Generator, d: _Draft) -> None:
             reference = max(inputs, default=1.0)
         ratio = 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10)
         ch["gain"] = float(ratio * reference / SC_ROW_SUM)
+
+
+def _ensure_observed_noise(rng: np.random.Generator, d: _Draft,
+                           observable: tuple[int, int | None]) -> None:
+    """N1, N2: resample the noise pattern until a noisy variable reaches the observable. A
+    card that already satisfies both is untouched (no random numbers are drawn)."""
+    reach = _reach(d)
+    targets = [v for v in observable if v is not None]
+    for _ in range(MAX_ATTEMPTS):
+        if any(s is not None and reach[u, targets].any() for u, s in enumerate(d.noise)):
+            return
+        d.noise = [None if rng.random() < P_NOISELESS else _constant(rng, d.policy, 1.0)
+                   for _ in range(d.V)]
+    raise SamplerError("could not satisfy N1/N2")
+
+
+def _reach(d: _Draft) -> np.ndarray:
+    """(V, V) bool: reach[u, v] if x^u is x^v or influences dx^v/dt, directly or through
+    other variables (L off-diagonal, weights w_vu, a state or quadratic gate, a channel from
+    u injected at v)."""
+    A = np.eye(d.V, dtype=bool)
+    for v in range(d.V):
+        A[~np.isnan(d.L[v]), v] = True
+        t = d.nonlinear[v]
+        if t is not None:
+            A[[u for u in range(d.V) if t["weights"][u] is not None], v] = True
+            if t["gate"]["kind"] == "state":
+                A[t["gate"]["state"], v] = True
+            elif t["gate"]["kind"] == "quadratic":
+                A[np.flatnonzero(t["gate"]["weights"]), v] = True
+    for ch in d.channels:
+        A[ch["source"], ch["into_input"] + ch["into_derivative"]] = True
+    for k in range(d.V):                                   # transitive closure
+        A |= A[:, [k]] & A[[k], :]
+    return A
 
 
 def _sample_observable(rng: np.random.Generator, d: _Draft) -> tuple[int, int | None]:
