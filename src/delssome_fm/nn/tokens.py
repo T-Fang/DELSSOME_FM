@@ -10,8 +10,9 @@ of structural connectivity, and a global offset g shared by all regions.
 
 Embedding each parameter as a scalar tagged by kappa_p (where it sits in the equations) and
 averaging over p is what makes the network free in P and K: never a P-wide input layer.
-theta and psi are given as log10 of the multipliers (train/data.py), so the sampling range
-10^U(-1, 1) becomes [-1, 1].
+theta and psi arrive encoded to about [-1, 1] (train/data.encode_parameters): log10 of the
+multipliers for the multiplier-policy corpora, asinh(x / 1e-4) / 19.1 of the actual values
+for the sinh-policy corpus.
 """
 
 from __future__ import annotations

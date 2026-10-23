@@ -30,7 +30,9 @@ Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
     node_features.npy (sum M, 21), node_degree.npy (sum M, 2)    concatenated over models
     distances.npy (sum M^2,) int16                 each model's (M, M) shortest paths, flat
     sc.npy (G, N, N)           the split's group SCs, each divided by its maximum
-    summary.json               row counts and why draws were left out
+    summary.json               row counts, why draws were left out, and the corpus's
+                               parameter_policy (spec/sampler.py), which decides how the data
+                               loader encodes theta and psi (train/data.encode_parameters)
 
 This module only reads the corpus and writes the store. It does not know about torch.
 """
@@ -49,6 +51,7 @@ from delssome_fm.sim.corpus import K_MAX, P_MAX, first_valid
 from delssome_fm.sim.generalisation import CELLS, read_sample
 from delssome_fm.spec.card import card_from_dict
 from delssome_fm.spec.compile import compile_card
+from delssome_fm.spec.sampler import POLICIES
 from delssome_fm.spec.dag import Dag, node_features, shortest_paths
 
 N_REGIONS = 68
@@ -118,7 +121,8 @@ def pack_split(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: TrainingDataCo
     members = first_valid(corpus_cfg, split, getattr(cfg.n_models, split))
     chunks = sorted((corpus_cfg.output_dir / split).glob("candidates*_draws0-*.npz"))
     return pack_chunks(chunks, members, n_window_pairs(sim_cfg), cfg.store_dir / split, scs,
-                       {"split": split, "last_candidate": members[-1]})
+                       {"split": split, "last_candidate": members[-1],
+                        "parameter_policy": corpus_cfg.parameter_policy})
 
 
 def pack_chunks(chunks: list[Path], members: list[int], full: int, out: Path, scs: np.ndarray,
@@ -126,7 +130,10 @@ def pack_chunks(chunks: list[Path], members: list[int], full: int, out: Path, sc
     """Pack the draws of `members` found in `chunks` (arrays .npz with a `model` column, each
     beside a .cards.jsonl) into a store split at `out`. full: the number of FCD window pairs
     of a complete FCD. scs: (G, N, N), indexed by the cards' sc_group. `info` is added to
-    summary.json. Used by pack_split and by the generalisation diagnostic."""
+    summary.json and must name the corpus's parameter_policy. Used by pack_split, the
+    generalisation diagnostic and the reference test."""
+    if info.get("parameter_policy") not in POLICIES:
+        raise ValueError(f"info must give parameter_policy, one of {POLICIES}, found {info}")
     keep, summary = _select_rows(chunks, np.array(members), full)
     out.mkdir(parents=True, exist_ok=True)
     rows = _write_rows(chunks, keep, members, full, out)
@@ -255,10 +262,12 @@ def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.nda
 
 
 def pack_generalisation(cfg: GeneralisationConfig, sim_cfg: SimConfig,
-                        scs: dict[str, np.ndarray], training_store: Path) -> dict[str, Any]:
+                        scs: dict[str, np.ndarray], training_store: Path,
+                        parameter_policy: str) -> dict[str, Any]:
     """Pack the four cells of sim/generalisation.py into a store at <output_dir>/store, one
     split per cell, z-scored with the training store's statistics. scs: split -> (G, N, N)
-    group SCs. Raises if a cell's chunks do not hold every sampled model."""
+    group SCs; parameter_policy: that of the corpus config the cells were simulated with.
+    Raises if a cell's chunks do not hold every sampled model."""
     sample = read_sample(cfg)
     store = cfg.output_dir / "store"
     summaries = {}
@@ -271,6 +280,7 @@ def pack_generalisation(cfg: GeneralisationConfig, sim_cfg: SimConfig,
             raise ValueError(f"{cell}: {len(missing)} sampled models have no chunk, e.g. "
                              f"{missing[:5]}; rerun their simulation jobs")
         summaries[cell] = pack_chunks(chunks, sample[model_split], n_window_pairs(sim_cfg),
-                                      store / cell, scs[sc_split], {"cell": cell})
+                                      store / cell, scs[sc_split],
+                                      {"cell": cell, "parameter_policy": parameter_policy})
     shutil.copy(training_store / "normalisation.npz", store / "normalisation.npz")
     return summaries

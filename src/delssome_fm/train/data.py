@@ -12,6 +12,7 @@ batch is read with one sorted fancy-index per array rather than B separate reads
 from __future__ import annotations
 
 import dataclasses
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from torch.utils.data import (BatchSampler, DataLoader, Dataset, SequentialSampl
                               SubsetRandomSampler)
 
 from delssome_fm.nn.template_encoder import GraphBatch
+from delssome_fm.spec.sampler import POLICIES, SINH_SCALE, SINH_Z
 from delssome_fm.train.pack import TARGETS
 
 Z_SCORED = ("regional", "pairwise", "fc_moments")   # fcd is a raw CDF (pack.normalisation)
@@ -29,8 +31,9 @@ Z_SCORED = ("regional", "pairwise", "fc_moments")   # fcd is a raw CDF (pack.nor
 
 @dataclass
 class Stage1Batch:
-    """theta (B, N, P) and psi (B, K): log10 multipliers, 0 where the model has no such
-    parameter; sc (B, N, N); graph: the rows' DAGs; targets: name -> tensor (pack.TARGETS)."""
+    """theta (B, N, P) and psi (B, K): the parameters as encode_parameters gives them, 0
+    where the model has no such parameter; sc (B, N, N); graph: the rows' DAGs; targets:
+    name -> tensor (pack.TARGETS)."""
 
     theta: torch.Tensor
     psi: torch.Tensor
@@ -64,6 +67,11 @@ class TrainingStore(Dataset):
         self.sc = np.load(root / "sc.npy")
         with np.load(Path(store_dir) / "normalisation.npz") as n:
             self.norm = {k: n[k] for k in n.files}
+        self.parameter_policy = json.loads((root / "summary.json").read_text()).get(
+            "parameter_policy")
+        if self.parameter_policy not in POLICIES:
+            raise ValueError(f"{root}/summary.json must name the corpus's parameter_policy "
+                             f"(one of {POLICIES}), found {self.parameter_policy!r}")
 
     def __len__(self) -> int:
         return len(self.rows["model"])
@@ -76,8 +84,9 @@ class TrainingStore(Dataset):
         idx = np.sort(np.asarray(rows))
         model = self.rows["model"][idx]
         targets = {k: torch.from_numpy(self._target(k, self.rows[k][idx])) for k in TARGETS}
-        return Stage1Batch(theta=_log10_or_zero(self.rows["theta"][idx]),
-                           psi=_log10_or_zero(self.rows["psi"][idx]),
+        encode = lambda x: encode_parameters(x, self.parameter_policy)    # noqa: E731
+        return Stage1Batch(theta=encode(self.rows["theta"][idx]),
+                           psi=encode(self.rows["psi"][idx]),
                            sc=torch.from_numpy(self.sc[self.models["sc_group"][model]]),
                            graph=self._graphs(model), targets=targets)
 
@@ -106,10 +115,21 @@ class TrainingStore(Dataset):
                           **roles)
 
 
-def _log10_or_zero(x: np.ndarray) -> torch.Tensor:
-    """log10 of the parameter multipliers; NaN padding (absent parameters) becomes 0."""
-    with np.errstate(invalid="ignore"):
-        out = np.log10(np.asarray(x, np.float32))
+def encode_parameters(x: np.ndarray, policy: str) -> torch.Tensor:
+    """The network's parameter input, about [-1, 1] under either policy (spec/sampler.py):
+
+        multiplier   log10 of the multiplier, sampled as 10^U(-1, 1)
+        sinh         asinh(x / S) / Z, the signed log domain the values are sampled in
+
+    NaN padding (absent parameters) becomes 0."""
+    x = np.asarray(x, np.float32)
+    if policy == "multiplier":
+        with np.errstate(invalid="ignore"):
+            out = np.log10(x)
+    elif policy == "sinh":
+        out = (np.arcsinh(x / SINH_SCALE) / SINH_Z).astype(np.float32)
+    else:
+        raise ValueError(f"parameter policy must be one of {POLICIES}, found {policy!r}")
     return torch.from_numpy(np.nan_to_num(out, nan=0.0))
 
 

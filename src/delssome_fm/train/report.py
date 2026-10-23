@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from delssome_fm.train import costs
 from delssome_fm.train.data import Composition, TrainingStore, subset_rows
-from delssome_fm.train.evaluate import evaluation_rows
+from delssome_fm.train.evaluate import check_parameter_policy, evaluation_rows
 from delssome_fm.train.stage1 import Stage1Module
 
 
@@ -42,6 +42,7 @@ def predict_fc_fcd(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
     """For each row: predicted and simulated FC upper triangles (raw r, (R, E)) and FCD CDFs
     ((R, L)). Predictions are de-z-scored with the statistics of the module's training store,
     simulations with those of `store` (they differ slightly between stores)."""
+    check_parameter_policy(module, store)
     device = next(module.parameters()).device
     edges = torch.arange(len(module.edges), device=device)
     with np.load(Path(module.cfg.store_dir) / "normalisation.npz") as n:

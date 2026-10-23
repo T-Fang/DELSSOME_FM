@@ -225,3 +225,26 @@ def test_cost_loss_trains_with_finite_gradients(setup, tmp_path, head, offset):
     assert torch.isfinite(loss)
     assert all(torch.isfinite(p.grad).all() for p in module.parameters() if p.grad is not None)
     assert len(module.weighting.groups) == 7
+
+
+def test_parameter_encoding_follows_the_store_policy():
+    from delssome_fm.spec.sampler import SINH_SCALE, SINH_Z
+    from delssome_fm.train.data import encode_parameters
+    x = np.array([[0.1, 1.0, 10.0, np.nan]])
+    np.testing.assert_allclose(encode_parameters(x, "multiplier").numpy(), [[-1, 0, 1, 0]])
+    v = np.array([[-1e4, -1.0, 0.0, 1.0, 1e4, np.nan]])
+    enc = encode_parameters(v, "sinh").numpy()[0]
+    np.testing.assert_allclose(enc[:5], np.arcsinh(v[0, :5] / SINH_SCALE) / SINH_Z, rtol=1e-6)
+    assert enc[0] == pytest.approx(-1, abs=1e-3) and enc[4] == pytest.approx(1, abs=1e-3)
+    assert enc[2] == 0 and enc[5] == 0                      # zero, and NaN padding
+    with pytest.raises(ValueError, match="policy"):
+        encode_parameters(x, "flat")
+
+
+def test_evaluation_refuses_a_store_of_another_policy(setup, tiny_store):
+    from delssome_fm.train.evaluate import check_parameter_policy
+    store, _, module = setup
+    check_parameter_policy(module, store)                  # same store: fine
+    store.parameter_policy = "sinh"
+    with pytest.raises(ValueError, match="policy"):
+        check_parameter_policy(module, store)

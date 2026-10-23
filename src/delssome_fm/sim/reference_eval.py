@@ -111,6 +111,8 @@ def pack_model(cfg: ReferenceEvalConfig, sim_cfg: SimConfig, name: str, sc: np.n
     store = cfg.output_dir / "store"
     out = [pack_chunks([cfg.output_dir / "chunks" / f"{name}_r{k}.npz"], [0],
                        n_window_pairs(sim_cfg), store / f"{name}_r{k}", sc[None],
-                       {"model": name, "repeat": k}) for k in range(cfg.n_repeats)]
+                       # in_convention gives multipliers of the rescaled card's constants
+                       {"model": name, "repeat": k, "parameter_policy": "multiplier"})
+           for k in range(cfg.n_repeats)]
     shutil.copy(cfg.training_store / "normalisation.npz", store / "normalisation.npz")
     return out

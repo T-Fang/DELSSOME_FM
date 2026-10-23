@@ -137,6 +137,15 @@ def bootstrap_mean(x: np.ndarray, n_boot: int = 2000, seed: int = 1) -> tuple[fl
 # ---------------------------------------------------------------- one pass, every number
 
 
+def check_parameter_policy(module: Stage1Module, store: TrainingStore) -> None:
+    """Raise unless `store` encodes parameters as the module's training store does: a
+    log10-multiplier input means nothing to a network trained on sinh-encoded values."""
+    trained = TrainingStore(module.cfg.store_dir, "train").parameter_policy
+    if store.parameter_policy != trained:
+        raise ValueError(f"the module was trained on {trained!r}-policy parameters, the "
+                         f"evaluated store holds {store.parameter_policy!r}-policy ones")
+
+
 @torch.no_grad()
 def row_metrics(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
                 batch_size: int = 512, num_workers: int = 0) -> dict[str, np.ndarray]:
@@ -144,6 +153,7 @@ def row_metrics(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
     CDF for the FCD), the pairwise sums needed for R^2 over all rows and edges (squared error,
     target sum and sum of squares), the raw-unit cost terms between prediction and simulation
     (train/costs.py), whether the simulated draw is coupled, and its model."""
+    check_parameter_policy(module, store)
     rows = np.sort(np.asarray(rows))     # a batch is read sorted; keep rows in that order
     device = next(module.parameters()).device
     edges = torch.arange(len(module.edges), device=device)
