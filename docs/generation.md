@@ -191,6 +191,31 @@ where $\overline{\sum_j C_{ij}} = 0.36$ is the mean row sum of the training grou
 
 **One shared $\sigma$.** $\sigma$ is a single regional parameter (the "1" in $P = 1 + n$). Every noisy variable uses it through its own sampled scale constant, $\sigma_v = c_v\,\sigma$. A variable is noiseless with probability ~0.1.
 
+### Values under the `sinh` policy (decided 2026-10-23)
+
+The multiplier scheme above hides each parameter's sign and scale in a per-model constant, so a published model's values (σ ≈ 0.005, Hopf's $a < 0$, MFM's drive changing sign across regions) can only be fed to the network after re-expressing its card around the fits' medians. The `sinh` policy (`corpus_sinh.yaml`) instead samples every value directly, in the signed log domain $x = S\sinh(y)$ with $S = 10^{-4}$ and $|y| \le Z = \operatorname{asinh}(10^4/S) \approx 19.1$, which is log-like above $|x| \approx S$, linear below, and continuous through zero:
+
+| | rule |
+|---|---|
+| constants (per model, all regions) | $c = S\sinh(z)$, $z \sim \mathcal{U}(-Z, Z)$; an $L$ diagonal draws $\lvert z\rvert \sim \mathcal{U}(0, Z)$ and keeps the leak/growth sign |
+| regional parameter $p$ (per draw) | mean $\mu_p = S\sinh(z_p)$, $z_p \sim \mathcal{U}(-Z, Z)$ ($\mathcal{U}(0, Z)$ for σ and a free $L$ diagonal); spread $\kappa_p \sim \mathcal{U}(0, 1)$; each region $\theta_{ip} = \mu_p + \kappa_p\lvert\mu_p\rvert\,\varepsilon_{ip}$, $\varepsilon_{ip} \sim \mathcal{N}(0,1)$ independently; $\lvert\theta_{ip}\rvert$ for σ and a free $L$ diagonal |
+| coupling gain (per draw) | $\log_{10} G \sim \mathcal{U}(-2, 2)$, no longer relative to the competing term |
+| network input | $\operatorname{asinh}(\theta/S)/Z$ and $\operatorname{asinh}(G/S)/Z$, about $[-1, 1]$ (`train/data.encode_parameters`) |
+
+A free slot's card scale is 1 (±1, the leak/growth sign, for a free $L$ diagonal), every noise scale is 1, and rules N1, N2 (§5) apply. $\kappa$ is the regional coefficient of variation: every fitted set of MFM, FIC and Hopf has $\kappa \le 0.78$, and MFM's 14 sign-changing sets have $\kappa = 0.43$–$0.78$ (a region crosses zero with probability $\Phi(-1/\kappa)$). The effective gains of the fits lie at $\log_{10} G$ = 1.17–2.02 (MFM), −0.08–1.33 (FIC), 0.23–0.48 (Hopf).
+
+**Pilots** (train candidates 0–999, same equations as `corpus_d10`, 10 draws):
+
+| | valid | screen draws diverged | base draws usable (kept models) | usable draws per candidate | usable draws with mean FC 0.05–0.9 |
+|---|---|---|---|---|---|
+| multiplier (`corpus_d10`) | 14.4% | 84% | 79% | 1.25 | 20% |
+| each region independent, $\log_{10}\lvert\theta\rvert \sim \mathcal{U}(-4,4)$, random sign (commit `fc3c5e4`) | 1.2% | 99% | 74% | — | — |
+| `sinh` | 30.4% | 81% | 38% | 1.35 | 13% |
+
+Drawing each region independently over eight decades fails because one region faster than explicit Euler's limit ($2/dt$ = 2000 s⁻¹ at $dt$ = 1 ms) diverges the whole draw, and 99.8% of draws have one. Under `sinh` a draw's regions share a mean, so only draws whose mean is too fast diverge: twice the valid models of the multiplier scheme, but each draw re-picks the parameters' scale against the model's fixed constants, so 58% of a valid model's draws diverge (80% when a parameter's median exceeds 2000, 19% when all are below 0.01). The absolute gain lowers the share of moderately coupled draws.
+
+**The corpus** (decided 2026-10-23): 100,000 valid train models × 100 draws (val and test 10,000 each), each draw also storing catch24 per region (§8).
+
 ### Every reference model lands on the same triple
 
 | | regional | global |
@@ -357,7 +382,7 @@ Split the PRNG key inside the scan rather than pre-generating noise; the full no
 | Parameter sets per model | ~100 (first pass; more can be added per model later) |
 | Connectome | one of the 64 HCP-YA training group SCs per model, drawn uniformly at random (seeded) |
 | **Total simulations** | **~10,000,000** (train) + ~2,000,000 (val, test) |
-| Statistics per simulation | `regional` (68 × 6), `pairwise` (2278, stable arctanh of FC: |FC| ≥ 1, which float32 produces for near-synchronised regions, is clipped to the largest float32 below 1, giving 8.66), `fcd_cdf` (100 levels), `fc_moments` (3), `diverged`, `flat`, `theta` (68 × 5, NaN-padded), `psi` (2, NaN-padded), all float32 |
+| Statistics per simulation | `regional` (68 × 6), `pairwise` (2278, stable arctanh of FC: |FC| ≥ 1, which float32 produces for near-synchronised regions, is clipped to the largest float32 below 1, giving 8.66), `fcd_cdf` (100 levels), `fc_moments` (3), `diverged`, `flat`, `theta` (68 × 5, NaN-padded), `psi` (2, NaN-padded), all float32; since 2026-10-23 also `catch24` (68 × 24: the catch22 features of hctsa plus mean and SD of each region's observed signal, pycatch22 via `summary.catch24`; NaN where diverged; not part of the flat rule) |
 
 **Splits and validity (decided 2026-10-10, project lead).** Three disjoint model populations, each a separate random stream of the sampler: **train** (100,000 models, SC from the 64 training groups), **val** and **test** (10,000 models each, SC from the 14 validation and 13 test groups). Each count is of **valid** models: a model passes the 4-draw screen (§6) *and* at least one of its 100 base parameter draws is neither diverged nor flat. A split's corpus is its first N valid models by candidate index, so it is reproducible at any size, and it grows by screening more indices; more draws per model are added by extension runs that skip the screen. Diverged and flat as in §6. Statistics are computed and stored in float32.
 
