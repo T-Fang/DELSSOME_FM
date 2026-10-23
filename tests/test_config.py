@@ -65,8 +65,8 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "stage1_reg": Stage1Config, "stage1_offset": Stage1Config,
                   "stage1_offset_reg": Stage1Config, "generalisation": GeneralisationConfig,
                   "corpus_d10": CorpusConfig, "corpus_sinh_pilot": CorpusConfig, "corpus_sinh": CorpusConfig,
-                  "training_data_d10": TrainingDataConfig,
-                  "stage1_d10": Stage1Config,
+                  "training_data_d10": TrainingDataConfig, "training_data_sinh_pilot": TrainingDataConfig,
+                  "stage1_d10": Stage1Config, "stage1_sinh_smoke": Stage1Config,
                   "reference_eval": ReferenceEvalConfig}
 
 

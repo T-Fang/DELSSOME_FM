@@ -1,0 +1,52 @@
+# End-to-end check of the sinh-policy corpus (2026-10-23): configs/stage1_smoke.yaml on the
+# pilot store (configs/training_data_sinh_pilot.yaml), 1,000 steps on CPU (float32).
+# Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh_pilot
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/stage1
+seed: 20261014
+
+# network
+d_model: 128            # d
+d_template: 128         # d_t
+template_layers: 4      # Graphormer layers (architecture.md leaves this open; choice)
+backbone_layers: 4      # the original DELSSOME configuration
+n_heads: 8
+ffn_multiplier: 4
+dropout: 0.0
+fc_rank: 32             # k
+fc_offset: false        # per-draw offset b(h_CLS) in the FC head (nn/heads.py)
+pair_head: mlp_concat     # bilinear | mlp_symmetric | mlp_concat (nn/heads.py)
+pair_hidden: 128
+cost_loss: false        # true: add 1 - r, d, KS (raw units) to the loss (train/losses.py)
+max_distance: 16        # DAG shortest paths clipped here (corpus max 25; 0.02% of pairs > 16)
+max_degree: 16
+
+# training data: the first train_models models, at most draws_per_model usable draws each
+train_models: 363
+draws_per_model: 100
+oversample_coupled: false  # true: coupled_share of the models are coupled
+coupled_share: 0.5
+coupled_threshold: 0.05     # coupled: model mean FC > this
+
+# optimisation
+batch_size: 256
+edges_per_step: 256     # architecture.md §5.2: ~256 FC edges per step
+learning_rate: 3.0e-4
+weight_decay: 0.01
+warmup_steps: 100
+max_steps: 1000             # end-to-end check
+val_rows: 2000
+val_every_steps: 250
+final_eval_rows: 5000 # per split, evaluated on the best checkpoint after training
+num_workers: 4
+precision: 32-true
+gradient_clip: 1.0
+
+# tracking: one SQLite database for all runs; view with
+#   (log_every_steps: training metrics are logged every this many steps)
+#   mlflow ui --backend-store-uri <mlflow_tracking_uri>
+log_every_steps: 20
+mlflow_tracking_uri: sqlite:////home/ftian/storage/projects/DELSSOME-FM/outputs/mlflow/mlflow.db
+mlflow_artifact_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/mlflow/artifacts
+mlflow_experiment: stage1_smoke

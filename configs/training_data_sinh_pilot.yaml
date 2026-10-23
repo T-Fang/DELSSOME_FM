@@ -1,0 +1,6 @@
+# End-to-end check of the sinh-policy corpus before the full run (2026-10-23): the valid
+# models among the first candidates of configs/corpus_sinh.yaml (train 0..999, val and test
+# 0..499). Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh_pilot
+n_models: {train: 363, val: 175, test: 169}
