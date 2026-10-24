@@ -11,6 +11,9 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     cost_terms_train.png, fc_examples_train.png, fcd_examples_train.png
                         the same on rows the model trained on (from report_data_train.npz,
                         scripts/model_report_data.py --split train; skipped if absent)
+    scaling_grid.png    models x draws-per-model grid (--scaling-grid: final/<split>/* of the
+                        MLflow runs <prefix>_m<M>k_d<D>_cost), train and val
+    catch24.png         per-feature catch24 R^2, trained rows vs test (models with the head)
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
                         (from scripts/generalisation_report_data.py)
@@ -116,6 +119,74 @@ def scaling_figure(scaling: dict, out: Path):
 # split -> (how titles name the draws, file-name suffix)
 SPLITS = {"test": ("held-out test draws", ""),
           "train": ("training draws (rows the model trained on)", "_train")}
+
+
+GRID_MODELS, GRID_DRAWS = (10, 30, 100), (10, 30, 100)   # thousands of models; draws per model
+GRID_COLOURS = (BLUE, ORANGE, AQUA)
+
+
+def mlflow_grid(tracking_uri: str, experiment: str, prefix: str) -> dict:
+    """{(models_k, draws): final metrics} of the grid runs that have finished."""
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    runs = {r.info.run_name: r.data.metrics for r in
+            client.search_runs([client.get_experiment_by_name(experiment).experiment_id])}
+    return {(m, d): runs[f"{prefix}_m{m}k_d{d}_cost"] for m in GRID_MODELS for d in GRID_DRAWS
+            if "final/val/total" in runs.get(f"{prefix}_m{m}k_d{d}_cost", {})}
+
+
+def scaling_grid_figure(grid: dict, out: Path, model_label: str):
+    """Total MSE and coupled 1 - r against training models (one line per draws per model) and
+    against draws per model (one line per model count); val solid, trained rows dashed."""
+    panels = [("total", "total MSE (sum of 4 groups)", "models"),
+              ("total", "total MSE (sum of 4 groups)", "draws"),
+              ("r2_pairwise", "R² of z-scored arctanh FC", "models"),
+              ("cost_corr_coupled", "1 − r, coupled draws (median)", "models")]
+    fig, axes = plt.subplots(1, 4, figsize=(19, 4.4))
+    for ax, (metric, ylabel, along) in zip(axes, panels):
+        lines = GRID_DRAWS if along == "models" else GRID_MODELS
+        xs = GRID_MODELS if along == "models" else GRID_DRAWS
+        for colour, fixed in zip(GRID_COLOURS, lines):
+            for split, ls, marker in (("val", "-", "o"), ("train", "--", "s")):
+                pts = [(x, grid[(x, fixed) if along == "models" else (fixed, x)]
+                        .get(f"final/{split}/{metric}")) for x in xs
+                       if ((x, fixed) if along == "models" else (fixed, x)) in grid]
+                pts = [(x, y) for x, y in pts if y is not None]
+                if pts:
+                    label = f"{split}, {fixed} draws" if along == "models" else f"{split}, {fixed}k models"
+                    ax.plot(*zip(*pts), ls, marker=marker, color=colour, lw=2, ms=7,
+                            mec=SURFACE, mew=1.5, label=label)
+        style(ax)
+        ax.set_xscale("log")
+        ax.set_xticks(xs, [f"{x}k" if along == "models" else str(x) for x in xs])
+        ax.minorticks_off()
+        ax.set_xlabel("training models" if along == "models" else "draws per model (at most)")
+        ax.set_ylabel(ylabel)
+        ax.legend(frameon=False, fontsize=8)
+    fig.suptitle(f"Scaling on the sinh corpus: {model_label}; val (solid) vs the rows each "
+                 "model trained on (dashed)", x=0.01, ha="left", color=INK, fontsize=12)
+    fig.tight_layout()
+    save(fig, out, "scaling_grid.png")
+
+
+def catch24_figure(test: dict, train: dict, out: Path, model_label: str):
+    """Per-feature R^2 of the catch24 head on the rows it trained on and on test models."""
+    from delssome_fm.sim.summary import CATCH24_NAMES
+    fig, ax = plt.subplots(figsize=(13, 4.6))
+    x = np.arange(24)
+    for k, (d, colour, label) in enumerate(((train, BLUE, "trained rows"),
+                                            (test, ORANGE, "test models"))):
+        ax.bar(x + (k - 0.5) * 0.4, d["best_catch24_r2"], width=0.38, color=colour, label=label)
+    ax.set_xticks(x, [n.replace("_", " ")[:28] for n in CATCH24_NAMES], rotation=60,
+                  ha="right", fontsize=8)
+    ax.set_ylabel("R² (z-scored feature, all regions)")
+    ax.axhline(0, color=AXIS, lw=1)
+    ax.set_ylim(min(-0.1, float(np.nanmin(test["best_catch24_r2"])) - 0.05), 1)
+    ax.legend(frameon=False, fontsize=9)
+    ax.set_title(f"catch24 per feature: {model_label}", loc="left")
+    style(ax)
+    fig.tight_layout()
+    save(fig, out, "catch24.png")
 
 
 def cost_terms_figure(d: dict, out: Path, model_label: str, note: str, split: str = "test"):
@@ -374,24 +445,31 @@ def main():
     p.add_argument("--reference", type=Path,
                    default=Path("outputs/reference_eval/comparison.npz"),
                    help="scripts/reference_eval_compare.py output; skipped if absent")
+    p.add_argument("--scaling-grid", default=None, metavar="EXPERIMENT:PREFIX",
+                   help="draw scaling_grid.png from these MLflow runs, e.g. stage1_sinh:sinh")
     p.add_argument("--mlflow", default="sqlite:////home/ftian/storage/projects/DELSSOME-FM/"
                    "outputs/mlflow/mlflow.db", help="tracking URI holding the runs' val metrics")
     args = p.parse_args()
     out = args.data / "figures"
     out.mkdir(parents=True, exist_ok=True)
-    d = dict(np.load(args.data / "report_data.npz"))
     # each figure is drawn when its data exists
+    d = dict(np.load(args.data / "report_data.npz")) if (args.data / "report_data.npz").is_file() \
+        else {}
+    t = dict(np.load(args.data / "report_data_train.npz")) \
+        if (args.data / "report_data_train.npz").is_file() else {}
+    if args.scaling_grid is not None:
+        experiment, prefix = args.scaling_grid.split(":")
+        scaling_grid_figure(mlflow_grid(args.mlflow, experiment, prefix), out, args.label)
     if (args.data / "scaling.json").is_file():
         scaling = mlflow_val(json.loads((args.data / "scaling.json").read_text()), args.mlflow)
         scaling_figure(scaling, out)
-    cost_terms_figure(d, out, args.label, args.note)
-    fc_examples_figure(d, out, args.label)
-    fcd_examples_figure(d, out, args.label)
-    if (args.data / "report_data_train.npz").is_file():
-        t = dict(np.load(args.data / "report_data_train.npz"))
-        cost_terms_figure(t, out, args.label, args.note, "train")
-        fc_examples_figure(t, out, args.label, "train")
-        fcd_examples_figure(t, out, args.label, "train")
+    for data, split in ((d, "test"), (t, "train")):
+        if "best_model_corr" in data:           # the model predicts FC and FCD
+            cost_terms_figure(data, out, args.label, args.note, split)
+            fc_examples_figure(data, out, args.label, split)
+            fcd_examples_figure(data, out, args.label, split)
+    if "best_catch24_r2" in d and "best_catch24_r2" in t:
+        catch24_figure(d, t, out, args.label)
     if "comp_d10_n150k_c36_total" in d:
         composition_figure(d, out)
     if args.generalisation is not None:

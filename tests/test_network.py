@@ -348,3 +348,18 @@ def test_lightning_run_with_catch24_selects_on_the_trained_groups(tiny_store, tm
     m = run.data.metrics
     assert {"val/selection", "val/catch24", "final/test/catch24"} <= set(m)
     assert m["val/selection"] == pytest.approx(m["val/total"] + m["val/catch24"], rel=1e-4)
+
+
+def test_catch24_fit_reports_per_feature_r2(tiny_store, tmp_path):
+    from delssome_fm.train.report import catch24_fit
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "train")
+    stage1 = dataclasses.replace(tiny_config(cfg.store_dir, tmp_path), catch24_loss=True)
+    torch.manual_seed(0)
+    module = Stage1Module(stage1, store.n_fcd_levels, (0.4, 1.3)).eval()
+    fit_ = catch24_fit(module, "test", max_rows=8, n_points=5)
+    assert fit_["r2"].shape == (24,) and fit_["true"].shape == fit_["pred"].shape == (5, 24)
+    assert np.isfinite(fit_["r2"][np.isfinite(fit_["r2"])]).all()
+    with pytest.raises(ValueError, match="no catch24 head"):
+        catch24_fit(Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels,
+                                 (0.4, 1.3)), "test")

@@ -4,6 +4,8 @@ simulations on test draws, with the training-average reference and examples
 (train/report.reference_comparison). Writes <out>/report_data.npz and <out>/comparison.npz,
 which scripts/plot_stage1_report.py draws. With --split train it writes only
 <out>/report_data_train.npz: the same cost terms and examples on rows the model trained on.
+A model with a catch24 head also gets per-feature catch24 R^2 and scatter points
+(best_catch24_*); a model without stat_loss gets only those.
 
     python scripts/model_report_data.py --checkpoint outputs/stage1/d10_n300k_mlp_cat/step150000.ckpt \\
         --out outputs/report/d10_n300k_mlp_cat
@@ -21,8 +23,8 @@ import torch
 
 from delssome_fm.config import ReferenceEvalConfig, load_config
 from delssome_fm.train.evaluate import load_stage1
-from delssome_fm.train.report import (prediction_vs_simulation, reference_comparison,
-                                      training_average)
+from delssome_fm.train.report import (catch24_fit, prediction_vs_simulation,
+                                      reference_comparison, training_average)
 
 
 def main() -> None:
@@ -39,10 +41,14 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     module = load_stage1(args.checkpoint).to(device)
-    result = prediction_vs_simulation(module, args.split, args.rows)
     name = "report_data.npz" if args.split == "test" else "report_data_train.npz"
+    result = {}
+    if module.cfg.stat_loss:                    # FC and FCD predictions are trained
+        result.update(prediction_vs_simulation(module, args.split, args.rows))
+    if module.heads.catch24 is not None:
+        result.update({f"catch24_{k}": v for k, v in catch24_fit(module, args.split).items()})
     np.savez(args.out / name, **{f"best_{k}": v for k, v in result.items()})
-    if args.split == "train":
+    if args.split == "train" or not module.cfg.stat_loss:
         print(f"wrote {args.out / name}")
         return
     ref_cfg = load_config(args.reference_config, ReferenceEvalConfig)

@@ -153,3 +153,44 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
     out.update(true_mean_fc=true_mean_fc, example_rows=rows[picks],
                **{f"example_{k}": v[picks] for k, v in p.items()})
     return out
+
+
+@torch.no_grad()
+def catch24_fit(module: Stage1Module, split: str, max_rows: int = 50_000, n_points: int = 4000,
+                seed: int = 0, batch_size: int = 512) -> dict[str, np.ndarray]:
+    """How well a model with a catch24 head predicts each catch24 feature on `split` (for
+    "train", the rows it trained on): R^2 per feature over all (row, region) values, in
+    z-scored units, on a seeded subset of max_rows of the final evaluation's rows; and
+    n_points (row, region) pairs of predicted and simulated values per feature, for scatter
+    plots. Returns r2 (24,), true and pred (n_points, 24)."""
+    if module.heads.catch24 is None:
+        raise ValueError("the module has no catch24 head (catch24_loss was off)")
+    store = TrainingStore(module.cfg.store_dir, split)
+    check_parameter_policy(module, store)
+    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    rows = evaluation_rows(pool, module.cfg)
+    rng = np.random.default_rng(seed)
+    rows = np.sort(rng.choice(rows, min(max_rows, len(rows)), replace=False))
+    device = next(module.parameters()).device
+    edges = torch.arange(1, device=device)          # the FC head is not needed here
+    sse = np.zeros(24)
+    total, total_sq, count = np.zeros(24), np.zeros(24), 0
+    keep = set(rng.choice(len(rows), min(n_points, len(rows)), replace=False).tolist())
+    region = rng.integers(68, size=len(rows))
+    pairs_true, pairs_pred, position = [], [], 0
+    batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
+    for batch in DataLoader(store, sampler=batches, batch_size=None):
+        batch = move_data_to_device(batch, device)
+        pred = module.predict_statistics(batch, edges).catch24.float().cpu().numpy()
+        true = batch.targets["catch24"].float().cpu().numpy()
+        sse += ((pred - true) ** 2).sum(axis=(0, 1))
+        total += true.sum(axis=(0, 1))
+        total_sq += (true ** 2).sum(axis=(0, 1))
+        count += true.shape[0] * true.shape[1]
+        for b in range(len(true)):
+            if position + b in keep:
+                pairs_true.append(true[b, region[position + b]])
+                pairs_pred.append(pred[b, region[position + b]])
+        position += len(true)
+    sst = total_sq - total ** 2 / count
+    return {"r2": 1 - sse / sst, "true": np.array(pairs_true), "pred": np.array(pairs_pred)}
