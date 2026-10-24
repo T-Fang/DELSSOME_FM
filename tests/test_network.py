@@ -26,6 +26,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
         fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, cost_loss=False,
+        fc_autoencoder="none", stat_loss=True, catch24_loss=False,
         max_distance=8,
         max_degree=8, train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
@@ -248,3 +249,102 @@ def test_evaluation_refuses_a_store_of_another_policy(setup, tiny_store):
     store.parameter_policy = "sinh"
     with pytest.raises(ValueError, match="policy"):
         check_parameter_policy(module, store)
+
+
+
+# ---------------------------------------------------------------- catch24 and the FC autoencoder
+
+
+def test_loss_groups_follow_the_switches():
+    from delssome_fm.train.losses import COST_GROUPS, loss_groups
+    assert loss_groups(True, False, False) == GROUPS
+    assert loss_groups(True, True, True) == GROUPS + ("catch24",) + COST_GROUPS
+    assert loss_groups(False, True, False) == ("catch24",)
+    with pytest.raises(ValueError, match="nothing to train"):
+        loss_groups(False, False, False)
+    with pytest.raises(ValueError, match="needs stat_loss"):
+        loss_groups(False, True, True)
+
+
+@pytest.mark.parametrize("stat_loss,cost_loss", [(True, True), (False, False)])
+def test_catch24_head_trains_with_or_without_the_statistics(setup, tmp_path, stat_loss,
+                                                            cost_loss):
+    store, batch, _ = setup
+    assert batch.targets["catch24"].shape == (len(batch.theta), 68, 24)
+    cfg = dataclasses.replace(tiny_config(tmp_path, tmp_path), pair_head="mlp_concat",
+                              fc_offset=False, catch24_loss=True, stat_loss=stat_loss,
+                              cost_loss=cost_loss)
+    torch.manual_seed(0)
+    module = Stage1Module(cfg, store.n_fcd_levels, (0.4, 1.3)).train()
+    module.log = module.log_dict = lambda *a, **k: None          # no trainer attached
+    loss = module.training_step(batch, 0)
+    loss.backward()
+    assert torch.isfinite(loss) and module.heads.catch24 is not None
+    assert module.heads.catch24.net[0].weight.grad is not None
+    trained = module.weighting.groups
+    assert ("catch24" in trained) and (("regional" in trained) == stat_loss)
+    assert module.selection == (GROUPS if stat_loss else ()) + ("catch24",)
+
+
+def _tiny_autoencoder(tiny_store, tmp_path):
+    from delssome_fm.config import FCAutoencoderConfig
+    from delssome_fm.train.autoencoder import fit_autoencoder
+    cfg, _, _ = tiny_store
+    ae_cfg = FCAutoencoderConfig(
+        store_dir=cfg.store_dir, output_dir=tmp_path / "ae", seed=0, latent_dim=8,
+        hidden=(32,), batch_size=4, learning_rate=1e-3, weight_decay=0.0, warmup_steps=1,
+        max_steps=3, val_rows=8, val_every_steps=1, num_workers=0, precision="32-true",
+        log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
+        mlflow_artifact_dir=tmp_path / "artifacts", mlflow_experiment="test_ae")
+    return fit_autoencoder(ae_cfg, Path("fc_autoencoder.yaml"), run_name="tiny")
+
+
+def test_fc_autoencoder_trains_logs_and_reloads(tiny_store, tmp_path):
+    from delssome_fm.train.autoencoder import load_fc_autoencoder
+    path = _tiny_autoencoder(tiny_store, tmp_path)
+    model, norm = load_fc_autoencoder(path)
+    cfg, _, _ = tiny_store
+    with np.load(cfg.store_dir / "normalisation.npz") as n:
+        assert norm == pytest.approx((float(n["pairwise_mean"]), float(n["pairwise_sd"])))
+    assert model.latent_dim == 8 and model(torch.zeros(2, 2278)).shape == (2, 2278)
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}")
+    run = client.search_runs([client.get_experiment_by_name("test_ae").experiment_id])[0]
+    assert {"train/mse", "val/mse", "val/r2"} <= set(run.data.metrics)
+
+
+def test_latent_head_decodes_all_edges_with_a_frozen_decoder(setup, tiny_store, tmp_path):
+    store, batch, _ = setup
+    path = _tiny_autoencoder(tiny_store, tmp_path)
+    norm = (float(store.norm["pairwise_mean"]), float(store.norm["pairwise_sd"]))
+    cfg = dataclasses.replace(tiny_config(tmp_path, tmp_path), pair_head="latent",
+                              fc_offset=False, fc_autoencoder=str(path), cost_loss=True)
+    torch.manual_seed(0)
+    module = Stage1Module(cfg, store.n_fcd_levels, norm).train()
+    module.log = module.log_dict = lambda *a, **k: None
+    with torch.no_grad():
+        out = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
+        some = module.heads.pairwise(out, upper_triangle()[:10])
+        flipped = module.heads.pairwise(out, upper_triangle()[:10].flip(1))
+        full = module.heads.pairwise(out, upper_triangle())
+    torch.testing.assert_close(some, flipped)
+    torch.testing.assert_close(some, full[:, :10])
+    module.training_step(batch, 0).backward()
+    assert all(p.grad is None for p in module.heads.fc_decoder.parameters())   # frozen
+    assert module.heads.fc_latent.net[0].weight.grad is not None
+    with pytest.raises(ValueError, match="z-scored"):
+        Stage1Module(cfg, store.n_fcd_levels, (norm[0] + 1, norm[1]))
+
+
+def test_lightning_run_with_catch24_selects_on_the_trained_groups(tiny_store, tmp_path):
+    cfg, _, _ = tiny_store
+    stage1 = dataclasses.replace(tiny_config(cfg.store_dir, tmp_path), catch24_loss=True)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    fit(stage1, config_file, run_name="c24")
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
+    m = run.data.metrics
+    assert {"val/selection", "val/catch24", "final/test/catch24"} <= set(m)
+    assert m["val/selection"] == pytest.approx(m["val/total"] + m["val/catch24"], rel=1e-4)

@@ -143,8 +143,11 @@ class Stage1Config:
     dropout: float
     fc_rank: int                  # k of the bilinear FC head
     fc_offset: bool               # add a per-draw offset b(h_CLS) to the FC head (nn/heads.py)
-    pair_head: str                # FC head: bilinear | mlp_symmetric | mlp_concat (nn/heads.py)
+    pair_head: str                # FC head: bilinear | mlp_symmetric | mlp_concat | latent
     pair_hidden: int              # hidden width of the MLP pair heads
+    fc_autoencoder: str           # "latent" head: FC autoencoder checkpoint; else "none"
+    stat_loss: bool               # train on the summary statistics (regional, FC, FCD, moments)
+    catch24_loss: bool            # train a catch24 head on the regions' catch24 features
     cost_loss: bool               # add 1 - r, d and KS (raw units, all edges) to the loss
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
@@ -171,6 +174,31 @@ class Stage1Config:
     log_every_steps: int           # training metrics are logged every this many steps
     mlflow_tracking_uri: str
     mlflow_artifact_dir: Path     # where run artifacts go (else MLflow uses ./mlruns)
+    mlflow_experiment: str
+
+
+@dataclass(frozen=True)
+class FCAutoencoderConfig:
+    """configs/fc_autoencoder.yaml: the FC autoencoder (nn/fc_autoencoder.py,
+    train/autoencoder.py), 2026-10-25."""
+
+    store_dir: Path               # the stage-1 training store whose pairwise target it encodes
+    output_dir: Path              # checkpoints, one subdirectory per run
+    seed: int
+    latent_dim: int
+    hidden: tuple[int, ...]       # encoder widths between input and latent (decoder: reversed)
+    batch_size: int
+    learning_rate: float
+    weight_decay: float
+    warmup_steps: int
+    max_steps: int
+    val_rows: int                 # fixed random subset of the val split used for validation
+    val_every_steps: int
+    num_workers: int
+    precision: str
+    log_every_steps: int
+    mlflow_tracking_uri: str
+    mlflow_artifact_dir: Path
     mlflow_experiment: str
 
 

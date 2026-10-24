@@ -6,8 +6,10 @@ loss, AdamW with linear warm-up and cosine decay. train/fit.py wires it to the d
 and checkpointing, and evaluates the best checkpoint after training.
 
 Logged to MLflow, per step: train/<group> MSE, train/total, train/s_<group> (the learned
-loss scales), the learning rate. Per validation, over the fixed val subset: val/<group> MSE,
-val/total (their sum), val/r2_pairwise (R^2 of the z-scored arctanh FC over all edges), and
+loss scales), the learning rate. Per validation, over the fixed val subset: val/<group> MSE
+(catch24 too when the model has its head), val/total (the sum of the four summary-statistic
+groups, comparable across models), val/selection (the sum over the groups the model trains
+on, which picks the checkpoint), val/r2_pairwise (R^2 of the z-scored arctanh FC over all edges), and
 the DELSSOME cost terms between prediction and simulation in raw units (train/costs.py), as
 medians over uncoupled and coupled draws: val/cost_<corr|mean|ks>_<uncoupled|coupled>.
 """
@@ -27,7 +29,7 @@ from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
 from delssome_fm.train.costs import TERMS, cost_terms, raw_fc
 from delssome_fm.train.data import Stage1Batch
-from delssome_fm.train.losses import COST_GROUPS, GROUPS, UncertaintyWeighting, group_losses
+from delssome_fm.train.losses import GROUPS, UncertaintyWeighting, group_losses, loss_groups
 
 N_REGIONS = 68
 
@@ -52,11 +54,26 @@ class Stage1Module(L.LightningModule):
             template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
             n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
             max_distance=cfg.max_distance, max_degree=cfg.max_degree))
+        decoder, latent_dim = None, 0
+        if cfg.pair_head == "latent":
+            from delssome_fm.train.autoencoder import load_fc_autoencoder
+            autoencoder, ae_norm = load_fc_autoencoder(Path(cfg.fc_autoencoder))
+            if not all(math.isclose(a, b, rel_tol=1e-5) for a, b in zip(ae_norm, self.pairwise_norm)):
+                raise ValueError(f"the FC autoencoder was trained on arctanh FC z-scored with "
+                                 f"{ae_norm}, this store uses {self.pairwise_norm}")
+            decoder, latent_dim = autoencoder.decoder, autoencoder.latent_dim
         self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset,
-                                 cfg.pair_head, cfg.pair_hidden)
-        self.weighting = UncertaintyWeighting(GROUPS + (COST_GROUPS if cfg.cost_loss else ()))
+                                 cfg.pair_head, cfg.pair_hidden, cfg.catch24_loss, decoder,
+                                 latent_dim, N_REGIONS)
+        self.weighting = UncertaintyWeighting(loss_groups(cfg.stat_loss, cfg.catch24_loss,
+                                                          cfg.cost_loss))
+        # the checkpoint is chosen by the summed val MSE of the groups the model trains on
+        self.selection = ((GROUPS if cfg.stat_loss else ())
+                          + (("catch24",) if cfg.catch24_loss else ()))
         self.register_buffer("edges", upper_triangle(), persistent=False)
-        self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError() for g in GROUPS})
+        self.val_groups = GROUPS + (("catch24",) if cfg.catch24_loss else ())
+        self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError()
+                                            for g in self.val_groups})
         self.val_r2_pairwise = torchmetrics.R2Score()
         self._val_costs: list[dict[str, torch.Tensor]] = []
 
@@ -86,7 +103,7 @@ class Stage1Module(L.LightningModule):
     def validation_step(self, batch: Stage1Batch, batch_idx: int) -> None:
         all_edges = torch.arange(len(self.edges), device=self.device)
         pred = self.predict_statistics(batch, all_edges)
-        for g in GROUPS:
+        for g in self.val_groups:
             self.val_mse[g].update(getattr(pred, g).float().flatten(), batch.targets[g].flatten())
         self.val_r2_pairwise.update(pred.pairwise.float().flatten(),
                                     batch.targets["pairwise"].flatten())
@@ -108,9 +125,10 @@ class Stage1Module(L.LightningModule):
             if mask.any():
                 self.log_dict({f"val/cost_{t}_{regime}": torch.nanmedian(costs[t][mask])
                                for t in TERMS})
-        mse = {g: self.val_mse[g].compute() for g in GROUPS}
+        mse = {g: self.val_mse[g].compute() for g in self.val_groups}
         self.log_dict({f"val/{g}": v for g, v in mse.items()})
-        self.log("val/total", torch.stack(list(mse.values())).sum(), prog_bar=True)
+        self.log("val/total", torch.stack([mse[g] for g in GROUPS]).sum(), prog_bar=True)
+        self.log("val/selection", torch.stack([mse[g] for g in self.selection]).sum())
         self.log("val/r2_pairwise", self.val_r2_pairwise.compute())
         for metric in [*self.val_mse.values(), self.val_r2_pairwise]:
             metric.reset()

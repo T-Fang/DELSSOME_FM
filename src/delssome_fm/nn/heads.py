@@ -13,9 +13,14 @@ from the backbone outputs. Targets are in the units of train/pack.py, z-scored w
                                (i, j) by construction, no rank or sign limit (2026-10-19)
                 mlp_concat     (MLP([r_i, r_j, h_CLS]) + MLP([r_j, r_i, h_CLS])) / 2: plain
                                concatenation, symmetrised by averaging both orders (2026-10-19)
+                latent         decoder(MLP(h_CLS)): a latent vector of the FC autoencoder
+                               (nn/fc_autoencoder.py), decoded by its frozen decoder into all
+                               2278 edges (2026-10-25)
     fc_moments  (B, 3)     MLP(h_CLS)                                            z-scored
     fcd         (B, L)     monotone: cumulative sum of a softmax over L levels, so it is a
                            valid CDF (non-decreasing, ends at 1) by construction   raw CDF
+    catch24     (B, N, 24) MLP_c24(r_i), weights shared across regions, if configured
+                                                                                 z-scored
 """
 
 from __future__ import annotations
@@ -31,7 +36,8 @@ from delssome_fm.nn.layers import MLP
 
 N_REGIONAL_STATS = 6
 N_FC_MOMENTS = 3
-PAIR_HEADS = ("bilinear", "mlp_symmetric", "mlp_concat")
+PAIR_HEADS = ("bilinear", "mlp_symmetric", "mlp_concat", "latent")
+N_CATCH24 = 24
 
 
 @dataclass
@@ -40,21 +46,36 @@ class Stage1Prediction:
     pairwise: torch.Tensor
     fc_moments: torch.Tensor
     fcd: torch.Tensor
+    catch24: torch.Tensor | None = None
 
 
 class Stage1Heads(nn.Module):
     def __init__(self, d: int, rank: int, n_fcd_levels: int, fc_offset: bool,
-                 pair_head: str = "bilinear", pair_hidden: int = 128):
+                 pair_head: str = "bilinear", pair_hidden: int = 128, catch24: bool = False,
+                 fc_decoder: nn.Module | None = None, latent_dim: int = 0,
+                 n_regions: int = 68):
+        """fc_decoder, latent_dim: the trained FC autoencoder's decoder and latent width, for
+        pair_head "latent" only (kept frozen)."""
         super().__init__()
         if pair_head not in PAIR_HEADS:
             raise ValueError(f"pair_head must be one of {PAIR_HEADS}, found {pair_head!r}")
         if fc_offset and pair_head != "bilinear":
             raise ValueError("fc_offset belongs to the bilinear head; the MLP heads read h_CLS")
+        if (pair_head == "latent") != (fc_decoder is not None):
+            raise ValueError("the latent pair head needs an FC decoder, and only it takes one")
         self.rank, self.pair_head = rank, pair_head
         self.fc_offset = MLP([d, d, 1]) if fc_offset else None
         self.regional = MLP([d, d, N_REGIONAL_STATS])
+        self.catch24 = MLP([d, d, N_CATCH24]) if catch24 else None
         if pair_head == "bilinear":
             self.phi = MLP([d, d, rank])
+        elif pair_head == "latent":
+            self.fc_latent = MLP([d, d, latent_dim])
+            self.fc_decoder = fc_decoder.requires_grad_(False)
+            position = torch.zeros(n_regions, n_regions, dtype=torch.long)
+            i, j = torch.triu_indices(n_regions, n_regions, offset=1)
+            position[i, j] = position[j, i] = torch.arange(len(i))
+            self.register_buffer("edge_position", position, persistent=False)
         else:
             width = 4 * d if pair_head == "mlp_symmetric" else 3 * d
             self.pair_mlp = MLP([width, pair_hidden, pair_hidden, 1])
@@ -66,7 +87,9 @@ class Stage1Heads(nn.Module):
         return Stage1Prediction(regional=self.regional(out.regions),
                                 pairwise=self.pairwise(out, edges),
                                 fc_moments=self.fc_moments(out.h_cls),
-                                fcd=torch.softmax(self.fcd_logits(out.h_cls), -1).cumsum(-1))
+                                fcd=torch.softmax(self.fcd_logits(out.h_cls), -1).cumsum(-1),
+                                catch24=None if self.catch24 is None
+                                else self.catch24(out.regions))
 
     def pairwise(self, out: BackboneOutput, edges: torch.Tensor) -> torch.Tensor:
         """edges (E, 2) -> (B, E) the prediction of the configured pair head."""
@@ -74,6 +97,9 @@ class Stage1Heads(nn.Module):
             f = self.phi(out.regions)                                 # (B, N, k)
             fc = (f[:, edges[:, 0]] * f[:, edges[:, 1]]).sum(-1) / math.sqrt(self.rank)
             return fc if self.fc_offset is None else fc + self.fc_offset(out.h_cls)
+        if self.pair_head == "latent":
+            full = self.fc_decoder(self.fc_latent(out.h_cls))           # (B, 2278)
+            return full[:, self.edge_position[edges[:, 0], edges[:, 1]]]
         ri, rj = out.regions[:, edges[:, 0]], out.regions[:, edges[:, 1]]   # (B, E, d)
         cls = out.h_cls[:, None].expand(-1, len(edges), -1)
         if self.pair_head == "mlp_symmetric":

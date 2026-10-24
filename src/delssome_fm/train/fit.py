@@ -1,7 +1,9 @@
 """Train stage 1 and evaluate the result, in one job (scripts/train_stage1.py calls `fit`).
 
 `fit` builds the data module, the Stage1Module, the MLflow logger and checkpointing, trains,
-then runs `final_evaluation` on the best checkpoint (lowest val/total) on the same GPU, so
+then runs `final_evaluation` on the best checkpoint (lowest val/selection: the summed val
+MSE of the groups the model trains on, which is val/total unless catch24 is trained) on the
+same GPU, so
 the report needs no separate evaluation job:
 
     final/<split>/<metric>   for split = train (the run's own training rows), val, test, each
@@ -57,7 +59,9 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     effective.write_text(f"# from {config_path}\n" + to_yaml(cfg))
     logger.experiment.log_artifact(logger.run_id, str(effective))
     logger.log_hyperparams({"train_rows": len(data.train_rows)})
-    best = ModelCheckpoint(dirpath=checkpoints, monitor="val/total", save_top_k=3,
+    if cfg.catch24_loss and "catch24" not in data.train.targets:
+        raise ValueError(f"catch24_loss is set, but {cfg.store_dir} has no catch24 targets")
+    best = ModelCheckpoint(dirpath=checkpoints, monitor="val/selection", save_top_k=3,
                            save_last=True, filename="step{step}", auto_insert_metric_name=False)
     trainer = L.Trainer(
         max_steps=cfg.max_steps, val_check_interval=cfg.val_every_steps,

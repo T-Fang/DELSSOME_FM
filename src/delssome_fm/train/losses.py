@@ -7,6 +7,10 @@ With cost_loss (decided 2026-10-19), the DELSSOME cost terms between prediction 
 simulation (1 - r, d, KS in raw units over all edges, train/costs.py) join as three more
 groups, COST_GROUPS, each a mean over the batch's rows.
 
+Which groups train (2026-10-25): GROUPS with stat_loss, "catch24" with catch24_loss, the
+cost groups with cost_loss (`loss_groups`). Validation and evaluation report every group the
+model can predict, trained or not.
+
 Every training row is a usable draw (train/pack.py), so no per-statistic masking is needed.
 """
 
@@ -21,14 +25,28 @@ GROUPS: tuple[str, ...] = ("regional", "pairwise", "fcd", "fc_moments")
 COST_GROUPS: tuple[str, ...] = ("cost_corr", "cost_mean", "cost_ks")
 
 
+def loss_groups(stat_loss: bool, catch24_loss: bool, cost_loss: bool) -> tuple[str, ...]:
+    """The groups a configuration trains on, in the order of their learned scales."""
+    if not (stat_loss or catch24_loss):
+        raise ValueError("nothing to train: set stat_loss and/or catch24_loss")
+    if cost_loss and not stat_loss:
+        raise ValueError("cost_loss compares predicted FC and FCD: it needs stat_loss")
+    return ((GROUPS if stat_loss else ()) + (("catch24",) if catch24_loss else ())
+            + (COST_GROUPS if cost_loss else ()))
+
+
 def group_losses(pred: Stage1Prediction, targets: dict[str, torch.Tensor],
                  edge_index: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Mean squared error of each group. edge_index (E,): the upper-triangle edges that
-    pred.pairwise was computed at, as positions in the targets' 2278 edges."""
-    return {"regional": _mse(pred.regional, targets["regional"]),
-            "pairwise": _mse(pred.pairwise, targets["pairwise"][:, edge_index]),
-            "fcd": _mse(pred.fcd, targets["fcd"]),
-            "fc_moments": _mse(pred.fc_moments, targets["fc_moments"])}
+    """Mean squared error of each group the prediction holds (catch24 when it has a catch24
+    head). edge_index (E,): the upper-triangle edges that pred.pairwise was computed at, as
+    positions in the targets' 2278 edges."""
+    out = {"regional": _mse(pred.regional, targets["regional"]),
+           "pairwise": _mse(pred.pairwise, targets["pairwise"][:, edge_index]),
+           "fcd": _mse(pred.fcd, targets["fcd"]),
+           "fc_moments": _mse(pred.fc_moments, targets["fc_moments"])}
+    if pred.catch24 is not None:
+        out["catch24"] = _mse(pred.catch24, targets["catch24"])
+    return out
 
 
 def _mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
