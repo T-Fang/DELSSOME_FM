@@ -8,3 +8,4 @@ n_repeats: 2            # two simulations per set: the second gives the noise fl
 models: [mfm, fic, hopf]
 # z-score statistics of the evaluated model's training store (d10_n300k_natural)
 training_store: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_d10
+corpus_config: configs/corpus_d10.yaml   # protocol and parameter policy (multiplier)

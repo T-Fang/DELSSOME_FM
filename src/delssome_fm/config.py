@@ -224,6 +224,8 @@ class ReferenceEvalConfig:
     n_repeats: int                # simulations per parameter set, independent noise
     models: tuple[str, ...]       # reference cards with fitted sets in configs/reproduce.yaml
     training_store: Path          # its normalisation.npz z-scores the targets
+    corpus_config: Path           # the corpus whose simulation protocol and parameter policy
+                                  # (multiplier: median rescale; sinh: actual values) apply
 
 
 @dataclass(frozen=True)

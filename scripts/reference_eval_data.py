@@ -22,13 +22,13 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = load_config(args.config, ReferenceEvalConfig)
-    corpus_cfg = load_config(Path("configs/corpus_d10.yaml"), CorpusConfig)
+    corpus_cfg = load_config(cfg.corpus_config, CorpusConfig)
     sim_cfg = load_config(Path("configs/sim.yaml"), SimConfig)
     rcfg = load_config(Path("configs/reproduce.yaml"), ReproduceConfig)
     summary = {}
     for name in cfg.models:
         s = simulate_model(corpus_cfg, sim_cfg, cfg, rcfg, name)
-        packed = pack_model(cfg, sim_cfg, name, s.pop("sc"))
+        packed = pack_model(cfg, sim_cfg, name, s.pop("sc"), corpus_cfg.parameter_policy)
         summary[name] = {**s, "rows_per_repeat": [r["rows"] for r in packed]}
         print(json.dumps(summary[name]))
     (cfg.output_dir / "summary.json").write_text(json.dumps(summary, indent=2))

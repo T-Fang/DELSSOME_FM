@@ -13,6 +13,11 @@ other sign than the median cannot be represented (a corpus parameter never chang
 is excluded; values beyond 0.1-10x the median are kept and counted as outside the training
 range.
 
+That is the multiplier policy (corpus_d10). Under the sinh policy (corpus_sinh, 2026-10-25)
+the network reads each region's actual coefficient, so `actual_values` only folds each free
+parameter's card scale into its values (a free slot's scale becomes +-1, as in the sinh
+corpus) and every fitted set is usable, MFM's sign-changing ones included.
+
 Each usable set is simulated `n_repeats` times with independent noise and initial states
 (x0 ~ U(-s, s) as in the corpus) on the test group's SC, and written as a corpus-style chunk
 per repeat, so train/pack.pack_chunks packs it into a store split <model>_r<k>.
@@ -60,6 +65,35 @@ def in_convention(card: ModelCard, theta: np.ndarray, psi: np.ndarray,
             psi / np.array([medians[p] for p in card.global_params]), medians)
 
 
+def actual_values(card: ModelCard, theta: np.ndarray, psi: np.ndarray,
+                  ) -> tuple[ModelCard, np.ndarray, np.ndarray, dict[str, float]]:
+    """The card with each free parameter's slot scales divided by m_p (the scale of its first
+    slot), and theta, psi multiplied by it: the parameter now holds the actual coefficient
+    (sinh policy), every slot scale is +-1, and the equations are unchanged. Raises if a
+    parameter's slots differ in |scale| (no single actual coefficient). Returns the new card,
+    theta, psi and the m_p by parameter name."""
+    slots: dict[str, list[float]] = {}
+    _collect_scales(card, slots)
+    if any(not np.allclose(np.abs(s), abs(s[0])) for s in slots.values()):
+        raise ValueError(f"{card.name}: a parameter's slots differ in |scale|: {slots}")
+    m = {p: s[0] for p, s in slots.items()}
+    return (_rescale(card, {p: 1.0 / v for p, v in m.items()}),
+            theta * np.array([m[p] for p in card.regional_params]),
+            psi * np.array([m[p] for p in card.global_params]), m)
+
+
+def _collect_scales(x, slots: dict[str, list[float]]) -> None:
+    if isinstance(x, Coef):
+        if x.param:
+            slots.setdefault(x.param, []).append(x.scale)
+    elif isinstance(x, tuple):
+        for v in x:
+            _collect_scales(v, slots)
+    elif dataclasses.is_dataclass(x):
+        for f in dataclasses.fields(x):
+            _collect_scales(getattr(x, f.name), slots)
+
+
 def _rescale(x, medians: dict[str, float]):
     """Every Coef(param=p) in a card, with its scale multiplied by medians[p]."""
     if isinstance(x, Coef):
@@ -77,8 +111,12 @@ def simulate_model(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: ReferenceE
     """Simulate one reference model's usable fitted sets n_repeats times and write chunk
     <output_dir>/chunks/<name>_r<k>.npz (+ .cards.jsonl) per repeat; returns a summary."""
     theta, psi, sc = fitted_sets(rcfg, name)
-    card, theta, psi, medians = in_convention(load_reference(name), theta, psi)
-    usable = (theta > 0).all(axis=(1, 2)) & (psi > 0).all(axis=1)
+    if corpus_cfg.parameter_policy == "sinh":
+        card, theta, psi, factors = actual_values(load_reference(name), theta, psi)
+        usable = np.ones(len(theta), bool)
+    else:
+        card, theta, psi, factors = in_convention(load_reference(name), theta, psi)
+        usable = (theta > 0).all(axis=(1, 2)) & (psi > 0).all(axis=1)
     sets = np.flatnonzero(usable)
     model = compile_card(card)
     out = cfg.output_dir / "chunks"
@@ -97,22 +135,21 @@ def simulate_model(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: ReferenceE
         np.savez(path.with_suffix(".npz"), **res)
         path.with_suffix(".cards.jsonl").write_text(json.dumps(
             {"split": "reference", "index": 0, "sc_group": 0, "card": card_to_dict(card)}) + "\n")
-    t = theta[sets]
+    t = np.abs(theta[sets])
     return {"model": name, "sets": int(len(sets)), "excluded_sets": int((~usable).sum()),
-            "medians": medians, "sc": sc,
-            "share_outside_0.1_10": float(np.mean(np.abs(np.log10(t)) > 1)),
-            "log10_multiplier_range": [float(np.log10(t).min()), float(np.log10(t).max())]}
+            "parameter_policy": corpus_cfg.parameter_policy, "factors": factors, "sc": sc,
+            "log10_abs_theta_range": [float(np.log10(t).min()), float(np.log10(t).max())]}
 
 
-def pack_model(cfg: ReferenceEvalConfig, sim_cfg: SimConfig, name: str, sc: np.ndarray) -> list:
+def pack_model(cfg: ReferenceEvalConfig, sim_cfg: SimConfig, name: str, sc: np.ndarray,
+               parameter_policy: str) -> list:
     """Pack each repeat's chunk into split <name>_r<k> of the store <output_dir>/store, z-scored
     with cfg.training_store's statistics (train/pack.pack_chunks)."""
     from delssome_fm.train.pack import n_window_pairs, pack_chunks
     store = cfg.output_dir / "store"
     out = [pack_chunks([cfg.output_dir / "chunks" / f"{name}_r{k}.npz"], [0],
                        n_window_pairs(sim_cfg), store / f"{name}_r{k}", sc[None],
-                       # in_convention gives multipliers of the rescaled card's constants
-                       {"model": name, "repeat": k, "parameter_policy": "multiplier"})
+                       {"model": name, "repeat": k, "parameter_policy": parameter_policy})
            for k in range(cfg.n_repeats)]
     shutil.copy(cfg.training_store / "normalisation.npz", store / "normalisation.npz")
     return out
