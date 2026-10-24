@@ -73,3 +73,18 @@ def test_packed_tiny_corpus(tiny_store):
     norm = np.load(cfg.store_dir / "normalisation.npz")
     z = (np.load(root / "regional.npy") - norm["regional_mean"]) / norm["regional_sd"]
     np.testing.assert_allclose(z.reshape(-1, 6).mean(0), 0, atol=1e-4)
+
+
+def test_catch24_is_packed_transformed_and_z_scored(tiny_store):
+    """The tiny corpus stores catch24, so the store has it: finite, (R, N, 24), with
+    per-feature normalisation statistics, and the loader serves it z-scored."""
+    from delssome_fm.train.pack import CATCH24_TRANSFORMS, transform_catch24
+    cfg, _, _ = tiny_store
+    x = np.load(cfg.store_dir / "train" / "catch24.npy")
+    assert x.shape[1:] == (68, 24) and np.isfinite(x).all() and len(CATCH24_TRANSFORMS) == 24
+    with np.load(cfg.store_dir / "normalisation.npz") as n:
+        assert n["catch24_mean"].shape == (24,) and (n["catch24_sd"] > 0).all()
+    raw = np.ones((1, 2, 24)) * 10.0
+    t = transform_catch24(raw)
+    assert t[0, 0, 4] == 1.0 and t[0, 0, 12] == np.float32(np.log10(11.0))   # log10, log10(1+x)
+    assert t[0, 0, 22] == np.float32(np.arcsinh(1.0)) and t[0, 0, 0] == 10.0  # mean/SD, raw

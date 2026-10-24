@@ -1,0 +1,8 @@
+# The stage-1 training store packed from configs/corpus_sinh.yaml (sinh policy, 100 draws per
+# model, catch24 targets; 2026-10-25). Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh
+
+# the first valid models of each split (corpus finished 2026-10-24: train 105,765 valid among
+# candidates 0..289,999; val 10,965 among 0..30,499; test 11,303 among 0..30,999)
+n_models: {train: 100000, val: 10000, test: 10000}

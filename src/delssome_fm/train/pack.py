@@ -15,6 +15,11 @@ statistics from the train split, and the data loader applies them (decided 2026-
     fcd (L,)          the FCD CDF at its L = 100 stored levels, divided by the number of
                       window pairs
     fc_moments (3,)   mean, log10 SD, skewness of the FC upper triangle
+    catch24 (N, 24)   the catch24 features of each region (sim/summary.py), when the corpus
+                      has them (2026-10-25), each made roughly symmetric (CATCH24_TRANSFORMS):
+                      log10 for lags, counts and other positive heavy-tailed features,
+                      asinh(trev / 0.01), the regional transforms for the mean and SD, the
+                      rest (bounded) unchanged
 
 The scale-free statistics are transformed because observables have arbitrary units: raw
 regional SD spans 15 orders of magnitude, and a plain z-score would collapse most values to
@@ -26,6 +31,7 @@ Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
     draw.npy (R,) int32
     theta.npy (R, N, 5), psi.npy (R, 2)            float32, NaN beyond the model's P, K
     regional.npy, pairwise.npy, fcd.npy, fc_moments.npy   float32 targets
+    catch24.npy (R, N, 24)     float32, only for corpora that store catch24
     models.npz                 one entry per model: corpus index, SC group, sizes, graph roles
     node_features.npy (sum M, 21), node_degree.npy (sum M, 2)    concatenated over models
     distances.npy (sum M^2,) int16                 each model's (M, M) shortest paths, flat
@@ -58,6 +64,7 @@ N_REGIONS = 68
 V_MAX = 6          # state variables per model (generation.md §2)
 C_MAX = 2          # coupling channels per model
 TARGETS = ("regional", "pairwise", "fcd", "fc_moments")
+OPTIONAL_TARGETS = ("catch24",)    # packed when the corpus has it
 ROW_ARRAYS = ("model", "draw", "theta", "psi", *TARGETS)
 
 
@@ -70,6 +77,40 @@ def transform_regional(regional: np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
         out = np.stack([np.arcsinh(mean / sd), np.log10(sd), np.arcsinh(skew),
                         np.log(excess_kurtosis + 3.0), regional[..., 4], regional[..., 5]], axis=-1)
+    return out.astype(np.float32)
+
+
+# per catch24 feature (sim/summary.CATCH24_NAMES order): how it is transformed. Chosen from
+# the feature ranges in the sinh corpus (2026-10-25): lags and counts span 1 to ~1200 frames.
+CATCH24_TRANSFORMS = (
+    "raw", "raw", "raw", "raw",          # histogram modes, outlier-include (about -4 .. 4)
+    "log10", "log10",                    # first 1/e crossing and first minimum of the ACF
+    "raw", "log10",                      # fft area below 1/5 band (0..1); wq_50 (0.003..3)
+    "raw", "log10",                      # local-mean stde (0..1.5); taurat (0.001..2.6)
+    "raw",                               # pNN40 (0..1)
+    "log10", "log10p1",                  # longest stretches of 1s (1..), of 0s (0..)
+    "raw", "raw",                        # motif entropy (0..2.2), AMI at lag 2 (0..1.6)
+    "asinh_trev",                        # time-reversal statistic, signed, IQR ~ +-0.01
+    "log10",                             # first minimum of the AMI (2..40)
+    "log10_eps",                         # transition-matrix covariance (0..0.33)
+    "log10p1",                           # Wang periodicity (0..400)
+    "log10",                             # Embed2 exponential-fit mean difference (0.005..1e6)
+    "raw", "raw",                        # fluctuation-analysis proportions (0.25..0.75)
+    "mean_over_sd", "log10")             # DN_mean (as asinh(mean / SD)), DN_Spread_std
+
+
+def transform_catch24(catch24: np.ndarray) -> np.ndarray:
+    """(..., N, 24) raw catch24 features -> the transformed features (CATCH24_TRANSFORMS)."""
+    x = catch24.astype(np.float64)
+    out = np.empty_like(x)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for j, kind in enumerate(CATCH24_TRANSFORMS):
+            v = x[..., j]
+            out[..., j] = {"raw": lambda: v, "log10": lambda: np.log10(v),
+                           "log10p1": lambda: np.log10(1.0 + v),
+                           "log10_eps": lambda: np.log10(v + 1e-5),
+                           "asinh_trev": lambda: np.arcsinh(v / 0.01),
+                           "mean_over_sd": lambda: np.arcsinh(v / x[..., 23])}[kind]()
     return out.astype(np.float32)
 
 
@@ -159,6 +200,8 @@ def _select_rows(chunks: list[Path], members: np.ndarray, full: int,
             complete = d["fcd_cdf"][:, -1] == full
             finite = (np.isfinite(transform_regional(d["regional"])).all(axis=(1, 2))
                       & np.isfinite(transform_fc_moments(d["fc_moments"])).all(axis=1))
+            if "catch24" in d.files:
+                finite &= np.isfinite(transform_catch24(d["catch24"])).all(axis=(1, 2))
             counts["draws"] += int(ours.sum())
             counts["diverged"] += int((ours & d["diverged"]).sum())
             counts["flat"] += int((ours & d["flat"]).sum())
@@ -176,9 +219,12 @@ def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[
         raise ValueError(f"{out}: no usable draws among the corpus models")
     with np.load(next(p for p, m in keep.items() if m.any())) as d:
         n_levels = d["fcd_cdf"].shape[1]                  # 100 with fcd_store_stride 100
+        has_catch24 = "catch24" in d.files
     shapes = {"model": (n,), "draw": (n,), "theta": (n, N_REGIONS, P_MAX), "psi": (n, K_MAX),
               "regional": (n, N_REGIONS, 6), "pairwise": (n, N_REGIONS * (N_REGIONS - 1) // 2),
               "fcd": (n, n_levels), "fc_moments": (n, 3)}
+    if has_catch24:
+        shapes["catch24"] = (n, N_REGIONS, 24)
     dtypes = {"model": np.int32, "draw": np.int32}
     arrays = {k: np.lib.format.open_memmap(out / f"{k}.npy", mode="w+",
                                            dtype=dtypes.get(k, np.float32), shape=s)
@@ -196,6 +242,8 @@ def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[
                      "regional": transform_regional(d["regional"][mask]),
                      "pairwise": d["pairwise"][mask], "fcd": d["fcd_cdf"][mask] / full,
                      "fc_moments": transform_fc_moments(d["fc_moments"][mask])}
+            if has_catch24:
+                block["catch24"] = transform_catch24(d["catch24"][mask])
         stop = start + len(block["model"])
         for k, v in block.items():
             arrays[k][start:stop] = v
@@ -237,11 +285,15 @@ def _write_models(chunks: list[Path], members: list[int], rows_per_model: np.nda
 
 def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.ndarray]:
     """Mean and SD of each z-scored target over the train split, written to
-    <store_dir>/normalisation.npz: per column for regional (6) and fc_moments (3), one value
-    pooled over all edges for pairwise. The FCD CDF is not z-scored: it is a probability, and
+    <store_dir>/normalisation.npz: per column for regional (6), fc_moments (3) and catch24
+    (24, when packed), one value pooled over all edges for pairwise. A column that is
+    constant over the train split (SD 0, e.g. a catch24 proportion of very short runs) gets
+    SD 1: it is centred, not scaled. The FCD CDF is not z-scored: it is a probability, and
     the monotone head predicts it directly (architecture.md §5.2)."""
     train = store_dir / "train"
     pool = {"regional": (0, 1), "pairwise": (0, 1), "fc_moments": (0,)}
+    if (train / "catch24.npy").is_file():
+        pool["catch24"] = (0, 1)
     stats = {}
     for name, axes in pool.items():
         a = np.load(train / f"{name}.npy", mmap_mode="r")
@@ -253,7 +305,8 @@ def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.nda
             count += int(np.prod([x.shape[i] for i in axes]))
         mean = total / count
         stats[f"{name}_mean"] = np.asarray(mean, np.float32)
-        stats[f"{name}_sd"] = np.asarray(np.sqrt(total_sq / count - mean ** 2), np.float32)
+        sd = np.sqrt(np.maximum(total_sq / count - mean ** 2, 0.0))
+        stats[f"{name}_sd"] = np.asarray(np.where(sd > 0, sd, 1.0), np.float32)
     np.savez(store_dir / "normalisation.npz", **stats)
     return stats
 

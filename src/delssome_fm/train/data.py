@@ -24,9 +24,9 @@ from torch.utils.data import (BatchSampler, DataLoader, Dataset, SequentialSampl
 
 from delssome_fm.nn.template_encoder import GraphBatch
 from delssome_fm.spec.sampler import POLICIES, SINH_SCALE, SINH_Z
-from delssome_fm.train.pack import TARGETS
+from delssome_fm.train.pack import OPTIONAL_TARGETS, TARGETS
 
-Z_SCORED = ("regional", "pairwise", "fc_moments")   # fcd is a raw CDF (pack.normalisation)
+Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24")   # fcd: a raw CDF (pack.normalisation)
 
 
 @dataclass
@@ -59,6 +59,10 @@ class TrainingStore(Dataset):
             raise FileNotFoundError(f"{root}: no packed split (run scripts/pack_training_data.py)")
         self.rows = {k: np.load(root / f"{k}.npy", mmap_mode="r")
                      for k in ("model", "theta", "psi", *TARGETS)}
+        self.targets = TARGETS + tuple(k for k in OPTIONAL_TARGETS
+                                       if (root / f"{k}.npy").is_file())
+        self.rows.update({k: np.load(root / f"{k}.npy", mmap_mode="r")
+                          for k in self.targets if k not in TARGETS})
         with np.load(root / "models.npz") as m:
             self.models = {k: m[k] for k in m.files}
         self.node_features = np.load(root / "node_features.npy", mmap_mode="r")
@@ -83,7 +87,7 @@ class TrainingStore(Dataset):
     def __getitem__(self, rows: list[int]) -> Stage1Batch:
         idx = np.sort(np.asarray(rows))
         model = self.rows["model"][idx]
-        targets = {k: torch.from_numpy(self._target(k, self.rows[k][idx])) for k in TARGETS}
+        targets = {k: torch.from_numpy(self._target(k, self.rows[k][idx])) for k in self.targets}
         encode = lambda x: encode_parameters(x, self.parameter_policy)    # noqa: E731
         return Stage1Batch(theta=encode(self.rows["theta"][idx]),
                            psi=encode(self.rows["psi"][idx]),
