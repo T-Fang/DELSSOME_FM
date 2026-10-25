@@ -130,6 +130,7 @@ def fit_autoencoder(cfg: FCAutoencoderConfig, config_path: Path, run_name: str |
                            filename="step{step}", auto_insert_metric_name=False)
     trainer = L.Trainer(max_steps=cfg.max_steps, val_check_interval=cfg.val_every_steps,
                         check_val_every_n_epoch=None, precision=cfg.precision, logger=logger,
+                        gradient_clip_val=cfg.gradient_clip,
                         log_every_n_steps=cfg.log_every_steps, callbacks=[best])
     trainer.fit(module, loader(train, train_batches), loader(val, val_batches))
     return Path(best.best_model_path)

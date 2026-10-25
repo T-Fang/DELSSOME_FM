@@ -294,6 +294,7 @@ def _tiny_autoencoder(tiny_store, tmp_path):
         store_dir=cfg.store_dir, output_dir=tmp_path / "ae", seed=0, latent_dim=8,
         hidden=(32,), batch_size=4, learning_rate=1e-3, weight_decay=0.0, warmup_steps=1,
         max_steps=3, val_rows=8, val_every_steps=1, num_workers=0, precision="32-true",
+        gradient_clip=1.0,
         log_every_steps=1, mlflow_tracking_uri=f"sqlite:///{tmp_path / 'mlflow.db'}",
         mlflow_artifact_dir=tmp_path / "artifacts", mlflow_experiment="test_ae")
     return fit_autoencoder(ae_cfg, Path("fc_autoencoder.yaml"), run_name="tiny")

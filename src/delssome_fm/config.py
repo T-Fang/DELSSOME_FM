@@ -196,6 +196,7 @@ class FCAutoencoderConfig:
     val_every_steps: int
     num_workers: int
     precision: str
+    gradient_clip: float          # max gradient norm (without it, training diverged: 2026-10-25)
     log_every_steps: int
     mlflow_tracking_uri: str
     mlflow_artifact_dir: Path
