@@ -14,6 +14,10 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     scaling_grid.png    models x draws-per-model grid (--scaling-grid: final/<split>/* of the
                         MLflow runs <prefix>_m<M>k_d<D>_cost), train and val
     catch24.png         per-feature catch24 R^2, trained rows vs test (models with the head)
+    network_fc.png, network_fc_examples.png
+                        Yeo-7 network FC: predicted by an fc_net head and/or downsampled from
+                        the region-level prediction, trained rows vs test
+                        (scripts/network_fc_report_data.py; skipped if absent)
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
                         (from scripts/generalisation_report_data.py)
@@ -187,6 +191,83 @@ def catch24_figure(test: dict, train: dict, out: Path, model_label: str):
     style(ax)
     fig.tight_layout()
     save(fig, out, "catch24.png")
+
+
+NETWORK_KINDS = (("direct", "network-FC head"), ("downsampled", "region FC, downsampled"))
+
+
+def network_fc_figure(test: dict, train: dict, out: Path, model_label: str):
+    """1 - r on coupled draws, and the arctanh-FC MSE and |mean difference| over all draws, of
+    the network FC predictions, on trained rows and test."""
+    kinds = [(k, name) for k, name in NETWORK_KINDS if f"{k}_corr" in test]
+    panels = [("corr", "1 − r of the 21 network FC values\n(coupled draws)", True),
+              ("mse", "MSE of arctanh network FC\n(all draws)", False),
+              ("mean", "|Δ mean network FC|\n(all draws)", False)]
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
+    for ax, (metric, title, coupled_only) in zip(axes, panels):
+        data, pos, colors, labels = [], [], [], []
+        for g, (k, name) in enumerate(kinds):
+            for j, (d, split, colour) in enumerate(((train, "trained rows", BLUE),
+                                                    (test, "test", ORANGE))):
+                v = d[f"{k}_{metric}"][d["coupled"]] if coupled_only else d[f"{k}_{metric}"]
+                data.append(v[np.isfinite(v)])
+                pos.append(g * 2.6 + j)
+                colors.append(colour)
+        bp = ax.boxplot(data, positions=pos, widths=0.7, showfliers=False, patch_artist=True,
+                        medianprops=dict(color=INK, lw=2), whiskerprops=dict(color=INK2),
+                        capprops=dict(color=INK2))
+        for box, c in zip(bp["boxes"], colors):
+            box.set(facecolor=c, alpha=0.35, edgecolor=c, lw=1.5)
+        for p_, v in zip(pos, data):
+            ax.annotate(f"{np.median(v):.2f}", (p_, np.median(v)), xytext=(0, 4),
+                        textcoords="offset points", ha="center", fontsize=8, color=INK2)
+        ax.set_xticks([g * 2.6 + 0.5 for g in range(len(kinds))], [name for _, name in kinds])
+        ax.set_title(title, loc="left", fontsize=10)
+        style(ax)
+    axes[0].legend([plt.Rectangle((0, 0), 1, 1, fc=BLUE, alpha=0.35, ec=BLUE),
+                    plt.Rectangle((0, 0), 1, 1, fc=ORANGE, alpha=0.35, ec=ORANGE)],
+                   ["trained rows", "test"], frameon=False, fontsize=9, loc="lower left")
+    fig.suptitle(f"Yeo-7 network FC: {model_label} vs numerical simulation "
+                 f"(coupled: region mean FC > 0.05; n test = {len(test['coupled'])})",
+                 x=0.01, ha="left", color=INK, fontsize=12)
+    fig.tight_layout()
+    save(fig, out, "network_fc.png")
+
+
+def network_fc_examples_figure(test: dict, train: dict, out: Path, model_label: str):
+    """Simulated and predicted 7 x 7 network FC of the coupled draw at the median 1 - r, on
+    trained rows (top) and test (bottom)."""
+    from delssome_fm.data.networks import NETWORK_PAIRS, YEO7_NAMES
+    kinds = [(k, name) for k, name in NETWORK_KINDS if f"{k}_corr" in test]
+    cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
+    fig, axes = plt.subplots(2, 1 + len(kinds), figsize=(4.6 * (1 + len(kinds)), 8.6))
+    short = [n.split()[0][:4] for n in YEO7_NAMES]
+
+    def matrix(v):
+        m = np.eye(7)
+        for (a, b), x in zip(NETWORK_PAIRS, v):
+            m[a, b] = m[b, a] = x
+        return m
+
+    for row, (d, split) in enumerate(((train, "trained rows"), (test, "test"))):
+        key = kinds[0][0]
+        c = np.flatnonzero(d["coupled"] & np.isfinite(d[f"{key}_corr"]))
+        pick = c[np.argsort(d[f"{key}_corr"][c])[len(c) // 2]]
+        mats = [("simulated", d["true"][pick])] + [(name, d[k][pick]) for k, name in kinds]
+        lo = min(float(m.min()) for _, m in mats)
+        for col, (name, v) in enumerate(mats):
+            ax = axes[row, col]
+            im = ax.imshow(matrix(v), cmap=cmap, vmin=lo, vmax=1)
+            ax.set_xticks(range(7), short, fontsize=8)
+            ax.set_yticks(range(7), short, fontsize=8)
+            extra = "" if col == 0 else (f"\n1 − r = {d[f'{kinds[col - 1][0]}_corr'][pick]:.2f}, "
+                                          f"d = {d[f'{kinds[col - 1][0]}_mean'][pick]:.2f}")
+            ax.set_title(f"{split}: {name}{extra}", fontsize=10)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+    fig.suptitle(f"Yeo-7 network FC, the coupled draw at the median 1 − r ({kinds[0][1]}): "
+                 f"{model_label}", x=0.01, ha="left", color=INK, fontsize=12)
+    fig.tight_layout()
+    save(fig, out, "network_fc_examples.png")
 
 
 def cost_terms_figure(d: dict, out: Path, model_label: str, note: str, split: str = "test"):
@@ -470,6 +551,10 @@ def main():
             fcd_examples_figure(data, out, args.label, split)
     if "best_catch24_r2" in d and "best_catch24_r2" in t:
         catch24_figure(d, t, out, args.label)
+    if all((args.data / f"network_fc_{s}.npz").is_file() for s in ("test", "train")):
+        nt, nr = (dict(np.load(args.data / f"network_fc_{s}.npz")) for s in ("test", "train"))
+        network_fc_figure(nt, nr, out, args.label)
+        network_fc_examples_figure(nt, nr, out, args.label)
     if "comp_d10_n150k_c36_total" in d:
         composition_figure(d, out)
     if args.generalisation is not None:

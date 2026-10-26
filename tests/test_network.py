@@ -411,3 +411,17 @@ def test_lightning_run_with_fc_net_logs_it(tiny_store, tmp_path):
     m = run.data.metrics
     assert {"val/fc_net", "final/test/fc_net", "final/train/fc_net"} <= set(m)
     assert m["val/selection"] == pytest.approx(m["val/fc_net"], rel=1e-5)
+
+
+def test_network_fc_fit_scores_direct_and_downsampled_predictions(tiny_store, tmp_path):
+    from delssome_fm.train.report import network_fc_fit
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "train")
+    stage1 = dataclasses.replace(tiny_config(cfg.store_dir, tmp_path), fc_net_loss=True)
+    torch.manual_seed(0)
+    module = Stage1Module(stage1, store.n_fcd_levels, (0.4, 1.3)).eval()
+    r = network_fc_fit(module, "test", max_rows=8)
+    assert r["true"].shape == r["direct"].shape == r["downsampled"].shape == (len(r["rows"]), 21)
+    assert np.all(np.abs(r["true"]) <= 1) and np.all(np.abs(r["downsampled"]) <= 1 + 1e-9)
+    for k in ("direct", "downsampled"):
+        assert r[f"{k}_mse"].shape == (len(r["rows"]),) and np.isfinite(r[f"{k}_mse"]).all()

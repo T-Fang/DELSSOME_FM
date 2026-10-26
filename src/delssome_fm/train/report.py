@@ -194,3 +194,62 @@ def catch24_fit(module: Stage1Module, split: str, max_rows: int = 50_000, n_poin
         position += len(true)
     sst = total_sq - total ** 2 / count
     return {"r2": 1 - sse / sst, "true": np.array(pairs_true), "pred": np.array(pairs_pred)}
+
+
+@torch.no_grad()
+def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, seed: int = 0,
+                   coupled_threshold: float = 0.05, batch_size: int = 256
+                   ) -> dict[str, np.ndarray]:
+    """Yeo-7 network FC (data/networks.py) on `split` (for "train", the rows the module
+    trained on): simulated, predicted directly by the fc_net head (if the module has it), and
+    downsampled from the module's own region-level predictions (if it trains the summary
+    statistics: predicted FC and predicted regional SD, through the same network averaging).
+    On a seeded subset of max_rows of the final evaluation's rows. Returns raw network FC r
+    (R, 21) as true / direct / downsampled (when available), per-row 1 - r, mean absolute
+    difference and MSE of arctanh FC for each prediction, and `coupled` (simulated region
+    mean FC > coupled_threshold)."""
+    from delssome_fm.data.networks import network_fc, stable_arctanh, yeo7_assignment
+    store = TrainingStore(module.cfg.store_dir, split)
+    check_parameter_policy(module, store)
+    if "fc_net" not in store.targets:
+        raise ValueError(f"{module.cfg.store_dir}/{split} has no fc_net target "
+                         f"(scripts/pack_network_fc.py)")
+    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    rows = evaluation_rows(pool, module.cfg)
+    rows = np.sort(np.random.default_rng(seed).choice(rows, min(max_rows, len(rows)),
+                                                      replace=False))
+    own = TrainingStore(module.cfg.store_dir, "train").norm
+    networks = yeo7_assignment()
+    device = next(module.parameters()).device
+    edges = torch.arange(len(module.edges), device=device)
+    out = {k: [] for k in ("true", "direct", "downsampled", "coupled")}
+    batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
+    for batch in DataLoader(store, sampler=batches, batch_size=None):
+        batch = move_data_to_device(batch, device)
+        pred = module.predict_statistics(batch, edges)
+        z = batch.targets["fc_net"].float().cpu().numpy()
+        out["true"].append(np.tanh(z * store.norm["fc_net_sd"] + store.norm["fc_net_mean"]))
+        fc_true = np.tanh(batch.targets["pairwise"].float().cpu().numpy()
+                          * store.norm["pairwise_sd"] + store.norm["pairwise_mean"])
+        out["coupled"].append(fc_true.mean(1) > coupled_threshold)
+        if pred.fc_net is not None:
+            p = pred.fc_net.float().cpu().numpy()
+            out["direct"].append(np.tanh(p * own["fc_net_sd"] + own["fc_net_mean"]))
+        if module.cfg.stat_loss:
+            fc = np.tanh(pred.pairwise.float().cpu().numpy() * own["pairwise_sd"]
+                         + own["pairwise_mean"])
+            log_sd = (pred.regional.float().cpu().numpy()[..., 1] * own["regional_sd"][1]
+                      + own["regional_mean"][1])
+            out["downsampled"].append(network_fc(fc, 10.0 ** log_sd, networks))
+    res = {k: np.concatenate(v) for k, v in out.items() if v}
+    res["rows"] = rows
+    t = res["true"]
+    for k in ("direct", "downsampled"):
+        if k in res:
+            p = res[k]
+            a, b = t - t.mean(1, keepdims=True), p - p.mean(1, keepdims=True)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                res[f"{k}_corr"] = 1 - (a * b).sum(1) / np.sqrt((a ** 2).sum(1) * (b ** 2).sum(1))
+            res[f"{k}_mean"] = np.abs(p.mean(1) - t.mean(1))
+            res[f"{k}_mse"] = ((stable_arctanh(p) - stable_arctanh(t)) ** 2).mean(1)
+    return res
