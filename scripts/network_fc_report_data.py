@@ -30,7 +30,8 @@ def main() -> None:
         np.savez(args.out / f"network_fc_{split}.npz", checkpoint=str(args.checkpoint), **r)
         c = r["coupled"]
         print(split, ", ".join(f"{k} 1-r coupled {np.nanmedian(r[f'{k}_corr'][c]):.3f} "
-                               f"MSE {r[f'{k}_mse'].mean():.3f}"
+                               f"MSE {np.nanmean(r[f'{k}_mse']):.3f} "
+                               f"(undefined rows {int(np.isnan(r[f'{k}_mse']).sum())})"
                                for k in ("direct", "downsampled") if f"{k}_corr" in r))
 
 

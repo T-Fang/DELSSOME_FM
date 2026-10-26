@@ -207,7 +207,8 @@ def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, see
     On a seeded subset of max_rows of the final evaluation's rows. Returns raw network FC r
     (R, 21) as true / direct / downsampled (when available), per-row 1 - r, mean absolute
     difference and MSE of arctanh FC for each prediction, and `coupled` (simulated region
-    mean FC > coupled_threshold)."""
+    mean FC > coupled_threshold). A downsampled prediction is NaN where the predicted region
+    FC makes a network's variance <= 0 (data/networks.py); summaries skip those rows."""
     from delssome_fm.data.networks import network_fc, stable_arctanh, yeo7_assignment
     store = TrainingStore(module.cfg.store_dir, split)
     check_parameter_policy(module, store)
