@@ -30,7 +30,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         max_distance=8,
         max_degree=8, train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
-        coupled_threshold=0.05, batch_size=2, edges_per_step=64,
+        coupled_threshold=0.05, coupled_draws_only=False, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, final_eval_rows=16, num_workers=0, precision="32-true",
         gradient_clip=1.0,
@@ -430,3 +430,41 @@ def test_network_fc_fit_scores_direct_and_downsampled_predictions(tiny_store, tm
     assert np.all(np.abs(r["true"]) <= 1) and np.all(np.abs(r["downsampled"]) <= 1 + 1e-9)
     for k in ("direct", "downsampled"):
         assert r[f"{k}_mse"].shape == (len(r["rows"]),) and np.isfinite(r[f"{k}_mse"]).all()
+
+
+# ---------------------------------------------------------------- coupled draws only
+
+
+def test_coupled_draws_keep_only_rows_above_the_threshold(tiny_store):
+    from delssome_fm.train.data import Composition, coupled_rows, subset_rows
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "train")
+    mean_fc = np.asarray(store.rows["fc_moments"][:, 0])
+    threshold = float(np.median(mean_fc))
+    n = len(store.models["n_rows"])
+    every = subset_rows(store, Composition(n, 100, None, threshold))
+    coupled = subset_rows(store, Composition(n, 100, None, threshold, coupled_draws=True))
+    assert 0 < len(coupled) < len(every)
+    assert (mean_fc[coupled] > threshold).all()
+    assert coupled.tolist() == [r for r in every if mean_fc[r] > threshold]
+    assert coupled_rows(store, every[::-1], threshold).tolist() == coupled.tolist()
+
+
+def test_coupled_only_run_validates_and_evaluates_on_coupled_draws(tiny_store, tmp_path):
+    cfg, _, _ = tiny_store
+    store = TrainingStore(cfg.store_dir, "val")
+    threshold = float(np.median(np.asarray(store.rows["fc_moments"][:, 0])))
+    stage1 = dataclasses.replace(tiny_config(cfg.store_dir, tmp_path), coupled_draws_only=True,
+                                 coupled_threshold=threshold, train_models=len(
+                                     TrainingStore(cfg.store_dir, "train").models["n_rows"]))
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="coupled")
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    m = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0].data.metrics
+    # final/* is already on coupled rows for this run, so it equals final_coupled/*
+    for split in ("train", "val", "test"):
+        assert m[f"final/{split}/total"] == pytest.approx(m[f"final_coupled/{split}/total"])
+        assert m[f"final/{split}/rows_uncoupled"] == 0
+    assert (checkpoints / "final_eval_coupled.npz").is_file()

@@ -147,12 +147,22 @@ class Composition:
                       that share of coupled models, the rest uncoupled, each the first ones
                       of their kind (models without usable draws are skipped)
     coupled_threshold a model is coupled if its mean FC, over its stored draws, exceeds this
+    coupled_draws     True: of the chosen rows keep only coupled draws (the draw's own mean
+                      FC > coupled_threshold; 2026-10-26, the coupled-only test)
     """
 
     n_models: int
     draws_per_model: int
     coupled_share: float | None
     coupled_threshold: float
+    coupled_draws: bool = False
+
+
+def coupled_rows(store: TrainingStore, rows: np.ndarray, threshold: float) -> np.ndarray:
+    """The rows of `rows` whose simulated draw is coupled: mean off-diagonal FC > threshold."""
+    rows = np.asarray(rows)
+    fc = np.asarray(store.rows["fc_moments"][np.sort(rows), 0])     # column 0: mean FC
+    return np.sort(rows)[fc > threshold]
 
 
 def model_mean_fc(store: TrainingStore) -> np.ndarray:
@@ -185,12 +195,14 @@ def subset_rows(store: TrainingStore, c: Composition) -> np.ndarray:
         models = np.sort(np.concatenate([pools[k][:wanted[k]] for k in pools]))
     start = np.concatenate([[0], np.cumsum(n_rows)])[models]
     take = np.minimum(n_rows[models], c.draws_per_model)
-    return np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
+    rows = np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
+    return coupled_rows(store, rows, c.coupled_threshold) if c.coupled_draws else rows
 
 
 class Stage1DataModule(L.LightningDataModule):
     """Shuffled train batches (seeded) over a subset of models and draws (`subset_rows`); a
-    fixed random subset of `val_rows` val rows."""
+    fixed random subset of `val_rows` val rows (of its coupled draws, if the composition
+    keeps only coupled draws)."""
 
     def __init__(self, store_dir: Path, batch_size: int, val_rows: int, num_workers: int,
                  seed: int, composition: Composition):
@@ -202,8 +214,11 @@ class Stage1DataModule(L.LightningDataModule):
         self.train = TrainingStore(self.store_dir, "train")
         self.train_rows = subset_rows(self.train, self.composition)
         self.val = TrainingStore(self.store_dir, "val")
+        pool = np.arange(len(self.val))
+        if self.composition.coupled_draws:
+            pool = coupled_rows(self.val, pool, self.composition.coupled_threshold)
         rng = np.random.default_rng(self.seed)
-        self.val_subset = np.sort(rng.choice(len(self.val), min(self.val_rows, len(self.val)),
+        self.val_subset = np.sort(rng.choice(pool, min(self.val_rows, len(pool)),
                                              replace=False))
 
     def train_dataloader(self) -> DataLoader:

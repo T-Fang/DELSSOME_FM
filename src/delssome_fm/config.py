@@ -158,6 +158,8 @@ class Stage1Config:
     oversample_coupled: bool      # false: the first train_models models, natural composition
     coupled_share: float          # if oversample_coupled: share of coupled models
     coupled_threshold: float      # coupled: the model's mean FC over its draws exceeds this
+    coupled_draws_only: bool      # train and validate on coupled draws only (draw mean FC >
+                                  # coupled_threshold; the coupled-only test, 2026-10-26)
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)

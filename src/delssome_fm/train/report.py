@@ -28,7 +28,8 @@ def training_composition(module: Stage1Module) -> Composition:
     """The models and draws `module` was trained on, from its recorded config."""
     c = module.cfg
     return Composition(c.train_models, c.draws_per_model,
-                       c.coupled_share if c.oversample_coupled else None, c.coupled_threshold)
+                       c.coupled_share if c.oversample_coupled else None, c.coupled_threshold,
+                       c.coupled_draws_only)
 
 
 def training_rows(module: Stage1Module) -> np.ndarray:

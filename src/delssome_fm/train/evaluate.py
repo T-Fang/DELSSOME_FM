@@ -41,6 +41,7 @@ LEGACY_DEFAULTS = {
     "stat_loss": True,               # added 2026-10-25: every earlier run trained on them
     "catch24_loss": False,           # added 2026-10-25
     "fc_net_loss": False,            # added 2026-10-26
+    "coupled_draws_only": False,     # added 2026-10-26
 }
 
 

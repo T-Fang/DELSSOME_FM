@@ -31,6 +31,7 @@ draws_per_model: 100
 oversample_coupled: false  # true: coupled_share of the models are coupled
 coupled_share: 0.5
 coupled_threshold: 0.05     # coupled: model mean FC > this
+coupled_draws_only: false  # true: train and validate on coupled draws only (2026-10-26)
 
 # optimisation
 batch_size: 256

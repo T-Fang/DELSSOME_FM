@@ -28,7 +28,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 
 from delssome_fm.config import Stage1Config, to_yaml
-from delssome_fm.train.data import Composition, Stage1DataModule, TrainingStore
+from delssome_fm.train.data import Composition, Stage1DataModule, TrainingStore, coupled_rows
 from delssome_fm.train.evaluate import (evaluation_rows, load_stage1, per_model, row_metrics,
                                        summarise_rows)
 from delssome_fm.train.report import predict_fc_fcd
@@ -43,7 +43,7 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
     composition = Composition(cfg.train_models, cfg.draws_per_model,
                               cfg.coupled_share if cfg.oversample_coupled else None,
-                              cfg.coupled_threshold)
+                              cfg.coupled_threshold, cfg.coupled_draws_only)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
                             cfg.seed, composition)
     data.setup()
@@ -75,23 +75,33 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     # Lightning moves the module back to the CPU when fit ends, so module.device is no longer
     # the training device: choose the GPU explicitly (else this runs on 1 CPU thread for hours)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    final_evaluation(load_stage1(Path(best.best_model_path)).to(device), data, logger, checkpoints)
+    final = load_stage1(Path(best.best_model_path)).to(device)
+    final_evaluation(final, data, logger, checkpoints)
+    final_evaluation(final, data, logger, checkpoints, coupled=True)
     return checkpoints
 
 
 def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlowLogger,
-                     out: Path) -> dict[str, dict[str, float]]:
+                     out: Path, coupled: bool = False) -> dict[str, dict[str, float]]:
     """Evaluate `module` on train (its own rows), val and test; log final/<split>/<metric>
-    and the final_eval.npz artifact (module docstring)."""
+    and the final_eval.npz artifact (module docstring). coupled=True: only the coupled draws
+    of each pool (draw mean FC > coupled_threshold), logged as final_coupled/<split>/<metric>
+    and final_eval_coupled.npz, so that a model trained on all draws and one trained on
+    coupled draws only are compared on the same rows. A coupled-only model's final/* rows are
+    already coupled: val and test are restricted to coupled draws for it either way."""
     cfg = module.cfg
+    prefix = "final_coupled" if coupled else "final"
     splits = {"train": (data.train, data.train_rows), "val": (data.val, None),
               "test": (TrainingStore(cfg.store_dir, "test"), None)}
     summary, arrays = {}, {}
     for split, (store, candidates) in splits.items():
-        rows = evaluation_rows(np.arange(len(store)) if candidates is None else candidates, cfg)
+        pool = np.arange(len(store)) if candidates is None else candidates
+        if coupled or cfg.coupled_draws_only:
+            pool = coupled_rows(store, pool, cfg.coupled_threshold)
+        rows = evaluation_rows(pool, cfg)
         r = row_metrics(module, store, rows, num_workers=cfg.num_workers)
         summary[split] = summarise_rows(r)
-        logger.log_metrics({f"final/{split}/{k}": v for k, v in summary[split].items()})
+        logger.log_metrics({f"{prefix}/{split}/{k}": v for k, v in summary[split].items()})
         if split != "train":
             arrays.update({f"{split}_{k}": v for k, v in per_model(r).items()})
         if split == "test":
@@ -99,7 +109,7 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
             arrays["test_example_rows"] = rows[picks]
             p = predict_fc_fcd(module, store, rows[picks])
             arrays.update({f"test_example_{k}": v for k, v in p.items()})
-    path = out / "final_eval.npz"
+    path = out / f"{prefix.replace('final', 'final_eval')}.npz"
     np.savez(path, **arrays)
     logger.experiment.log_artifact(logger.run_id, str(path))
     return summary
