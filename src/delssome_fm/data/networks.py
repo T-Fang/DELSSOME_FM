@@ -52,6 +52,7 @@ def network_fc(fc_upper: np.ndarray, sd: np.ndarray, networks: np.ndarray) -> np
     r = np.ones((B, N_REGIONS, N_REGIONS))
     r[:, i, j] = r[:, j, i] = fc_upper
     s = np.asarray(sd, np.float64)
+    s = s / s.max(axis=1, keepdims=True)    # a common scale cancels; avoids overflow
     cov = r * s[:, :, None] * s[:, None, :]
     M = np.zeros((N_REGIONS, 7))
     M[np.arange(N_REGIONS), networks] = 1.0

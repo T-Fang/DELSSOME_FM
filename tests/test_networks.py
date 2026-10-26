@@ -35,3 +35,12 @@ def test_network_fc_equals_fc_of_averaged_time_series():
 def test_stable_arctanh_is_finite_at_one():
     assert np.isfinite(stable_arctanh(np.array([1.0, -1.0, 1.0000001]))).all()
     np.testing.assert_allclose(stable_arctanh(np.array([0.5])), np.arctanh(0.5))
+
+
+def test_network_fc_survives_sds_that_would_overflow():
+    networks = yeo7_assignment()
+    rng = np.random.default_rng(1)
+    fc = rng.uniform(-0.1, 0.1, (2, 2278))
+    sd = 10.0 ** rng.uniform(150, 300, (2, 68))      # squares overflow float64
+    r = network_fc(fc, sd, networks)
+    assert np.isfinite(r).all() and np.all(np.abs(r) <= 1)

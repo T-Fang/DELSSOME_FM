@@ -26,7 +26,7 @@ from delssome_fm.nn.template_encoder import GraphBatch
 from delssome_fm.spec.sampler import POLICIES, SINH_SCALE, SINH_Z
 from delssome_fm.train.pack import OPTIONAL_TARGETS, TARGETS
 
-Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24")   # fcd: a raw CDF (pack.normalisation)
+Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24", "fc_net")   # fcd: a raw CDF
 
 
 @dataclass

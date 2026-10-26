@@ -374,6 +374,11 @@ def test_network_fc_target_is_packed_and_served(setup):
     assert batch.targets["fc_net"].shape == (len(batch.theta), 21)
     assert torch.isfinite(batch.targets["fc_net"]).all()
     assert store.norm["fc_net_mean"].shape == (21,)
+    # served z-scored with the store's statistics (like regional, pairwise, catch24)
+    rows = sorted(range(min(8, len(store))))
+    raw = np.asarray(store.rows["fc_net"][rows])
+    expected = (raw - store.norm["fc_net_mean"]) / store.norm["fc_net_sd"]
+    np.testing.assert_allclose(batch.targets["fc_net"].numpy(), expected, rtol=1e-5, atol=1e-6)
 
 
 def test_fc_net_head_trains_alone(setup, tmp_path):
