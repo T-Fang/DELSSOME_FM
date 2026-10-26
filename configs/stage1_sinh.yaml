@@ -1,7 +1,8 @@
 # Stage 1 on the sinh-policy corpus (configs/corpus_sinh.yaml, training_data_sinh.yaml;
 # 2026-10-25). The "original model" from now on: the concatenation pair-MLP FC head
 # (pair_head mlp_concat, the best FC head of architecture.md §7.5) and the four summary-
-# statistic groups. Variants switch cost_loss, catch24_loss, stat_loss, or use the latent FC
+# statistic groups, with the three cost terms (cost_loss, the default for variant tests
+# from 2026-10-26). Variants switch catch24_loss, fc_net_loss, stat_loss, or use the latent FC
 # head with a trained FC autoencoder (configs/fc_autoencoder.yaml). Every field is required.
 
 store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh
@@ -20,7 +21,7 @@ fc_rank: 32             # k
 fc_offset: false        # per-draw offset b(h_CLS) in the FC head (nn/heads.py)
 pair_head: mlp_concat     # bilinear | mlp_symmetric | mlp_concat (nn/heads.py)
 pair_hidden: 128
-cost_loss: false        # true: add 1 - r, d, KS (raw units) to the loss (train/losses.py)
+cost_loss: true         # default for variants from 2026-10-26 (project lead); sinh_orig used false
 fc_autoencoder: none     # "latent" pair head only: FC autoencoder checkpoint
 stat_loss: true          # train on the summary statistics (regional, FC, FCD, FC moments)
 catch24_loss: false      # train a catch24 head on the regions' catch24 features
