@@ -13,6 +13,11 @@ and averaging is linear, so for networks A and B with n_A, n_B regions
 (the regions' means drop out of a correlation). Because the signals are not standardised,
 a region with a much larger SD than its network partners dominates the network signal.
 
+A predicted region FC need not be positive semi-definite, so a network's variance computed
+from it can be <= 0; that network's FC values are then undefined and returned as NaN (2 of
+50,000 test rows of sinh_orig's downsampled predictions, 2026-10-26). Simulated FC is a
+proper correlation matrix and never hits this.
+
 FC_AB does not change when the SDs of one network's regions are all multiplied by the same
 factor, so network_fc takes log10 SDs and rescales each network to its largest region before
 exponentiating: SDs spanning hundreds of decades (wild predictions) neither overflow nor
@@ -66,7 +71,8 @@ def network_fc(fc_upper: np.ndarray, log10_sd: np.ndarray, networks: np.ndarray)
     M[np.arange(N_REGIONS), networks] = 1.0
     M /= M.sum(axis=0)                                   # averaging over each network
     net = np.einsum("ia,nij,jc->nac", M, cov, M, optimize=True)  # (B, 7, 7) covariances
-    d = np.sqrt(np.diagonal(net, axis1=1, axis2=2))
+    var = np.diagonal(net, axis1=1, axis2=2)
+    d = np.sqrt(np.where(var > 0, var, np.nan))         # undefined for a non-PSD prediction
     corr = net / d[:, :, None] / d[:, None, :]
     a, b = np.array(NETWORK_PAIRS).T
     return corr[:, a, b]

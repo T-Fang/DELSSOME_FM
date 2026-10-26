@@ -48,3 +48,16 @@ def test_network_fc_survives_sds_spanning_hundreds_of_decades():
     assert np.isfinite(r).all() and np.all(np.abs(r) <= 1)
     shifted = log_sd + np.where(networks == 3, 500.0, 0.0)    # one network much louder
     np.testing.assert_allclose(network_fc(fc, shifted, networks), r, atol=1e-12)
+
+
+def test_network_fc_is_undefined_where_a_prediction_gives_negative_variance():
+    networks = yeo7_assignment()
+    fc = np.zeros((1, 2278))
+    i, j = np.triu_indices(68, 1)
+    members = np.flatnonzero(networks == 0)
+    within = np.isin(i, members) & np.isin(j, members)
+    fc[0, within] = -0.9                    # strongly anti-correlated within network 0: non-PSD
+    r = network_fc(fc, np.zeros((1, 68)), networks)
+    from delssome_fm.data.networks import NETWORK_PAIRS
+    involves_0 = np.array([0 in p for p in NETWORK_PAIRS])
+    assert np.isnan(r[0, involves_0]).all() and np.isfinite(r[0, ~involves_0]).all()
