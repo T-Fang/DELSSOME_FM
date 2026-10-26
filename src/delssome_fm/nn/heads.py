@@ -21,6 +21,8 @@ from the backbone outputs. Targets are in the units of train/pack.py, z-scored w
                            valid CDF (non-decreasing, ends at 1) by construction   raw CDF
     catch24     (B, N, 24) MLP_c24(r_i), weights shared across regions, if configured
                                                                                  z-scored
+    fc_net      (B, 21)    MLP(h_CLS): arctanh FC between the Yeo-7 networks' averaged
+                           signals (data/networks.py), if configured             z-scored
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ N_REGIONAL_STATS = 6
 N_FC_MOMENTS = 3
 PAIR_HEADS = ("bilinear", "mlp_symmetric", "mlp_concat", "latent")
 N_CATCH24 = 24
+N_NETWORK_PAIRS = 21
 
 
 @dataclass
@@ -47,13 +50,14 @@ class Stage1Prediction:
     fc_moments: torch.Tensor
     fcd: torch.Tensor
     catch24: torch.Tensor | None = None
+    fc_net: torch.Tensor | None = None
 
 
 class Stage1Heads(nn.Module):
     def __init__(self, d: int, rank: int, n_fcd_levels: int, fc_offset: bool,
                  pair_head: str = "bilinear", pair_hidden: int = 128, catch24: bool = False,
                  fc_decoder: nn.Module | None = None, latent_dim: int = 0,
-                 n_regions: int = 68):
+                 n_regions: int = 68, fc_net: bool = False):
         """fc_decoder, latent_dim: the trained FC autoencoder's decoder and latent width, for
         pair_head "latent" only (kept frozen)."""
         super().__init__()
@@ -67,6 +71,7 @@ class Stage1Heads(nn.Module):
         self.fc_offset = MLP([d, d, 1]) if fc_offset else None
         self.regional = MLP([d, d, N_REGIONAL_STATS])
         self.catch24 = MLP([d, d, N_CATCH24]) if catch24 else None
+        self.fc_net = MLP([d, d, N_NETWORK_PAIRS]) if fc_net else None
         if pair_head == "bilinear":
             self.phi = MLP([d, d, rank])
         elif pair_head == "latent":
@@ -89,7 +94,8 @@ class Stage1Heads(nn.Module):
                                 fc_moments=self.fc_moments(out.h_cls),
                                 fcd=torch.softmax(self.fcd_logits(out.h_cls), -1).cumsum(-1),
                                 catch24=None if self.catch24 is None
-                                else self.catch24(out.regions))
+                                else self.catch24(out.regions),
+                                fc_net=None if self.fc_net is None else self.fc_net(out.h_cls))
 
     def pairwise(self, out: BackboneOutput, edges: torch.Tensor) -> torch.Tensor:
         """edges (E, 2) -> (B, E) the prediction of the configured pair head."""

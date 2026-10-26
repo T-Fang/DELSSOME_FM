@@ -36,7 +36,7 @@ def tiny_store(tmp_path_factory):
 
     from delssome_fm.config import CorpusConfig, SimConfig, SplitSizes, TrainingDataConfig
     from delssome_fm.sim.corpus import run_candidates, write_chunk
-    from delssome_fm.train.pack import normalisation, pack_split
+    from delssome_fm.train.pack import normalisation, pack_network_fc, pack_split
 
     root = tmp_path_factory.mktemp("tiny")
     corpus_cfg = CorpusConfig(seed=11, n_param_sets=3, first_draw=0, batch_size=2, screen_draws=2,
@@ -52,6 +52,7 @@ def tiny_store(tmp_path_factory):
     cfg = TrainingDataConfig(store_dir=root / "store",
                              n_models=SplitSizes(train=n_valid, val=n_valid, test=n_valid))
     pack_split(corpus_cfg, sim_cfg, cfg, "train", scs)
+    pack_network_fc(cfg.store_dir / "train")
     normalisation(cfg.store_dir)
     shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "val")
     shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "test")

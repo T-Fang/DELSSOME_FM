@@ -32,6 +32,8 @@ Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
     theta.npy (R, N, 5), psi.npy (R, 2)            float32, NaN beyond the model's P, K
     regional.npy, pairwise.npy, fcd.npy, fc_moments.npy   float32 targets
     catch24.npy (R, N, 24)     float32, only for corpora that store catch24
+    fc_net.npy (R, 21)         float32, stable arctanh of the Yeo-7 network FC, written
+                               afterwards by pack_network_fc (2026-10-26)
     models.npz                 one entry per model: corpus index, SC group, sizes, graph roles
     node_features.npy (sum M, 21), node_degree.npy (sum M, 2)    concatenated over models
     distances.npy (sum M^2,) int16                 each model's (M, M) shortest paths, flat
@@ -64,7 +66,7 @@ N_REGIONS = 68
 V_MAX = 6          # state variables per model (generation.md §2)
 C_MAX = 2          # coupling channels per model
 TARGETS = ("regional", "pairwise", "fcd", "fc_moments")
-OPTIONAL_TARGETS = ("catch24",)    # packed when the corpus has it
+OPTIONAL_TARGETS = ("catch24", "fc_net")   # catch24 when the corpus has it; fc_net added later
 ROW_ARRAYS = ("model", "draw", "theta", "psi", *TARGETS)
 
 
@@ -280,13 +282,37 @@ def _write_models(chunks: list[Path], members: list[int], rows_per_model: np.nda
                 for k in ("regional_par", "global_par", "deriv_roots", "agg", "out_root")})
 
 
+# ---------------------------------------------------------------- network FC
+
+
+def pack_network_fc(split_dir: Path, block_rows: int = 20_000) -> int:
+    """Write <split_dir>/fc_net.npy: per row, the stable arctanh of the FC between the Yeo-7
+    networks' averaged signals (data/networks.py), from the stored region FC (pairwise,
+    arctanh) and regional SDs (regional column 1, log10 SD). Returns the number of rows."""
+    from delssome_fm.data.networks import NETWORK_PAIRS, network_fc, stable_arctanh, \
+        yeo7_assignment
+    networks = yeo7_assignment()
+    pairwise = np.load(split_dir / "pairwise.npy", mmap_mode="r")
+    regional = np.load(split_dir / "regional.npy", mmap_mode="r")
+    out = np.lib.format.open_memmap(split_dir / "fc_net.npy", mode="w+", dtype=np.float32,
+                                    shape=(len(pairwise), len(NETWORK_PAIRS)))
+    for s in range(0, len(pairwise), block_rows):
+        fc = np.tanh(np.asarray(pairwise[s:s + block_rows], np.float64))
+        sd = 10.0 ** np.asarray(regional[s:s + block_rows, :, 1], np.float64)
+        out[s:s + block_rows] = stable_arctanh(network_fc(fc, sd, networks))
+    out.flush()
+    if not np.isfinite(out).all():
+        raise ValueError(f"{split_dir}: non-finite network FC")
+    return len(out)
+
+
 # ---------------------------------------------------------------- z-scores
 
 
 def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.ndarray]:
     """Mean and SD of each z-scored target over the train split, written to
-    <store_dir>/normalisation.npz: per column for regional (6), fc_moments (3) and catch24
-    (24, when packed), one value pooled over all edges for pairwise. A column that is
+    <store_dir>/normalisation.npz: per column for regional (6), fc_moments (3), catch24
+    (24) and fc_net (21) when packed, one value pooled over all edges for pairwise. A column that is
     constant over the train split (SD 0, e.g. a catch24 proportion of very short runs) gets
     SD 1: it is centred, not scaled. The FCD CDF is not z-scored: it is a probability, and
     the monotone head predicts it directly (architecture.md §5.2)."""
@@ -294,6 +320,8 @@ def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.nda
     pool = {"regional": (0, 1), "pairwise": (0, 1), "fc_moments": (0,)}
     if (train / "catch24.npy").is_file():
         pool["catch24"] = (0, 1)
+    if (train / "fc_net.npy").is_file():
+        pool["fc_net"] = (0,)
     stats = {}
     for name, axes in pool.items():
         a = np.load(train / f"{name}.npy", mmap_mode="r")
@@ -307,7 +335,10 @@ def normalisation(store_dir: Path, block_rows: int = 20_000) -> dict[str, np.nda
         stats[f"{name}_mean"] = np.asarray(mean, np.float32)
         sd = np.sqrt(np.maximum(total_sq / count - mean ** 2, 0.0))
         stats[f"{name}_sd"] = np.asarray(np.where(sd > 0, sd, 1.0), np.float32)
-    np.savez(store_dir / "normalisation.npz", **stats)
+    # write then rename, so a job reading the file meanwhile never sees a partial one
+    tmp = store_dir / "normalisation.tmp.npz"
+    np.savez(tmp, **stats)
+    tmp.replace(store_dir / "normalisation.npz")
     return stats
 
 

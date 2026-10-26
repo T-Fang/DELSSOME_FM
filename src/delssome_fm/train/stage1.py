@@ -29,7 +29,8 @@ from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
 from delssome_fm.train.costs import TERMS, cost_terms, raw_fc
 from delssome_fm.train.data import Stage1Batch
-from delssome_fm.train.losses import GROUPS, UncertaintyWeighting, group_losses, loss_groups
+from delssome_fm.train.losses import (GROUPS, UncertaintyWeighting, group_losses,
+                                      loss_groups)
 
 N_REGIONS = 68
 
@@ -64,14 +65,14 @@ class Stage1Module(L.LightningModule):
             decoder, latent_dim = autoencoder.decoder, autoencoder.latent_dim
         self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset,
                                  cfg.pair_head, cfg.pair_hidden, cfg.catch24_loss, decoder,
-                                 latent_dim, N_REGIONS)
-        self.weighting = UncertaintyWeighting(loss_groups(cfg.stat_loss, cfg.catch24_loss,
-                                                          cfg.cost_loss))
+                                 latent_dim, N_REGIONS, cfg.fc_net_loss)
+        trained = loss_groups(cfg.stat_loss, cfg.catch24_loss, cfg.cost_loss, cfg.fc_net_loss)
+        self.weighting = UncertaintyWeighting(trained)
+        extra = tuple(g for g in ("catch24", "fc_net") if g in trained)
         # the checkpoint is chosen by the summed val MSE of the groups the model trains on
-        self.selection = ((GROUPS if cfg.stat_loss else ())
-                          + (("catch24",) if cfg.catch24_loss else ()))
+        self.selection = (GROUPS if cfg.stat_loss else ()) + extra
         self.register_buffer("edges", upper_triangle(), persistent=False)
-        self.val_groups = GROUPS + (("catch24",) if cfg.catch24_loss else ())
+        self.val_groups = GROUPS + extra
         self.val_mse = torch.nn.ModuleDict({g: torchmetrics.MeanSquaredError()
                                             for g in self.val_groups})
         self.val_r2_pairwise = torchmetrics.R2Score()

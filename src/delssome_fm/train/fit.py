@@ -59,8 +59,10 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     effective.write_text(f"# from {config_path}\n" + to_yaml(cfg))
     logger.experiment.log_artifact(logger.run_id, str(effective))
     logger.log_hyperparams({"train_rows": len(data.train_rows)})
-    if cfg.catch24_loss and "catch24" not in data.train.targets:
-        raise ValueError(f"catch24_loss is set, but {cfg.store_dir} has no catch24 targets")
+    for flag, target in ((cfg.catch24_loss, "catch24"), (cfg.fc_net_loss, "fc_net")):
+        if flag and target not in data.train.targets:
+            raise ValueError(f"{target} is to be trained, but {cfg.store_dir} has no {target} "
+                             f"targets")
     best = ModelCheckpoint(dirpath=checkpoints, monitor="val/selection", save_top_k=3,
                            save_last=True, filename="step{step}", auto_insert_metric_name=False)
     trainer = L.Trainer(

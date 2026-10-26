@@ -7,8 +7,9 @@ With cost_loss (decided 2026-10-19), the DELSSOME cost terms between prediction 
 simulation (1 - r, d, KS in raw units over all edges, train/costs.py) join as three more
 groups, COST_GROUPS, each a mean over the batch's rows.
 
-Which groups train (2026-10-25): GROUPS with stat_loss, "catch24" with catch24_loss, the
-cost groups with cost_loss (`loss_groups`). Validation and evaluation report every group the
+Which groups train (2026-10-25): GROUPS with stat_loss, "catch24" with catch24_loss,
+"fc_net" (Yeo-7 network FC, 2026-10-26) with fc_net_loss, the cost groups with cost_loss
+(`loss_groups`). Validation and evaluation report every group the
 model can predict, trained or not.
 
 Every training row is a usable draw (train/pack.py), so no per-statistic masking is needed.
@@ -25,14 +26,18 @@ GROUPS: tuple[str, ...] = ("regional", "pairwise", "fcd", "fc_moments")
 COST_GROUPS: tuple[str, ...] = ("cost_corr", "cost_mean", "cost_ks")
 
 
-def loss_groups(stat_loss: bool, catch24_loss: bool, cost_loss: bool) -> tuple[str, ...]:
+OPTIONAL_GROUPS: tuple[str, ...] = ("catch24", "fc_net")   # each with its own head
+
+
+def loss_groups(stat_loss: bool, catch24_loss: bool, cost_loss: bool,
+                fc_net_loss: bool = False) -> tuple[str, ...]:
     """The groups a configuration trains on, in the order of their learned scales."""
-    if not (stat_loss or catch24_loss):
-        raise ValueError("nothing to train: set stat_loss and/or catch24_loss")
+    if not (stat_loss or catch24_loss or fc_net_loss):
+        raise ValueError("nothing to train: set stat_loss, catch24_loss and/or fc_net_loss")
     if cost_loss and not stat_loss:
         raise ValueError("cost_loss compares predicted FC and FCD: it needs stat_loss")
     return ((GROUPS if stat_loss else ()) + (("catch24",) if catch24_loss else ())
-            + (COST_GROUPS if cost_loss else ()))
+            + (("fc_net",) if fc_net_loss else ()) + (COST_GROUPS if cost_loss else ()))
 
 
 def group_losses(pred: Stage1Prediction, targets: dict[str, torch.Tensor],
@@ -44,8 +49,9 @@ def group_losses(pred: Stage1Prediction, targets: dict[str, torch.Tensor],
            "pairwise": _mse(pred.pairwise, targets["pairwise"][:, edge_index]),
            "fcd": _mse(pred.fcd, targets["fcd"]),
            "fc_moments": _mse(pred.fc_moments, targets["fc_moments"])}
-    if pred.catch24 is not None:
-        out["catch24"] = _mse(pred.catch24, targets["catch24"])
+    for g in OPTIONAL_GROUPS:
+        if getattr(pred, g) is not None:
+            out[g] = _mse(getattr(pred, g), targets[g])
     return out
 
 

@@ -148,6 +148,7 @@ class Stage1Config:
     fc_autoencoder: str           # "latent" head: FC autoencoder checkpoint; else "none"
     stat_loss: bool               # train on the summary statistics (regional, FC, FCD, moments)
     catch24_loss: bool            # train a catch24 head on the regions' catch24 features
+    fc_net_loss: bool             # train a head on the Yeo-7 network FC (data/networks.py)
     cost_loss: bool               # add 1 - r, d and KS (raw units, all edges) to the loss
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)

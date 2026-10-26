@@ -19,7 +19,7 @@ from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 
 from delssome_fm.config import Stage1Config, config_from_dict
 from delssome_fm.train.data import TrainingStore, model_mean_fc
-from delssome_fm.train.losses import GROUPS
+from delssome_fm.train.losses import GROUPS, OPTIONAL_GROUPS
 from delssome_fm.train.stage1 import Stage1Module
 
 
@@ -40,6 +40,7 @@ LEGACY_DEFAULTS = {
     "fc_autoencoder": "none",        # added 2026-10-25, with the "latent" pair head
     "stat_loss": True,               # added 2026-10-25: every earlier run trained on them
     "catch24_loss": False,           # added 2026-10-25
+    "fc_net_loss": False,            # added 2026-10-26
 }
 
 
@@ -162,13 +163,14 @@ def row_metrics(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
     edges = torch.arange(len(module.edges), device=device)
     keys = (*GROUPS, "sse_pairwise", "sum_pairwise", "sumsq_pairwise", "corr", "mean", "ks",
             "coupled")
-    with_catch24 = module.heads.catch24 is not None and "catch24" in store.targets
-    out = {k: [] for k in keys + (("catch24",) if with_catch24 else ())}
+    extra = tuple(g for g in OPTIONAL_GROUPS
+                  if getattr(module.heads, g) is not None and g in store.targets)
+    out = {k: [] for k in keys + extra}
     batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
     for batch in DataLoader(store, sampler=batches, batch_size=None, num_workers=num_workers):
         batch = move_data_to_device(batch, device)
         pred = module.predict_statistics(batch, edges)
-        for g in GROUPS + (("catch24",) if with_catch24 else ()):
+        for g in GROUPS + extra:
             d = (getattr(pred, g).float() - batch.targets[g].float()) ** 2
             out[g].append(d.reshape(len(d), -1).mean(1))
         t = batch.targets["pairwise"].float()
@@ -186,7 +188,7 @@ def summarise_rows(r: dict[str, np.ndarray], n_edges: int = 2278) -> dict[str, f
     """Row metrics -> the logged numbers: MSE per group and their total (the four summary
     statistic groups, so totals compare across models), catch24 MSE when the model has the
     head, pairwise R^2, and the median cost terms over uncoupled and coupled rows."""
-    out = {g: float(r[g].mean()) for g in GROUPS + (("catch24",) if "catch24" in r else ())}
+    out = {g: float(r[g].mean()) for g in GROUPS + tuple(g for g in OPTIONAL_GROUPS if g in r)}
     out["total"] = sum(out[g] for g in GROUPS)
     n = len(r["sse_pairwise"]) * n_edges
     sst = r["sumsq_pairwise"].sum() - r["sum_pairwise"].sum() ** 2 / n

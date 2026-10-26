@@ -26,7 +26,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         store_dir=store_dir, output_dir=tmp_path / "ckpt", seed=0, d_model=32, d_template=16,
         template_layers=2, backbone_layers=2, n_heads=4, ffn_multiplier=2, dropout=0.0,
         fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, cost_loss=False,
-        fc_autoencoder="none", stat_loss=True, catch24_loss=False,
+        fc_autoencoder="none", stat_loss=True, catch24_loss=False, fc_net_loss=False,
         max_distance=8,
         max_degree=8, train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
@@ -364,3 +364,50 @@ def test_catch24_fit_reports_per_feature_r2(tiny_store, tmp_path):
     with pytest.raises(ValueError, match="no catch24 head"):
         catch24_fit(Stage1Module(tiny_config(cfg.store_dir, tmp_path), store.n_fcd_levels,
                                  (0.4, 1.3)), "test")
+
+
+# ---------------------------------------------------------------- Yeo-7 network FC
+
+
+def test_network_fc_target_is_packed_and_served(setup):
+    store, batch, _ = setup
+    assert batch.targets["fc_net"].shape == (len(batch.theta), 21)
+    assert torch.isfinite(batch.targets["fc_net"]).all()
+    assert store.norm["fc_net_mean"].shape == (21,)
+
+
+def test_fc_net_head_trains_alone(setup, tmp_path):
+    from delssome_fm.train.losses import loss_groups
+    store, batch, _ = setup
+    assert loss_groups(False, False, False, True) == ("fc_net",)
+    cfg = dataclasses.replace(tiny_config(tmp_path, tmp_path), pair_head="mlp_concat",
+                              fc_offset=False, stat_loss=False, fc_net_loss=True)
+    torch.manual_seed(0)
+    module = Stage1Module(cfg, store.n_fcd_levels, (0.4, 1.3)).train()
+    module.log = module.log_dict = lambda *a, **k: None
+    optimiser = torch.optim.Adam(module.parameters(), lr=3e-3)
+    first = None
+    for _ in range(100):
+        optimiser.zero_grad()
+        loss = group_losses(module.predict_statistics(batch, torch.arange(10)),
+                            batch.targets, torch.arange(10))["fc_net"]
+        loss.backward()
+        optimiser.step()
+        first = float(loss) if first is None else first
+    assert float(loss) < 0.2 * first
+    assert module.selection == ("fc_net",) and module.weighting.groups == ("fc_net",)
+
+
+def test_lightning_run_with_fc_net_logs_it(tiny_store, tmp_path):
+    cfg, _, _ = tiny_store
+    stage1 = dataclasses.replace(tiny_config(cfg.store_dir, tmp_path), fc_net_loss=True,
+                                 stat_loss=False)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    fit(stage1, config_file, run_name="net")
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
+    m = run.data.metrics
+    assert {"val/fc_net", "final/test/fc_net", "final/train/fc_net"} <= set(m)
+    assert m["val/selection"] == pytest.approx(m["val/fc_net"], rel=1e-5)

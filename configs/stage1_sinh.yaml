@@ -24,6 +24,7 @@ cost_loss: false        # true: add 1 - r, d, KS (raw units) to the loss (train/
 fc_autoencoder: none     # "latent" pair head only: FC autoencoder checkpoint
 stat_loss: true          # train on the summary statistics (regional, FC, FCD, FC moments)
 catch24_loss: false      # train a catch24 head on the regions' catch24 features
+fc_net_loss: false       # train a head on the Yeo-7 network FC (data/networks.py)
 max_distance: 16        # DAG shortest paths clipped here (corpus max 25; 0.02% of pairs > 16)
 max_degree: 16
 
