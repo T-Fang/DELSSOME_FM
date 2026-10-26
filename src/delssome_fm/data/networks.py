@@ -13,6 +13,11 @@ and averaging is linear, so for networks A and B with n_A, n_B regions
 (the regions' means drop out of a correlation). Because the signals are not standardised,
 a region with a much larger SD than its network partners dominates the network signal.
 
+FC_AB does not change when the SDs of one network's regions are all multiplied by the same
+factor, so network_fc takes log10 SDs and rescales each network to its largest region before
+exponentiating: SDs spanning hundreds of decades (wild predictions) neither overflow nor
+underflow to a zero network variance.
+
 NETWORK_PAIRS lists the 21 pairs (A, B), A < B, in the order network_fc returns them.
 """
 
@@ -43,19 +48,19 @@ def yeo7_assignment(path: Path = ASSIGNMENT) -> np.ndarray:
     return networks
 
 
-def network_fc(fc_upper: np.ndarray, sd: np.ndarray, networks: np.ndarray) -> np.ndarray:
-    """fc_upper (B, 2278) region FC r over the upper triangle (stored order), sd (B, 68)
-    regional SDs -> (B, 21) the FC between network-averaged signals, NETWORK_PAIRS order
-    (module docstring). Computed in float64."""
+def network_fc(fc_upper: np.ndarray, log10_sd: np.ndarray, networks: np.ndarray) -> np.ndarray:
+    """fc_upper (B, 2278) region FC r over the upper triangle (stored order), log10_sd (B, 68)
+    log10 of the regional SDs -> (B, 21) the FC between network-averaged signals,
+    NETWORK_PAIRS order (module docstring). Computed in float64."""
     B = len(fc_upper)
     i, j = np.triu_indices(N_REGIONS, 1)
     r = np.ones((B, N_REGIONS, N_REGIONS))
     r[:, i, j] = r[:, j, i] = fc_upper
-    s = np.asarray(sd, np.float64)
-    if not np.isfinite(s).all() or (s <= 0).any():
-        raise ValueError("regional SDs must be finite and positive (rescale large ones in "
-                         "log space before exponentiating)")
-    s = s / s.max(axis=1, keepdims=True)    # a common scale cancels; avoids overflow
+    log_s = np.asarray(log10_sd, np.float64)
+    if not np.isfinite(log_s).all():
+        raise ValueError("log10 regional SDs must be finite")
+    top = np.stack([log_s[:, networks == n].max(axis=1) for n in range(7)], axis=1)
+    s = 10.0 ** (log_s - top[:, networks])      # each network rescaled to its largest region
     cov = r * s[:, :, None] * s[:, None, :]
     M = np.zeros((N_REGIONS, 7))
     M[np.arange(N_REGIONS), networks] = 1.0

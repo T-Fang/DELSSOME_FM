@@ -240,9 +240,7 @@ def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, see
                          + own["pairwise_mean"])
             log_sd = (pred.regional.float().cpu().numpy()[..., 1] * own["regional_sd"][1]
                       + own["regional_mean"][1])
-            # rescale in log space: 10 ** (predicted log10 SD) can overflow to inf
-            sd = 10.0 ** (log_sd - log_sd.max(axis=1, keepdims=True))
-            out["downsampled"].append(network_fc(fc, sd, networks))
+            out["downsampled"].append(network_fc(fc, log_sd, networks))
     res = {k: np.concatenate(v) for k, v in out.items() if v}
     res["rows"] = rows
     t = res["true"]

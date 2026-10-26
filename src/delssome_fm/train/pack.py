@@ -298,8 +298,8 @@ def pack_network_fc(split_dir: Path, block_rows: int = 20_000) -> int:
                                     shape=(len(pairwise), len(NETWORK_PAIRS)))
     for s in range(0, len(pairwise), block_rows):
         fc = np.tanh(np.asarray(pairwise[s:s + block_rows], np.float64))
-        sd = 10.0 ** np.asarray(regional[s:s + block_rows, :, 1], np.float64)
-        out[s:s + block_rows] = stable_arctanh(network_fc(fc, sd, networks))
+        log_sd = np.asarray(regional[s:s + block_rows, :, 1], np.float64)   # log10 SD
+        out[s:s + block_rows] = stable_arctanh(network_fc(fc, log_sd, networks))
     out.flush()
     if not np.isfinite(out).all():
         raise ValueError(f"{split_dir}: non-finite network FC")
