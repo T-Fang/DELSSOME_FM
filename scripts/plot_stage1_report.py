@@ -317,7 +317,8 @@ def fc_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"
     cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
     labels = ["coupled, good (10th pct of 1 − r)", "coupled, typical (median)",
               "coupled, poor (90th pct)", "uncoupled, typical"]   # coupled: 0.05 < mean FC < 0.9
-    fig, axes = plt.subplots(2, 4, figsize=(16, 8.2))
+    labels = labels[:len(d["best_example_fc_true"])]        # no uncoupled example: 3 columns
+    fig, axes = plt.subplots(2, len(labels), figsize=(4 * len(labels), 8.2))
     for col, label in enumerate(labels):
         sim, pred = d["best_example_fc_true"][col], d["best_example_fc_pred"][col]
         terms = {k: d[f"best_model_{k}"] for k in ("corr", "mean")}
@@ -341,7 +342,8 @@ def fc_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"
 
 def fcd_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"):
     labels = ["coupled, good", "coupled, typical", "coupled, poor", "uncoupled, typical"]
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.9), sharey=True)
+    labels = labels[:len(d["best_example_cdf_true"])]
+    fig, axes = plt.subplots(1, len(labels), figsize=(4 * len(labels), 3.9), sharey=True)
     for col, (ax, label) in enumerate(zip(axes, labels)):
         sim, pred = d["best_example_cdf_true"][col], d["best_example_cdf_pred"][col]
         gap = np.abs(sim - pred)

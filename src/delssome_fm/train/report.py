@@ -132,7 +132,8 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
     and the simulations.
     Also keeps four examples: draws in the realistic coupled range (coupled_threshold < mean
     FC < 0.9; above it FC is near-uniform synchronisation) at the 10th, 50th and 90th
-    percentile of the model's 1 - r, and the median uncoupled draw."""
+    percentile of the model's 1 - r, and the median uncoupled draw (when there is one: a
+    coupled-draws-only model's training rows have none)."""
     store = TrainingStore(module.cfg.store_dir, split)
     pool = training_rows(module) if split == "train" else np.arange(len(store))
     rows = evaluation_rows(pool, module.cfg)
@@ -148,7 +149,8 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
     order = np.flatnonzero(realistic)[np.argsort(model["corr"][realistic])]
     uncoupled = np.flatnonzero(~coupled)[np.argsort(model["corr"][~coupled])]
     picks = [order[int(q * (len(order) - 1))] for q in (0.1, 0.5, 0.9)]
-    picks.append(uncoupled[len(uncoupled) // 2])
+    if len(uncoupled):
+        picks.append(uncoupled[len(uncoupled) // 2])
     out = {f"model_{k}": v for k, v in model.items()}
     out.update({f"reference_{k}": v for k, v in reference.items()})
     out.update(true_mean_fc=true_mean_fc, example_rows=rows[picks],
