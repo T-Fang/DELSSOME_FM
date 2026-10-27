@@ -523,9 +523,9 @@ def main():
                    help="how titles name the model")
     p.add_argument("--note", default="d is biased for the bilinear head without the FC offset "
                    "(architecture.md §7.2).", help="extra footnote of the cost-terms figure")
-    p.add_argument("--reference", type=Path,
-                   default=Path("outputs/reference_eval/comparison.npz"),
-                   help="scripts/reference_eval_compare.py output; skipped if absent")
+    p.add_argument("--reference", type=Path, default=None,
+                   help="the model's reference comparison (scripts/model_report_data.py's "
+                        "comparison.npz); no reference figures without it")
     p.add_argument("--scaling-grid", default=None, metavar="EXPERIMENT:PREFIX",
                    help="draw scaling_grid.png from these MLflow runs, e.g. stage1_sinh:sinh")
     p.add_argument("--mlflow", default="sqlite:////home/ftian/storage/projects/DELSSOME-FM/"
@@ -559,7 +559,7 @@ def main():
         composition_figure(d, out)
     if args.generalisation is not None:
         generalisation_figure(args.generalisation, out, args.generalisation_label or args.label)
-    if args.reference.is_file():
+    if args.reference is not None:
         r = dict(np.load(args.reference))
         reference_cost_figure(r, out, args.label)
         reference_examples_figure(r, out, args.label)

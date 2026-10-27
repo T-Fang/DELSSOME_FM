@@ -30,15 +30,24 @@ SINH = {   # 100k models x all draws (~40 usable each) of the sinh corpus, mlp_c
     "sinh_orig": ("original", "outputs/report_sinh/sinh_orig/comparison.npz"),
     "sinh_m100k_d100_cost": ("original + cost loss",
                              "outputs/report_sinh/sinh_m100k_d100_cost/comparison.npz"),
-    "sinh_orig_c24": ("original + catch24 loss", "outputs/report_sinh/sinh_orig_c24/comparison.npz"),
-    "sinh_cost_c24": ("original + cost + catch24 loss",
+    "sinh_orig_c24": ("original + catch24", "outputs/report_sinh/sinh_orig_c24/comparison.npz"),
+    "sinh_cost_c24": ("original + cost + catch24",
                       "outputs/report_sinh/sinh_cost_c24/comparison.npz"),
     "sinh_c24_only": ("catch24 loss only", "outputs/report_sinh/sinh_c24_only/comparison.npz"),
-    "sinh_latent_cost": ("latent FC head (autoencoder) + cost loss",
+    "sinh_orig_fcnet": ("original + network FC", "outputs/report_sinh/sinh_orig_fcnet/comparison.npz"),
+    "sinh_latent_cost": ("latent FC head (autoencoder) + cost",
                          "outputs/report_sinh/sinh_latent_cost/comparison.npz"),
+    "sinh_wide": ("+ cost, wide (d 256, 4+4 layers)", "outputs/report_sinh/sinh_wide/comparison.npz"),
+    "sinh_deep": ("+ cost, deep (d 128, 8+8 layers)", "outputs/report_sinh/sinh_deep/comparison.npz"),
+    "sinh_wide_deep": ("+ cost, wide + deep (d 256, 8+8)",
+                       "outputs/report_sinh/sinh_wide_deep/comparison.npz"),
+    "sinh_coupled_only": ("+ cost, coupled draws only",
+                          "outputs/report_sinh/sinh_coupled_only/comparison.npz"),
 }
 RUN_SETS = {"d10": ("stage1", D10), "sinh": ("stage1_sinh", SINH)}
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]
+COUPLED = [("final_coupled/train", "trained rows, coupled draws"),
+           ("final_coupled/test", "test, coupled draws")]
 TEST = [("total", "MSE total"), ("r2_pairwise", "R² FC"),
         ("cost_corr_coupled", "1−r coupled"), ("cost_mean_coupled", "d coupled"),
         ("cost_ks_coupled", "KS coupled"), ("cost_mean_uncoupled", "d uncoupled"),
@@ -67,6 +76,9 @@ def main() -> None:
         row = {"run": name, "model": desc}
         for split, _ in SPLITS:
             row.update({f"{split} {label}": m.get(f"final/{split}/{k}", np.nan)
+                        for k, label in TEST})
+        for prefix, _ in COUPLED:
+            row.update({f"{prefix} {label}": m.get(f"{prefix}/{k}", np.nan)
                         for k, label in TEST})
         ref = np.load(ref_path) if Path(ref_path).is_file() else None
         for key, label in MODELS:
@@ -101,6 +113,16 @@ def main() -> None:
                   "|" + "---|" * len(split_keys)]
         lines += ["| " + " | ".join(fmt(r.get(k, np.nan)) for k in split_keys) + " |"
                   for r in rows[:-1]]
+        lines += [""]
+    coupled_rows = [r for r in rows[:-1] if not np.isnan(r.get("final_coupled/test MSE total", np.nan))]
+    for prefix, title in COUPLED if coupled_rows else ():
+        keys_c = ["model"] + [f"{prefix} {label}" for _, label in TEST if label != "catch24 MSE"]
+        lines += [f"## Synthetic models, {title} only (the same rows for every model)", "",
+                  "| " + " | ".join(["model"] + [label for _, label in TEST
+                                                 if label != "catch24 MSE"]) + " |",
+                  "|" + "---|" * len(keys_c)]
+        lines += ["| " + " | ".join(fmt(r.get(k, np.nan)) for k in keys_c) + " |"
+                  for r in coupled_rows]
         lines += [""]
     lines += ["## Reference models at their published test fits (medians over sets)", "",
               "| " + " | ".join(ref_keys) + " |", "|" + "---|" * len(ref_keys)]
