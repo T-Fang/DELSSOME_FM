@@ -382,3 +382,51 @@ Logged so they are not relitigated.
 4. **Does removing FiLM cost accuracy at parity?** Phase 1 answers this directly — retrain MFM at $N=68$ and compare against current DELSSOME.
 5. **Corpus balance over $P$.** Larger templates have more eligible coefficients, so the sampler may concentrate on $P = 4$–$5$ and leave $P = 2$ rare — which is where the mean-over-$p$ pooling is least exercised, since one of the two summands is always $\sigma$. Histogram $P$ over the first 50 models before generating any simulations. **Measured (2026-10-10)** over the valid corpus models: $P$ = 1/2/3/4/5 in 2/36/33/19/10%. The concentration feared here did not happen. $P = 2$ is the most common value, and $P = 1$ (fully noiseless models with one free coefficient) is rare.
 6. ~~**Flat draws in stage 1.**~~ Decided 2026-10-12: excluded from the stage-1 loss, like divergent draws (§5.3).
+
+### 7.6 The sinh corpus: scaling, targets, heads, size and coupled-only training (2026-10-25 to 2026-10-27)
+
+The corpus of generation.md §4 (`sinh` policy; `corpus_sinh`, `training_store_sinh`: 100,000 train models, 4.04 M usable rows, 40% of draws; val and test 10,000 models, 0.41 M rows each). Every run: 200,000 steps, batch 256, the concatenation pair-MLP FC head (the "original" model from here on), parameters encoded as asinh(x / 1e-4) / 19.1. Metrics are each run's final evaluation (`final/<split>/*`, 200,000 rows per split; train = the rows it trained on). Tables and figures: `outputs/report_sinh/` (`comparison_table.md`, `figures/scaling_grid.png`, one folder per run). Decided along the way: the original model uses the MLP FC head; GPU jobs go to L40S; new variants train with the cost loss (2026-10-26).
+
+**The new corpus is much harder to fit.** The original model reaches val total 1.79 and trained-rows total 1.48 (old corpus, same head: 1.0 and 0.49). Trained rows and test differ little in the cost terms (coupled 1 − r 0.62 against 0.64, KS 0.41 against 0.43): the network does not fit the dynamics even of the models it trained on. Every draw now has its own parameter scale, and regions within a draw differ.
+
+**Scaling** (original + cost loss, `sinh_m<M>k_d<D>_cost`). Val total: 10k models 2.36 / 2.27 / 2.22 at 10 / 30 / 100 draws; 30k 2.18 / 2.06 / 2.01; 100k 1.96 / 1.87 / 1.83. More models helps most; draws help too, less. Trained-rows totals stay at 1.5–1.9 at every scale.
+
+**Model size** (all + cost loss, 100k models × all draws):
+
+| model | parameters | trained rows | val | test | test R² FC | test coupled 1 − r |
+|---|---|---|---|---|---|---|
+| d 128, 4 + 4 layers (`sinh_m100k_d100_cost`) | 1.8 M | 1.55 | 1.83 | 1.87 | 0.46 | 0.59 |
+| wide: d 256, 4 + 4 | ~6.8 M | 1.53 | 1.80 | 1.88 | 0.45 | 0.60 |
+| deep: d 128, 8 + 8 | ~3.4 M | 1.54 | 1.81 | 1.87 | 0.46 | 0.59 |
+| wide + deep: d 256, 8 + 8 | ~13 M | 1.49 | 1.80 | 1.84 | 0.47 | 0.59 |
+
+Seven times the parameters changes the fit to the training rows by 0.07. Capacity is not what limits the fit.
+
+**Targets and heads** (test; total = the four statistic groups):
+
+- Cost loss: total 1.83 → 1.87 and R² 0.49 → 0.46, but coupled 1 − r 0.64 → 0.59 and uncoupled d 0.016 → 0.001.
+- catch24 (`catch24_loss`): adding it leaves the statistics as they were (original + catch24: 1.82; + cost + catch24: 1.87). catch24 MSE 0.61 (z-scored; trained rows 0.55); per-feature R² 0.0–0.66, median 0.48. The time-reversal statistic (`CO_trev_1_num`) has R² ~ 0: in these noise-driven simulations it is sampling noise. catch24 alone trains to the same catch24 MSE (0.60).
+- Latent FC head (FC autoencoder, latent 128; the frozen decoder reconstructs val FC to R² 0.968 and coupled 1 − r 0.12): worse than the pair MLP (coupled 1 − r 0.79 against 0.59). Predicting the latent vector from h_CLS is the hard part, not decoding.
+
+**Network FC** (Yeo-7, data/networks.py: the FC of each network's averaged raw signals, 21 values; 50,000 rows per split, identical across arms):
+
+| arm | test coupled 1 − r | test MSE (arctanh) | test d uncoupled | trained-rows coupled 1 − r |
+|---|---|---|---|---|
+| original (`sinh_orig`), region predictions downsampled | 0.48 | 1.73 | 0.12 | 0.47 |
+| network FC only (`sinh_fcnet_only_v2`), h_CLS head | 0.37 | 1.74 | 0.05 | 0.35 |
+| original + network FC (`sinh_orig_fcnet`), its head | 0.36 | 1.67 | 0.04 | 0.34 |
+| original + network FC, downsampled | 0.47 | 1.77 | 0.12 | 0.46 |
+
+Predicting network FC directly gives a better network pattern than downsampling region predictions (1 − r 0.36 against 0.47), and adding it does not hurt the region-level statistics (test total 1.86). But the MSE is no better, and training rows fit no better than test: the lower resolution makes the target easier to state, not the dynamics easier to learn. A small region-level FC bias (d 0.016) adds up to 0.12 in network FC, because a network signal sums many region pairs.
+
+**Coupled draws only** (`sinh_coupled_only`, + cost loss; trained and validated on draws with mean FC > 0.05: 0.83 M rows from 68,686 models). Against the same-size model trained on all draws, on the same coupled rows (`final_coupled/*`):
+
+| model | rows | total | R² FC | 1 − r | d | KS |
+|---|---|---|---|---|---|---|
+| all draws (`sinh_m100k_d100_cost`) | test, coupled | 5.70 | 0.24 | 0.59 | 0.16 | 0.44 |
+| all draws, wide + deep | test, coupled | 5.61 | 0.25 | 0.59 | 0.15 | 0.43 |
+| coupled draws only | test, coupled | **4.56** | **0.42** | **0.56** | **0.09** | **0.40** |
+| all draws | trained, coupled | 4.76 | 0.38 | 0.58 | 0.12 | 0.42 |
+| coupled draws only | trained, coupled | 3.44 | 0.58 | 0.54 | 0.07 | 0.37 |
+
+Training only on coupled draws improves every term on coupled draws, by more than any change of size, head or target: the uncoupled majority (79% of rows) interferes with learning coupled FC. It also transfers to the reference models, which are all coupled: KS 0.66 / 0.58 / 0.38 for MFM / FIC / Hopf against 0.89 / 0.89 / 0.70, and d 0.11 / 0.31 / 0.04 against 0.25 / 0.49 / 0.28. Its checkpoint is from step 55,000 (0.83 M rows: it overfits sooner). It cannot be used alone, since whether a draw is coupled is known only after simulating it: hence the proposal to predict coupling from the parameters and condition the network on it.

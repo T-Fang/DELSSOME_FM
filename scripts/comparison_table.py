@@ -41,7 +41,7 @@ SINH = {   # 100k models x all draws (~40 usable each) of the sinh corpus, mlp_c
     "sinh_deep": ("+ cost, deep (d 128, 8+8 layers)", "outputs/report_sinh/sinh_deep/comparison.npz"),
     "sinh_wide_deep": ("+ cost, wide + deep (d 256, 8+8)",
                        "outputs/report_sinh/sinh_wide_deep/comparison.npz"),
-    "sinh_coupled_only": ("+ cost, coupled draws only",
+    "sinh_coupled_only": ("+ cost, coupled draws only *",
                           "outputs/report_sinh/sinh_coupled_only/comparison.npz"),
 }
 RUN_SETS = {"d10": ("stage1", D10), "sinh": ("stage1_sinh", SINH)}
@@ -127,6 +127,10 @@ def main() -> None:
     lines += ["## Reference models at their published test fits (medians over sets)", "",
               "| " + " | ".join(ref_keys) + " |", "|" + "---|" * len(ref_keys)]
     lines += ["| " + " | ".join(fmt(r[k]) for k in ref_keys) + " |" for r in rows]
+    if any(d.endswith("*") for d, _ in runs_spec.values()):
+        lines += ["", "\\* trained, validated and evaluated on coupled draws only (mean FC > 0.05): "
+                  "its rows in the all-draw tables are coupled draws, so compare it in the "
+                  "coupled-draw tables."]
     (args.out / "comparison_table.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 
