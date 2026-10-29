@@ -21,6 +21,9 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
                         (from scripts/generalisation_report_data.py)
+    learning_curves.png total MSE of the four groups and the three cost terms (1 - r, d, KS)
+                        against training step, train (smoothed) and val, for the MLflow runs
+                        of --curves; val cost terms are logged from 2026-10-29 on
     reference_cost_terms.png, reference_examples.png
                         MFM, FIC, Hopf at their published test fits: prediction vs simulation
                         (from scripts/reference_eval_compare.py; skipped if not yet run)
@@ -78,6 +81,68 @@ def mlflow_val(scaling: dict, tracking_uri: str) -> dict:
         v["val"] = {**v["val"], "total": hist["total"][best],
                     "r2_pairwise": hist["r2_pairwise"][best]}
     return scaling
+
+
+CURVE_PANELS = (("total", "total MSE (sum of 4 groups)"), ("cost_corr", "1 - r (FC)"),
+                ("cost_mean", "d (FC mean)"), ("cost_ks", "KS (FCD)"))
+
+
+def mlflow_curves(tracking_uri: str, experiment: str, runs: list[str]) -> dict:
+    """run -> panel -> {"train": (steps, values), "val": (steps, values)} from MLflow. Train
+    total is the sum of the four group MSEs (train/total is the weighted loss); a panel is
+    missing where the run did not log the metric."""
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    found = {r.info.run_name: r.info.run_id for r in client.search_runs(
+        [client.get_experiment_by_name(experiment).experiment_id])}
+    missing = [r for r in runs if r not in found]
+    if missing:
+        raise ValueError(f"no MLflow run named {missing} in experiment {experiment!r}")
+
+    def history(run_id: str, key: str) -> dict[int, float]:
+        return {m.step: m.value for m in client.get_metric_history(run_id, key)}
+
+    curves = {}
+    for name in runs:
+        rid, c = found[name], {}
+        groups = [history(rid, f"train/{g}") for g in ("regional", "pairwise", "fcd", "fc_moments")]
+        steps = sorted(set.intersection(*(set(h) for h in groups)))
+        c["total"] = {"train": (steps, [sum(h[t] for h in groups) for t in steps])}
+        for key, _ in CURVE_PANELS[1:]:
+            c[key] = {"train": tuple(zip(*sorted(history(rid, f"train/{key}").items()))) or ((), ())}
+        for key, _ in CURVE_PANELS:
+            val = sorted(history(rid, f"val/{key}").items())
+            if val:
+                c[key]["val"] = tuple(zip(*val))
+        curves[name] = c
+    return curves
+
+
+def learning_curves_figure(curves: dict, out: Path, smooth: int = 100):
+    """One panel per CURVE_PANELS entry: per run, train as a running mean over `smooth`
+    logged steps (thin) and val (markers)."""
+    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8))
+    colours = (BLUE, ORANGE, AQUA, INK2)
+    if len(curves) > len(colours):
+        raise ValueError(f"at most {len(colours)} runs per figure, found {len(curves)}")
+    for (key, title), ax in zip(CURVE_PANELS, axes):
+        for (name, c), colour in zip(curves.items(), colours):
+            steps, values = c[key]["train"]
+            if len(values) >= smooth:
+                kernel = np.ones(smooth) / smooth
+                ax.plot(np.asarray(steps)[smooth - 1:], np.convolve(values, kernel, "valid"),
+                        color=colour, lw=1.0, alpha=0.55)
+            if "val" in c[key]:
+                ax.plot(*c[key]["val"], color=colour, lw=2, marker="o", ms=3.5, label=name)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("training step")
+        style(ax)
+    axes[0].set_ylabel("value (train thin, val with markers)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(curves), frameon=False,
+               bbox_to_anchor=(0.5, 1.06))
+    fig.tight_layout()
+    save(fig, out, "learning_curves.png")
 
 
 def scaling_figure(scaling: dict, out: Path):
@@ -530,6 +595,9 @@ def main():
                         "comparison.npz); no reference figures without it")
     p.add_argument("--scaling-grid", default=None, metavar="EXPERIMENT:PREFIX",
                    help="draw scaling_grid.png from these MLflow runs, e.g. stage1_sinh:sinh")
+    p.add_argument("--curves", default=None, metavar="EXPERIMENT:RUN[,RUN...]",
+                   help="draw learning_curves.png for these MLflow runs, e.g. "
+                   "stage1_sinh:sinh_ptok_emb_cost,sinh_ptok_raw_cost")
     p.add_argument("--mlflow", default="sqlite:////home/ftian/storage/projects/DELSSOME-FM/"
                    "outputs/mlflow/mlflow.db", help="tracking URI holding the runs' val metrics")
     args = p.parse_args()
@@ -540,6 +608,9 @@ def main():
         else {}
     t = dict(np.load(args.data / "report_data_train.npz")) \
         if (args.data / "report_data_train.npz").is_file() else {}
+    if args.curves is not None:
+        experiment, runs = args.curves.split(":")
+        learning_curves_figure(mlflow_curves(args.mlflow, experiment, runs.split(",")), out)
     if args.scaling_grid is not None:
         experiment, prefix = args.scaling_grid.split(":")
         scaling_grid_figure(mlflow_grid(args.mlflow, experiment, prefix), out, args.label)

@@ -26,6 +26,7 @@ fc_net_loss: false       # train a head on the Yeo-7 network FC (data/networks.p
 max_distance: 16        # DAG shortest paths clipped here (corpus max 25; 0.02% of pairs > 16)
 max_degree: 16
 token_scheme: region    # region | parameter (architecture.md §3.4, 2026-10-29)
+embed_theta: true       # parameter tokens: theta through W_theta before the token MLP (false: raw)
 
 # training data: the first train_models models, at most draws_per_model usable draws each
 train_models: 363

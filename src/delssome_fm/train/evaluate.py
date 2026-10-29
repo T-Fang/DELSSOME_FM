@@ -43,6 +43,7 @@ LEGACY_DEFAULTS = {
     "fc_net_loss": False,            # added 2026-10-26
     "coupled_draws_only": False,     # added 2026-10-26
     "token_scheme": "region",        # added 2026-10-29: the only scheme before
+    "embed_theta": True,             # added 2026-10-29; region tokens always embed theta
 }
 
 

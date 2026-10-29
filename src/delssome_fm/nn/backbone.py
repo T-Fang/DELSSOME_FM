@@ -5,7 +5,12 @@ Stage 1 and stage 2 share it; only the heads differ. Two token schemes (nn/token
     region     68 region tokens (architecture.md §3); r_i is region i's output
     parameter  P x 68 parameter tokens (§3.4, 2026-10-29); the template encoder reads the
                values of global parameters and constants, and r_i is the mean of region i's
-               P outputs (absent parameters masked out of attention and of the mean)
+               P outputs
+
+With parameter tokens a model's sequence has its own length, 1 + 68 P + M. A batch stores
+its rows at the length of its longest row (P and M of the batch's largest); the positions a
+shorter row does not have are masked as attention keys and left out of the region means, so
+each row's outputs are those of its own sequence alone (tests/test_network.py checks this).
 
 Outputs used downstream are h_CLS (B, d) and the region outputs r (B, N, d). The template
 positions of the output are discarded, but the template tokens are in the sequence so that
@@ -43,6 +48,7 @@ class BackboneSize:
     max_distance: int
     max_degree: int
     token_scheme: str
+    embed_theta: bool
 
 
 @dataclass
@@ -58,13 +64,17 @@ class Backbone(nn.Module):
         s = size
         if s.token_scheme not in TOKEN_SCHEMES:
             raise ValueError(f"token_scheme must be one of {TOKEN_SCHEMES}, found {s.token_scheme!r}")
+        if not (s.embed_theta or s.token_scheme == "parameter"):
+            raise ValueError("embed_theta false is a parameter-token option: region tokens "
+                             "always embed theta (W_reg)")
         self.token_scheme = s.token_scheme
         per_parameter = s.token_scheme == "parameter"
         self.template = TemplateEncoder(s.d_template, s.template_layers, s.n_heads,
                                         s.ffn_multiplier, s.dropout, s.max_distance, s.max_degree,
-                                        node_values=per_parameter)
+                                        parameter_features=per_parameter)
         self.project = nn.Linear(s.d_template, s.d_model)   # W_proj
-        self.tokens = (ParameterTokens if per_parameter else RegionTokens)(s.d_model, s.n_regions)
+        self.tokens = (ParameterTokens(s.d_model, s.n_regions, s.embed_theta) if per_parameter
+                       else RegionTokens(s.d_model, s.n_regions))
         self.cls = nn.Parameter(torch.randn(s.d_model) * 0.02)
         self.segment = nn.Embedding(3, s.d_model)
         self.layers = nn.ModuleList(TransformerLayer(s.d_model, s.n_heads, s.ffn_multiplier,
@@ -75,7 +85,7 @@ class Backbone(nn.Module):
     def forward(self, theta: torch.Tensor, psi: torch.Tensor, sc: torch.Tensor,
                 graph: GraphBatch) -> BackboneOutput:
         """theta (B, N, P), psi (B, K), sc (B, N, N): as RegionTokens; graph: the models' DAGs."""
-        B, N, P = theta.shape
+        B, N, _ = theta.shape
         if self.token_scheme == "region":
             template = self.project(self.template(graph))             # (B, M, d)
             readouts = read_out(template, graph)
@@ -84,8 +94,12 @@ class Backbone(nn.Module):
         else:
             template = self.project(self.template(graph, global_values(graph, psi)))
             readouts = read_out(template, graph)
-            tokens = self.tokens(theta, sc, readouts.kappa).flatten(1, 2)   # (B, N * P, d)
-            token_mask = readouts.kappa_mask[:, None, :].expand(B, N, P).flatten(1)
+            # the batch's largest P: columns no row has are dropped, not padded
+            columns = torch.arange(1, readouts.kappa_mask.shape[1] + 1, device=theta.device)
+            P = int((readouts.kappa_mask * columns).max())
+            kappa, kappa_mask = readouts.kappa[:, :P], readouts.kappa_mask[:, :P]
+            tokens = self.tokens(theta[..., :P], sc, kappa).flatten(1, 2)   # (B, N * P, d)
+            token_mask = kappa_mask[:, None, :].expand(B, N, P).flatten(1)
         T = tokens.shape[1]
         x = torch.cat([self.cls.expand(B, 1, -1), tokens, template], dim=1)
         segments = torch.cat([torch.full((T + 1,), TOKEN, device=x.device),
@@ -100,5 +114,5 @@ class Backbone(nn.Module):
         x = self.norm(x)
         out = x[:, 1:T + 1]
         if self.token_scheme == "parameter":                      # region i: mean of its P
-            out = masked_mean(out.view(B, N, P, -1), readouts.kappa_mask[:, None, :, None], 2)
+            out = masked_mean(out.reshape(B, N, P, -1), kappa_mask[:, None, :, None], 2)
         return BackboneOutput(h_cls=x[:, 0], regions=out, readouts=readouts)

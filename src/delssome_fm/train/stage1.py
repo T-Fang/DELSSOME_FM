@@ -11,7 +11,9 @@ loss scales), the learning rate. Per validation, over the fixed val subset: val/
 groups, comparable across models), val/selection (the sum over the groups the model trains
 on, which picks the checkpoint), val/r2_pairwise (R^2 of the z-scored arctanh FC over all edges), and
 the DELSSOME cost terms between prediction and simulation in raw units (train/costs.py), as
-medians over uncoupled and coupled draws: val/cost_<corr|mean|ks>_<uncoupled|coupled>.
+means over all val rows, val/cost_<corr|mean|ks> (what the cost loss trains on, logged from
+2026-10-29), and as medians over uncoupled and coupled draws:
+val/cost_<corr|mean|ks>_<uncoupled|coupled>.
 """
 
 from __future__ import annotations
@@ -55,7 +57,7 @@ class Stage1Module(L.LightningModule):
             template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
             n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
             max_distance=cfg.max_distance, max_degree=cfg.max_degree,
-            token_scheme=cfg.token_scheme))
+            token_scheme=cfg.token_scheme, embed_theta=cfg.embed_theta))
         decoder, latent_dim = None, 0
         if cfg.pair_head == "latent":
             from delssome_fm.train.autoencoder import load_fc_autoencoder
@@ -123,6 +125,7 @@ class Stage1Module(L.LightningModule):
     def on_validation_epoch_end(self) -> None:
         costs = {k: torch.cat([c[k] for c in self._val_costs]) for k in (*TERMS, "coupled")}
         self._val_costs.clear()
+        self.log_dict({f"val/cost_{t}": torch.nanmean(costs[t]) for t in TERMS})
         for regime, mask in (("uncoupled", ~costs["coupled"]), ("coupled", costs["coupled"])):
             if mask.any():
                 self.log_dict({f"val/cost_{t}_{regime}": torch.nanmedian(costs[t][mask])

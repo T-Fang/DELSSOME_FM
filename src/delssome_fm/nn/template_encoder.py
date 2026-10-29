@@ -19,12 +19,20 @@ Readouts, all in the backbone width d (the encoder output is projected first):
 P, K, V and the number of Agg nodes vary by model, so the index tensors are padded with -1
 and every readout carries a mask.
 
-With `node_values` (the parameter-token backbone, architecture.md §3.4, 2026-10-29) the
-encoder also reads values: there is no constant/parameter distinction, only global vs
-regional. Each Const node is recoded as a global Par node (`constants_as_global_parameters`),
-and every global Par node (constants and the model's Psi) adds MLP_val(its encoded value) to
-its input. Regional Par nodes carry no value: theirs differ by region and enter through the
-parameter tokens.
+With `parameter_features` (the parameter-token backbone, architecture.md §3.4, 2026-10-29)
+there is no constant/parameter distinction, only global vs regional, and the encoder reads
+19 node features instead of dag.py's 21 (`parameter_node_features`):
+
+    columns 1-14   one-hot node type: NODE_TYPES without Const (a constant is a global Par)
+    column  15     value, asinh(x / S) / Z as the parameters are encoded      global Par only
+    column  16     parameter scope: +1 regional, -1 global                     Par only
+    column  17     variable scope: +1 self, -1 neighbour                       Var only
+    columns 18-19  observation one-hot (Balloon-Windkessel, direct)            Out only
+
+Column 15 takes the place of the Const sign and log10|c| columns: a constant's value, or the
+draw's Psi[k] at the k-th global parameter. So the features, and the encoder, are per draw.
+Regional Par nodes have value 0: theirs differ by region and enter through the parameter
+tokens.
 """
 
 from __future__ import annotations
@@ -34,11 +42,12 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from delssome_fm.nn.layers import MLP, TransformerLayer, key_padding_bias, masked_mean
+from delssome_fm.nn.layers import TransformerLayer, key_padding_bias, masked_mean
 from delssome_fm.spec.dag import N_FEATURES, NODE_TYPES
 
 CONST, PAR = NODE_TYPES.index("Const"), NODE_TYPES.index("Par")
-SIGN, LOG10, SCOPE = len(NODE_TYPES), len(NODE_TYPES) + 1, len(NODE_TYPES) + 2   # dag.py columns
+SCOPE = len(NODE_TYPES) + 2                    # dag.py's parameter-scope column
+N_PARAMETER_FEATURES = N_FEATURES - 2          # no Const type; one value column for two
 
 
 @dataclass
@@ -86,12 +95,15 @@ class TemplateEncoder(nn.Module):
     """Graphormer over the equation DAG: GraphBatch -> H_tmpl (B, M, d_t)."""
 
     def __init__(self, d_t: int, n_layers: int, n_heads: int, ffn_multiplier: int,
-                 dropout: float, max_distance: int, max_degree: int, node_values: bool = False):
-        """node_values: read the values of global nodes (module docstring)."""
+                 dropout: float, max_distance: int, max_degree: int,
+                 parameter_features: bool = False):
+        """parameter_features: read the 19 features of `parameter_node_features` (module
+        docstring) rather than dag.py's 21."""
         super().__init__()
         self.max_distance = max_distance
         self.max_degree = max_degree
-        self.input = nn.Linear(N_FEATURES, d_t)
+        self.parameter_features = parameter_features
+        self.input = nn.Linear(N_PARAMETER_FEATURES if parameter_features else N_FEATURES, d_t)
         self.in_degree = nn.Embedding(max_degree + 1, d_t)
         self.out_degree = nn.Embedding(max_degree + 1, d_t)
         # one bias per head for each distance 0..max_distance, plus one for "no path"
@@ -99,21 +111,17 @@ class TemplateEncoder(nn.Module):
         self.layers = nn.ModuleList(TransformerLayer(d_t, n_heads, ffn_multiplier, dropout)
                                     for _ in range(n_layers))
         self.norm = nn.LayerNorm(d_t)
-        self.value = MLP([1, d_t, d_t]) if node_values else None
 
     def forward(self, g: GraphBatch, values: torch.Tensor | None = None) -> torch.Tensor:
-        """values (B, M): with node_values, the encoded value of every global node (Const
-        and global Par; `global_values`), ignored elsewhere."""
+        """values (B, M): with parameter_features, the encoded value of every global node
+        (`global_values`)."""
         degree = g.degree.long().clamp(max=self.max_degree)
         features = g.features
-        if self.value is not None:
+        if self.parameter_features:
             if values is None:
-                raise ValueError("this encoder reads node values: pass global_values(...)")
-            features = constants_as_global_parameters(features)
+                raise ValueError("this encoder reads global values: pass global_values(...)")
+            features = parameter_node_features(features, values)
         x = self.input(features) + self.in_degree(degree[..., 0]) + self.out_degree(degree[..., 1])
-        if self.value is not None:
-            is_global = (features[..., PAR] == 1) & (features[..., SCOPE] == -1)
-            x = x + self.value(values[..., None].to(x.dtype)) * is_global[..., None].to(x.dtype)
         distances = g.distances.long()
         no_path = torch.full_like(distances, self.max_distance + 1)
         bucket = torch.where(distances < 0, no_path, distances.clamp(max=self.max_distance))
@@ -123,18 +131,19 @@ class TemplateEncoder(nn.Module):
         return self.norm(x)
 
 
-def constants_as_global_parameters(features: torch.Tensor) -> torch.Tensor:
-    """(..., 21) node features with every Const node recoded as a global Par node: type
-    one-hot Par, parameter scope -1, and the sign and log10|c| columns cleared (the value
-    enters through the encoder's value MLP instead)."""
-    out = features.clone()
+def parameter_node_features(features: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    """features (..., 21) as dag.node_features, values (...) the encoded value of each global
+    node (`global_values`) -> (..., 19), the layout of the module docstring: each Const node
+    becomes a global Par node, and the value column holds every global node's value."""
     const = features[..., CONST] == 1
-    out[..., CONST] = 0.0
-    out[..., PAR] = torch.where(const, 1.0, out[..., PAR])
-    out[..., SCOPE] = torch.where(const, -1.0, out[..., SCOPE])
-    out[..., SIGN] = 0.0
-    out[..., LOG10] = 0.0
-    return out
+    types = features[..., :len(NODE_TYPES)].clone()
+    types[..., PAR] = torch.where(const, 1.0, types[..., PAR])
+    types = torch.cat([types[..., :CONST], types[..., CONST + 1:]], dim=-1)
+    scope = torch.where(const, -1.0, features[..., SCOPE])
+    is_global = (features[..., PAR] == 1) & (scope == -1) | const
+    value = torch.where(is_global, values.to(features.dtype), 0.0)
+    return torch.cat([types, value[..., None], scope[..., None], features[..., SCOPE + 1:]],
+                     dim=-1)
 
 
 def global_values(g: GraphBatch, psi: torch.Tensor) -> torch.Tensor:

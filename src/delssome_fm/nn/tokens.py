@@ -19,17 +19,16 @@ for the sinh-policy corpus.
 `ParameterTokens`, scheme "parameter" (architecture.md §3.4, decided 2026-10-29): one token
 per regional parameter per region, P x N in all, with no pooling and no global offset,
 
-    token_{i,p} = MLP_tok([W_theta theta[i, p] || kappa_p || C[i, :]])     (2d + N -> d)
+    token_{i,p} = MLP_tok([theta[i, p] || kappa_p || C[i, :]])              (1 + d + N -> d)
+    token_{i,p} = MLP_tok([W_theta theta[i, p] || kappa_p || C[i, :]])      (2d + N -> d)
 
-one MLP shared by all parameters and regions. Global parameters and constants are values in
-the template encoder instead (nn/template_encoder.py), and reach the tokens by attention.
-
-theta enters through W_theta (d x 1) rather than as one raw input among 1 + d + N (the
-project lead's sketch): the same functions, since the MLP's first layer is linear in theta
-either way, but a raw scalar beside 196 other inputs starts with ~1/5 of the weight. Fitting
-one batch of draws of one model, the raw form left the regional and FC-moment losses near
-their start after 300 steps; with W_theta it fit them as fast as the region scheme
-(2026-10-29).
+the second with `embed_theta` (W_theta: d x 1); one MLP shared by all parameters and regions.
+Global parameters and constants are values in the template encoder instead
+(nn/template_encoder.py), and reach the tokens by attention. Both forms give the same
+functions (the MLP's first layer is linear in theta either way); they differ in how strongly
+theta acts at initialisation: as one raw input among 1 + d + N it starts with ~1/5 of the
+weight it has through W_theta. Both are trained (2026-10-29) to see whether that matters
+beyond the first steps.
 """
 
 from __future__ import annotations
@@ -69,10 +68,10 @@ class RegionTokens(nn.Module):
 
 
 class ParameterTokens(nn.Module):
-    def __init__(self, d: int, n_regions: int):
+    def __init__(self, d: int, n_regions: int, embed_theta: bool):
         super().__init__()
-        self.w_theta = nn.Linear(1, d, bias=False)
-        self.mlp = MLP([2 * d + n_regions, d, d])
+        self.w_theta = nn.Linear(1, d, bias=False) if embed_theta else None
+        self.mlp = MLP([(d if embed_theta else 1) + d + n_regions, d, d])
 
     def forward(self, theta: torch.Tensor, sc: torch.Tensor, kappa: torch.Tensor) -> torch.Tensor:
         """
@@ -83,6 +82,7 @@ class ParameterTokens(nn.Module):
                  are to be masked (Readouts.kappa_mask)
         """
         B, N, P = theta.shape
-        x = torch.cat([self.w_theta(theta[..., None]), kappa[:, None].expand(B, N, P, -1),
+        t = theta[..., None] if self.w_theta is None else self.w_theta(theta[..., None])
+        x = torch.cat([t, kappa[:, None].expand(B, N, P, -1),
                        sc[:, :, None].expand(B, N, P, N)], dim=-1)
         return self.mlp(x)

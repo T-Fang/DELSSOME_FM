@@ -155,6 +155,8 @@ class Stage1Config:
     token_scheme: str             # region: one token per region (architecture.md §3);
                                   # parameter: one per regional parameter per region, global
                                   # values read by the template encoder (§3.4, 2026-10-29)
+    embed_theta: bool             # parameter tokens: theta through W_theta (d x 1) before the
+                                  # token MLP, or raw (false); region tokens: must be true
     # training data (the scaling sweep of architecture.md §7.2 varies these)
     train_models: int             # number of train corpus models to use
     draws_per_model: int          # and at most this many usable draws of each (100: all)

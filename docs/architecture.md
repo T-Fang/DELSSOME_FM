@@ -122,28 +122,47 @@ Same mean-then-MLP construction on the global side, for the same reason.
 
 An alternative to §3.1–3.3, chosen per run by `token_scheme`. The default, and every run before 2026-10-29, is `region`. The motivation: §3.1 averages a region's parameters before the transformer sees them, and §3.3 sums every global quantity into one offset. Both lose information. Two changes:
 
-**Global values go into the template encoder.** Constants and parameters are no longer distinguished, only global and regional quantities.
-- The Graphormer sees every `Const` node as a global `Par` node: type one-hot `Par`, scope −1, sign and $\log_{10}$ columns cleared.
-- Every global node (each constant and each of the $K$ global parameters) adds $\text{MLP}_{\text{val}}(v)$ to its input embedding. $v$ is the value encoded as the sinh-policy parameters are, $\operatorname{asinh}(x/S)/Z$; $\text{MLP}_{\text{val}}$ is $1 \to d_t \to d_t$.
-- The encoder therefore runs per draw, and $\kappa_p$ depends on the draw's global values.
-- Regional `Par` nodes carry no value: theirs differ by region.
+**Global values are node features.** Constants and parameters are no longer distinguished, only global and regional quantities. A constant is a global parameter whose value is the same in every draw. The template encoder reads 19 node features instead of §1's 21:
+
+| Columns | Content | Nonzero on |
+|---|---|---|
+| 1–14 | one-hot node type, the 15 types without `Const` | every node |
+| 15 | value $v = \operatorname{asinh}(x/S)/Z$ | global `Par` nodes |
+| 16 | parameter scope: +1 regional, −1 global | `Par` |
+| 17 | variable scope: +1 self, −1 neighbour | `Var` |
+| 18–19 | observation one-hot | `Out` |
+
+- Column 15 takes the place of the `Const` sign and $\log_{10}\lvert c\rvert$ columns.
+- For a former constant, $x$ is the constant's value. For the $k$-th global parameter, $x$ is the draw's $\Psi[k]$.
+- $v$ uses the encoding of the regional inputs, with $S = 10^{-4}$ and $Z = \operatorname{asinh}(10^4/S)$. It is signed and continuous, so one column replaces sign and $\log_{10}$.
+- The value enters the encoder as every feature does, through the input layer: $h^{(0)}_m = W_{\text{in}} x_m + E_{\text{in}}[\deg^{-}_m] + E_{\text{out}}[\deg^{+}_m]$, so a global node contributes $v_m$ times one learned column of $W_{\text{in}}$.
+- The features, and so the encoder and $\kappa_p$, are per draw.
+- Regional `Par` nodes have value 0: their values differ by region and enter through the tokens.
 - Exact constant values are stored in the training store as `node_value.npy`. The clipped $\log_{10}$ column would lose the ~4% of sinh constants with $\lvert c\rvert < 10^{-4}$.
 - The scheme requires a sinh-policy store; training refuses any other.
 
-**One token per regional parameter per region,** with no pooling before attention and no global offset:
+**One token per regional parameter per region,** with no pooling before attention and no global offset. There are two forms, chosen by `embed_theta`:
 
-$$\text{token}_{i,p} = \text{MLP}_{\text{tok}}\big([\,W_\theta\,\Theta[i,p] \;\|\; \kappa_p \;\|\; C[i,:]\,]\big) \in \mathbb{R}^{d}, \qquad W_\theta \in \mathbb{R}^{d \times 1}$$
+$$\text{token}_{i,p} = \text{MLP}_{\text{tok}}\big([\,\Theta[i,p] \;\|\; \kappa_p \;\|\; C[i,:]\,]\big) \qquad (1 + d + N \to d \to d)$$
 
-- One MLP ($2d + N \to d \to d$) is shared by all parameters and regions, giving $P \times N$ tokens: 136–340, since $P = 2..5$ in the sinh corpus.
-- $\Psi$, $z_M$, $u$, $o$ and $m_{\text{agg}}$ no longer enter the tokens. The tokens get global information by attending to the template tokens (in-context conditioning).
-- The transformer reads [CLS, $P \times N$ parameter tokens, $M$ template tokens], with a learned segment embedding each. Tokens of absent parameters are masked as attention keys.
-- $r_i$ is the mean of region $i$'s $P$ outputs, absent parameters excluded. The heads are unchanged: regional statistics and the pair head read $r_i$; global statistics, FCD and the cost terms read $h_{\text{CLS}}$ (through the heads' predictions).
+$$\text{token}_{i,p} = \text{MLP}_{\text{tok}}\big([\,W_\theta\,\Theta[i,p] \;\|\; \kappa_p \;\|\; C[i,:]\,]\big) \qquad (2d + N \to d \to d,\; W_\theta \in \mathbb{R}^{d \times 1})$$
 
-**Why $W_\theta$.** The project lead's sketch fed $\Theta[i,p]$ as one raw input among $1 + d + N$. $W_\theta$ gives the same functions, because the MLP's first layer is linear in $\Theta$ either way. But a raw scalar beside 196 other inputs starts with about a fifth of the weight. On one batch of draws of a single model (which differ only in their values), the raw form left the regional and FC-moment losses near their start after 300 steps. With $W_\theta$ it fit them as fast as region tokens did.
+- One MLP is shared by all parameters and regions. $\Psi$, $z_M$, $u$, $o$ and $m_{\text{agg}}$ no longer enter the tokens; the tokens get global information by attending to the template tokens (in-context conditioning).
+- The transformer reads [CLS, $P \times 68$ parameter tokens, $M$ template tokens], with a learned segment embedding each. $r_i$ is the mean of region $i$'s $P$ outputs.
+- The heads are unchanged: regional statistics and the pair head read $r_i$; global statistics, FCD and the cost terms read $h_{\text{CLS}}$ (through the heads' predictions).
+
+**Variable length.** $P$ (2–5 in the sinh corpus) and $M$ vary by model, so a model's sequence is $1 + 68P + M$ tokens. A GPU batch stores its rows at the length of its longest row: $P$ is the batch's largest, not a fixed 5. The positions a shorter row does not have are masked as attention keys and left out of the region means. Each row's outputs are therefore exactly those of its own sequence run alone; `tests/test_network.py` checks this on a batch that mixes $P$ and $M$. The padding costs compute only. Batches of 256 nearly always hold a $P = 5$ model, so they run at ~450 tokens, against ~180 for region tokens. Grouping batches by $P$ would cut that, at the price of batches unlike the baseline's.
+
+**Raw or embedded $\Theta$.** Both forms give the same functions, since the MLP's first layer is linear in $\Theta$ either way. They differ at initialisation:
+- A raw $\Theta$ is one of $1 + d + N = 197$ inputs, so its weight into each hidden unit starts at $\sim\!\mathcal{U}(\pm 1/\sqrt{197})$, RMS 0.04.
+- Through $W_\theta$, the effective weight is a sum over $d$ products and starts at RMS ~0.2, about 5× larger.
+- Each effective weight is also moved by $d$ parameters per Adam step, not one.
+- On one batch of draws of a single model (which differ only in their values), after 300 steps the raw form had barely fit the regional and FC-moment losses, while the embedded form fit them as fast as region tokens did.
+- Whether this matters over 200k steps, or only at the start, is what the two runs of 2026-10-29 test.
 
 **To watch.**
-- At initialisation the output is ~80× less sensitive to $\Psi$ than with region tokens, because $\Psi$ reaches the tokens only through attention. The coupling gains are global parameters and decide whether a draw is coupled, so whether training learns this dependence shows in the coupled-draw metrics.
-- The sequence is $1 + 68P + M \approx 450$ tokens at $P = 5$, against ~180 for region tokens. A CPU training step is 1.5× slower.
+- At initialisation, shifting $\Psi$ by 0.2 moves $h_{\text{CLS}}$ ~100× and $r_i$ ~300× less than with region tokens (relative change $3\times10^{-5}$ against $4\times10^{-3}$ and $10^{-2}$; 8 val draws, 3 seeds). $\Psi$ reaches the tokens only through attention. Shifting $\Theta$ by 0.2 moves the outputs 2× more than with region tokens when embedded, and 0.4× as much when raw. The coupling gains are global parameters and decide whether a draw is coupled, so whether training learns this dependence shows in the coupled-draw metrics.
+- A CPU training step is 1.5× slower than with region tokens.
 
 ---
 
