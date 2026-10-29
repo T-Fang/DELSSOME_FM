@@ -43,7 +43,7 @@ class Stage1Batch:
 
     def pin_memory(self) -> "Stage1Batch":
         """Called by DataLoader(pin_memory=True) for faster copies to the GPU."""
-        pin = lambda x: x.pin_memory()                                    # noqa: E731
+        pin = lambda x: None if x is None else x.pin_memory()             # noqa: E731
         graph = GraphBatch(**{f.name: pin(getattr(self.graph, f.name))
                               for f in dataclasses.fields(GraphBatch)})
         return Stage1Batch(pin(self.theta), pin(self.psi), pin(self.sc), graph,
@@ -68,6 +68,9 @@ class TrainingStore(Dataset):
         self.node_features = np.load(root / "node_features.npy", mmap_mode="r")
         self.node_degree = np.load(root / "node_degree.npy", mmap_mode="r")
         self.distances = np.load(root / "distances.npy", mmap_mode="r")
+        # Const values (2026-10-29), for the parameter-token backbone; older stores lack them
+        values = root / "node_value.npy"
+        self.node_value = np.load(values, mmap_mode="r") if values.is_file() else None
         self.sc = np.load(root / "sc.npy")
         with np.load(Path(store_dir) / "normalisation.npz") as n:
             self.norm = {k: n[k] for k in n.files}
@@ -116,7 +119,19 @@ class TrainingStore(Dataset):
         return GraphBatch(features=torch.from_numpy(features), degree=torch.from_numpy(degree),
                           distances=torch.from_numpy(distances),
                           node_mask=torch.from_numpy(np.arange(M)[None, :] < sizes[:, None]),
-                          **roles)
+                          const_value=self._const_values(model, sizes, M), **roles)
+
+    def _const_values(self, model: np.ndarray, sizes: np.ndarray, M: int) -> torch.Tensor | None:
+        """(B, M) each Const node's value encoded as the parameters are (encode_parameters),
+        0 on other nodes and padding. Only under the sinh policy, where parameters and
+        constants are values on one scale; None without it or without node_value.npy."""
+        if self.node_value is None or self.parameter_policy != "sinh":
+            return None
+        offsets = self.models["node_offset"]
+        values = np.full((len(model), M), np.nan)
+        for b, (m, n) in enumerate(zip(model, sizes)):
+            values[b, :n] = self.node_value[offsets[m]:offsets[m + 1]]
+        return encode_parameters(values, self.parameter_policy)
 
 
 def encode_parameters(x: np.ndarray, policy: str) -> torch.Tensor:

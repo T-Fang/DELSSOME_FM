@@ -36,6 +36,8 @@ Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
                                afterwards by pack_network_fc (2026-10-26)
     models.npz                 one entry per model: corpus index, SC group, sizes, graph roles
     node_features.npy (sum M, 21), node_degree.npy (sum M, 2)    concatenated over models
+    node_value.npy (sum M,) float64   each Const node's value, NaN elsewhere (2026-10-29;
+                               pack_node_values adds it to a store packed before)
     distances.npy (sum M^2,) int16                 each model's (M, M) shortest paths, flat
     sc.npy (G, N, N)           the split's group SCs, each divided by its maximum
     summary.json               row counts, why draws were left out, and the corpus's
@@ -60,7 +62,7 @@ from delssome_fm.sim.generalisation import CELLS, read_sample
 from delssome_fm.spec.card import card_from_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.sampler import POLICIES
-from delssome_fm.spec.dag import Dag, node_features, shortest_paths
+from delssome_fm.spec.dag import Dag, node_features, node_values, shortest_paths
 
 N_REGIONS = 68
 V_MAX = 6          # state variables per model (generation.md §2)
@@ -135,12 +137,13 @@ def n_window_pairs(sim_cfg: SimConfig) -> int:
 
 def graph_arrays(dag: Dag) -> dict[str, np.ndarray]:
     """The tensors the template encoder reads for one model (architecture.md §2):
-    features (M, 21), degree (M, 2) in/out, distances (M, M), and the role indices."""
+    features (M, 21), degree (M, 2) in/out, distances (M, M), the Const values (M,), and
+    the role indices."""
     edges = dag.edges()
     degree = np.zeros((dag.n_nodes, 2), dtype=np.int16)
     np.add.at(degree[:, 0], edges[:, 1], 1)   # in-degree: parents of a node
     np.add.at(degree[:, 1], edges[:, 0], 1)   # out-degree: its operands
-    return {"features": node_features(dag), "degree": degree,
+    return {"features": node_features(dag), "values": node_values(dag), "degree": degree,
             "distances": shortest_paths(dag).astype(np.int16),
             "regional_par": _pad(dag.regional_par_nodes, P_MAX),
             "global_par": _pad(dag.global_par_nodes, K_MAX),
@@ -262,14 +265,11 @@ def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[
 def _write_models(chunks: list[Path], members: list[int], rows_per_model: np.ndarray,
                   out: Path) -> None:
     """models.npz and the concatenated graph arrays, in the order of `members`."""
-    cards = {}
-    for path in chunks:
-        for line in path.with_suffix(".cards.jsonl").read_text().splitlines():
-            c = json.loads(line)
-            cards[c["index"]] = c
+    cards = _read_cards(chunks, set(members))
     graphs = [graph_arrays(compile_card(card_from_dict(cards[i]["card"])).dag) for i in members]
     sizes = np.array([len(g["features"]) for g in graphs])
     np.save(out / "node_features.npy", np.concatenate([g["features"] for g in graphs]))
+    np.save(out / "node_value.npy", np.concatenate([g["values"] for g in graphs]))
     np.save(out / "node_degree.npy", np.concatenate([g["degree"] for g in graphs]))
     np.save(out / "distances.npy", np.concatenate([g["distances"].ravel() for g in graphs]))
     np.savez(out / "models.npz",
@@ -280,6 +280,43 @@ def _write_models(chunks: list[Path], members: list[int], rows_per_model: np.nda
              distance_offset=np.concatenate([[0], np.cumsum(sizes ** 2)]),
              **{k: np.stack([g[k] for g in graphs])
                 for k in ("regional_par", "global_par", "deriv_roots", "agg", "out_root")})
+
+
+def _read_cards(chunks: list[Path], members: set[int]) -> dict[int, dict]:
+    """Candidate index -> its .cards.jsonl record, for the candidates in `members`."""
+    cards = {}
+    for path in chunks:
+        for line in path.with_suffix(".cards.jsonl").read_text().splitlines():
+            c = json.loads(line)
+            if c["index"] in members:
+                cards[c["index"]] = c
+    missing = members - cards.keys()
+    if missing:
+        raise ValueError(f"{len(missing)} models have no card in the chunks, e.g. "
+                         f"{sorted(missing)[:5]}")
+    return cards
+
+
+def pack_node_values(split_dir: Path, chunks: list[Path]) -> int:
+    """Write <split_dir>/node_value.npy for a store split packed before it existed
+    (2026-10-29): recompile each model's card from `chunks` (those the split was packed
+    from), check that it gives the stored node features, and save its Const values.
+    Returns the number of models."""
+    with np.load(split_dir / "models.npz") as m:
+        members, offsets = m["index"], m["node_offset"]
+    cards = _read_cards(chunks, set(members.tolist()))
+    stored = np.load(split_dir / "node_features.npy", mmap_mode="r")
+    values = np.empty(int(offsets[-1]), np.float64)
+    for k, i in enumerate(members.tolist()):
+        dag = compile_card(card_from_dict(cards[i]["card"])).dag
+        if not np.array_equal(node_features(dag), stored[offsets[k]:offsets[k + 1]]):
+            raise ValueError(f"{split_dir}: model {k} (candidate {i}) compiles to other node "
+                             f"features than the stored ones; repack the split")
+        values[offsets[k]:offsets[k + 1]] = node_values(dag)
+    tmp = split_dir / "node_value.tmp.npy"         # write then rename: never a partial file
+    np.save(tmp, values)
+    tmp.replace(split_dir / "node_value.npy")
+    return len(members)
 
 
 # ---------------------------------------------------------------- network FC

@@ -52,6 +52,8 @@ $\kappa_p$ is what makes the parameter encoder model-agnostic: it tags each para
 
 ### Constant encoding
 
+(Region-token scheme. The parameter-token scheme, §3.4, reads constants as values instead.)
+
 Two columns, nonzero on `Const` nodes only:
 
 $$\text{col 1} = \operatorname{sign}(c) \in \{-1, 0, +1\}, \qquad \text{col 2} = \operatorname{clip}\big(\log_{10}\lvert c\rvert,\; -4,\; 4\big)$$
@@ -116,6 +118,33 @@ $$\boxed{\;\text{token}_i = \big[\,t^{\text{par}}_i \,\|\, t^{\text{SC}}_i\,\big
 
 Same mean-then-MLP construction on the global side, for the same reason.
 
+### 3.4 Parameter tokens (`token_scheme: parameter`, decided by the project lead 2026-10-29)
+
+An alternative to §3.1–3.3, chosen per run by `token_scheme`. The default, and every run before 2026-10-29, is `region`. The motivation: §3.1 averages a region's parameters before the transformer sees them, and §3.3 sums every global quantity into one offset. Both lose information. Two changes:
+
+**Global values go into the template encoder.** Constants and parameters are no longer distinguished, only global and regional quantities.
+- The Graphormer sees every `Const` node as a global `Par` node: type one-hot `Par`, scope −1, sign and $\log_{10}$ columns cleared.
+- Every global node (each constant and each of the $K$ global parameters) adds $\text{MLP}_{\text{val}}(v)$ to its input embedding. $v$ is the value encoded as the sinh-policy parameters are, $\operatorname{asinh}(x/S)/Z$; $\text{MLP}_{\text{val}}$ is $1 \to d_t \to d_t$.
+- The encoder therefore runs per draw, and $\kappa_p$ depends on the draw's global values.
+- Regional `Par` nodes carry no value: theirs differ by region.
+- Exact constant values are stored in the training store as `node_value.npy`. The clipped $\log_{10}$ column would lose the ~4% of sinh constants with $\lvert c\rvert < 10^{-4}$.
+- The scheme requires a sinh-policy store; training refuses any other.
+
+**One token per regional parameter per region,** with no pooling before attention and no global offset:
+
+$$\text{token}_{i,p} = \text{MLP}_{\text{tok}}\big([\,W_\theta\,\Theta[i,p] \;\|\; \kappa_p \;\|\; C[i,:]\,]\big) \in \mathbb{R}^{d}, \qquad W_\theta \in \mathbb{R}^{d \times 1}$$
+
+- One MLP ($2d + N \to d \to d$) is shared by all parameters and regions, giving $P \times N$ tokens: 136–340, since $P = 2..5$ in the sinh corpus.
+- $\Psi$, $z_M$, $u$, $o$ and $m_{\text{agg}}$ no longer enter the tokens. The tokens get global information by attending to the template tokens (in-context conditioning).
+- The transformer reads [CLS, $P \times N$ parameter tokens, $M$ template tokens], with a learned segment embedding each. Tokens of absent parameters are masked as attention keys.
+- $r_i$ is the mean of region $i$'s $P$ outputs, absent parameters excluded. The heads are unchanged: regional statistics and the pair head read $r_i$; global statistics, FCD and the cost terms read $h_{\text{CLS}}$ (through the heads' predictions).
+
+**Why $W_\theta$.** The project lead's sketch fed $\Theta[i,p]$ as one raw input among $1 + d + N$. $W_\theta$ gives the same functions, because the MLP's first layer is linear in $\Theta$ either way. But a raw scalar beside 196 other inputs starts with about a fifth of the weight. On one batch of draws of a single model (which differ only in their values), the raw form left the regional and FC-moment losses near their start after 300 steps. With $W_\theta$ it fit them as fast as region tokens did.
+
+**To watch.**
+- At initialisation the output is ~80× less sensitive to $\Psi$ than with region tokens, because $\Psi$ reaches the tokens only through attention. The coupling gains are global parameters and decide whether a draw is coupled, so whether training learns this dependence shows in the coupled-draw metrics.
+- The sequence is $1 + 68P + M \approx 450$ tokens at $P = 5$, against ~180 for region tokens. A CPU training step is 1.5× slower.
+
 ---
 
 ## 4. Transformer
@@ -132,7 +161,7 @@ Total $L = 69 + M \approx 100$–$190$. Standard pre-LN encoder, 4 layers, 8 hea
 
 Template tokens let region tokens attend to individual equation nodes rather than only to pooled readouts. At this sequence length the cost is negligible.
 
-Outputs used downstream: $h_{\text{CLS}} \in \mathbb{R}^{d}$ and $r_i \in \mathbb{R}^{d}$ for $i = 1..68$. Template output positions are discarded.
+Outputs used downstream: $h_{\text{CLS}} \in \mathbb{R}^{d}$ and $r_i \in \mathbb{R}^{d}$ for $i = 1..68$. Template output positions are discarded. (With parameter tokens, §3.4, the regions segment holds $P \times 68$ tokens, and $r_i$ pools region $i$'s.)
 
 ---
 

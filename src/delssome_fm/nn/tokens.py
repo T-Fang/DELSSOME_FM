@@ -1,5 +1,7 @@
-"""Region tokens (architecture.md §3): one d-vector per region from its parameters, its row
-of structural connectivity, and a global offset g shared by all regions.
+"""The backbone's input tokens, by token scheme (Stage1Config.token_scheme).
+
+`RegionTokens`, scheme "region" (architecture.md §3): one d-vector per region from its
+parameters, its row of structural connectivity, and a global offset g shared by all regions.
 
     t_{i,p}  = W_reg * theta[i, p] + kappa_p                   one scalar per parameter
     t_par_i  = MLP_theta(mean_p t_{i,p})                        (d/2)
@@ -13,6 +15,21 @@ averaging over p is what makes the network free in P and K: never a P-wide input
 theta and psi arrive encoded to about [-1, 1] (train/data.encode_parameters): log10 of the
 multipliers for the multiplier-policy corpora, asinh(x / 1e-4) / 19.1 of the actual values
 for the sinh-policy corpus.
+
+`ParameterTokens`, scheme "parameter" (architecture.md §3.4, decided 2026-10-29): one token
+per regional parameter per region, P x N in all, with no pooling and no global offset,
+
+    token_{i,p} = MLP_tok([W_theta theta[i, p] || kappa_p || C[i, :]])     (2d + N -> d)
+
+one MLP shared by all parameters and regions. Global parameters and constants are values in
+the template encoder instead (nn/template_encoder.py), and reach the tokens by attention.
+
+theta enters through W_theta (d x 1) rather than as one raw input among 1 + d + N (the
+project lead's sketch): the same functions, since the MLP's first layer is linear in theta
+either way, but a raw scalar beside 196 other inputs starts with ~1/5 of the weight. Fitting
+one batch of draws of one model, the raw form left the regional and FC-moment losses near
+their start after 300 steps; with W_theta it fit them as fast as the region scheme
+(2026-10-29).
 """
 
 from __future__ import annotations
@@ -49,3 +66,23 @@ class RegionTokens(nn.Module):
         s = self.w_glob(psi[..., None]) + r.lam                        # (B, K, d)
         g = self.mlp_g(masked_mean(s, r.lam_mask[..., None], 1)) + r.z + r.u + r.o + r.m_agg
         return torch.cat([t_par, t_sc], dim=-1) + g[:, None, :]
+
+
+class ParameterTokens(nn.Module):
+    def __init__(self, d: int, n_regions: int):
+        super().__init__()
+        self.w_theta = nn.Linear(1, d, bias=False)
+        self.mlp = MLP([2 * d + n_regions, d, d])
+
+    def forward(self, theta: torch.Tensor, sc: torch.Tensor, kappa: torch.Tensor) -> torch.Tensor:
+        """
+        theta: (B, N, P)  regional parameters (0 where the model has no p-th parameter)
+        sc:    (B, N, N)  structural connectivity, scaled to max 1
+        kappa: (B, P, d)  the regional parameters' Par-node embeddings (Readouts.kappa)
+        returns: (B, N, P, d) one token per region and parameter; those of absent parameters
+                 are to be masked (Readouts.kappa_mask)
+        """
+        B, N, P = theta.shape
+        x = torch.cat([self.w_theta(theta[..., None]), kappa[:, None].expand(B, N, P, -1),
+                       sc[:, :, None].expand(B, N, P, N)], dim=-1)
+        return self.mlp(x)

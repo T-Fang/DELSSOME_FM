@@ -42,6 +42,7 @@ LEGACY_DEFAULTS = {
     "catch24_loss": False,           # added 2026-10-25
     "fc_net_loss": False,            # added 2026-10-26
     "coupled_draws_only": False,     # added 2026-10-26
+    "token_scheme": "region",        # added 2026-10-29: the only scheme before
 }
 
 

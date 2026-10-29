@@ -136,6 +136,13 @@ def node_features(dag: Dag) -> np.ndarray:
     return X
 
 
+def node_values(dag: Dag) -> np.ndarray:
+    """(M,) float64: each Const node's value, NaN on every other node. The parameter-token
+    backbone (architecture.md §3.4, 2026-10-29) reads constants as values, encoded like the
+    parameters, rather than through the clipped log10 column of node_features."""
+    return np.array([n.value if n.type == "Const" else np.nan for n in dag.nodes], np.float64)
+
+
 def depth_from_roots(dag: Dag) -> np.ndarray:
     """(M,) shortest number of edges from any Deriv root down to each node; -1 if unreachable.
 

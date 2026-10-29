@@ -88,3 +88,31 @@ def test_catch24_is_packed_transformed_and_z_scored(tiny_store):
     t = transform_catch24(raw)
     assert t[0, 0, 4] == 1.0 and t[0, 0, 12] == np.float32(np.log10(11.0))   # log10, log10(1+x)
     assert t[0, 0, 22] == np.float32(np.arcsinh(1.0)) and t[0, 0, 0] == 10.0  # mean/SD, raw
+
+
+def test_node_values_are_packed_and_can_be_backfilled(tiny_store, tmp_path):
+    """node_value.npy holds each Const node's value (NaN elsewhere), consistent with the sign
+    and log10 feature columns; pack_node_values rebuilds it from the cards and refuses a
+    split whose stored features the cards do not compile to."""
+    import shutil
+    from delssome_fm.train.pack import pack_node_values
+    cfg, corpus_cfg, _ = tiny_store
+    split = cfg.store_dir / "train"
+    values = np.load(split / "node_value.npy")
+    features = np.load(split / "node_features.npy")
+    const = features[:, 8] == 1
+    assert len(values) == len(features) and const.any()
+    assert np.isnan(values[~const]).all() and np.isfinite(values[const]).all()
+    np.testing.assert_array_equal(np.sign(values[const]), features[const, 15])
+    np.testing.assert_allclose(np.clip(np.log10(np.abs(values[const])), -4, 4),
+                               features[const, 16], rtol=1e-6)
+    copy = tmp_path / "train"
+    shutil.copytree(split, copy)
+    (copy / "node_value.npy").unlink()
+    chunks = sorted((corpus_cfg.output_dir / "train").glob("candidates*_draws0-*.npz"))
+    assert pack_node_values(copy, chunks) == len(np.load(copy / "models.npz")["index"])
+    np.testing.assert_array_equal(np.load(copy / "node_value.npy"), values)
+    features[0, 0] += 1.0
+    np.save(copy / "node_features.npy", features)
+    with pytest.raises(ValueError, match="other node features"):
+        pack_node_values(copy, chunks)

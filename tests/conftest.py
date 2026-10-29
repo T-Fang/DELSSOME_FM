@@ -30,6 +30,16 @@ TINY_CANDIDATES = 12
 def tiny_store(tmp_path_factory):
     """(TrainingDataConfig, CorpusConfig, SimConfig) of a packed tiny train split; the val
     split is a copy of it, so a data module can be built."""
+    return _tiny_store(tmp_path_factory, "multiplier")
+
+
+@pytest.fixture(scope="session")
+def tiny_store_sinh(tmp_path_factory):
+    """As tiny_store, from a sinh-policy corpus (the parameter-token backbone needs one)."""
+    return _tiny_store(tmp_path_factory, "sinh")
+
+
+def _tiny_store(tmp_path_factory, policy: str):
     import shutil
 
     import numpy as np
@@ -38,11 +48,11 @@ def tiny_store(tmp_path_factory):
     from delssome_fm.sim.corpus import run_candidates, write_chunk
     from delssome_fm.train.pack import normalisation, pack_network_fc, pack_split
 
-    root = tmp_path_factory.mktemp("tiny")
+    root = tmp_path_factory.mktemp(f"tiny_{policy}")
     corpus_cfg = CorpusConfig(seed=11, n_param_sets=3, first_draw=0, batch_size=2, screen_draws=2,
                               screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
                               initial_state_scale=0.1, fcd_store_stride=10,
-                              parameter_policy="multiplier",
+                              parameter_policy=policy,
                               output_dir=root / "corpus")
     sim_cfg = SimConfig(**TINY_SIM)
     scs = np.random.default_rng(0).uniform(0, 0.02, (64, 68, 68))

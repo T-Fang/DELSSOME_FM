@@ -28,7 +28,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, cost_loss=False,
         fc_autoencoder="none", stat_loss=True, catch24_loss=False, fc_net_loss=False,
         max_distance=8,
-        max_degree=8, train_models=2,
+        max_degree=8, token_scheme="region", train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
         coupled_threshold=0.05, coupled_draws_only=False, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
@@ -468,3 +468,150 @@ def test_coupled_only_run_validates_and_evaluates_on_coupled_draws(tiny_store, t
         assert m[f"final/{split}/total"] == pytest.approx(m[f"final_coupled/{split}/total"])
         assert m[f"final/{split}/rows_uncoupled"] == 0
     assert (checkpoints / "final_eval_coupled.npz").is_file()
+
+
+# ---------------------------------------------------------------- parameter tokens (2026-10-29)
+
+
+@pytest.fixture
+def ptok(tiny_store_sinh, tmp_path):
+    """A sinh-policy store, a batch, and a parameter-token module with the MLP FC head."""
+    cfg, _, _ = tiny_store_sinh
+    store = TrainingStore(cfg.store_dir, "train")
+    batch = store[list(range(min(8, len(store))))]
+    torch.manual_seed(0)
+    module = Stage1Module(_ptok_config(cfg.store_dir, tmp_path), store.n_fcd_levels,
+                          (0.4, 1.3)).eval()
+    return store, batch, module
+
+
+def _ptok_config(store_dir, tmp_path, **changes):
+    return dataclasses.replace(tiny_config(store_dir, tmp_path), token_scheme="parameter",
+                               pair_head="mlp_concat", fc_offset=False, **changes)
+
+
+def test_const_values_are_served_encoded_under_the_sinh_policy_only(ptok, setup):
+    from delssome_fm.spec.sampler import SINH_SCALE, SINH_Z
+    store, batch, _ = ptok
+    g = batch.graph
+    const = g.features[..., 8] == 1                                     # Const one-hot
+    assert g.const_value.shape == g.node_mask.shape and const.any()
+    assert (g.const_value[~const] == 0).all()
+    m = int(store.rows["model"][0])                                     # the batch's first row
+    lo, hi = store.models["node_offset"][m], store.models["node_offset"][m + 1]
+    value = np.asarray(store.node_value[lo:hi])
+    expected = np.arcsinh(value[const[0, :hi - lo].numpy()] / SINH_SCALE) / SINH_Z
+    np.testing.assert_allclose(g.const_value[0, :hi - lo][const[0, :hi - lo]].numpy(), expected,
+                               rtol=1e-6)
+    assert setup[1].graph.const_value is None                           # multiplier policy
+
+
+def test_constants_become_global_parameters():
+    from delssome_fm.nn.template_encoder import constants_as_global_parameters
+    features = torch.zeros(4, 21)
+    features[0, 8], features[0, 15], features[0, 16] = 1, -1, 2.5      # Const -10^2.5
+    features[1, 9], features[1, 17] = 1, 1                              # regional Par
+    features[2, 9], features[2, 17] = 1, -1                             # global Par
+    features[3, 10], features[3, 18] = 1, -1                            # neighbour Var
+    out = constants_as_global_parameters(features)
+    torch.testing.assert_close(out[0], features[2])         # a constant is a global parameter
+    torch.testing.assert_close(out[1:], features[1:])
+
+
+def test_parameter_tokens_ignore_padding_and_absent_entries(ptok):
+    """Extra masked graph nodes, values of absent parameters, and the Const columns the
+    encoder recodes must not change any output."""
+    _, batch, module = ptok
+    g = batch.graph
+    extra = 5
+    pad = lambda x, value: torch.nn.functional.pad(x, value=value, pad=_pad_spec(x, g, extra))
+    padded = GraphBatch(features=pad(g.features, 0.0), degree=pad(g.degree, 0),
+                        distances=pad(g.distances, -1), node_mask=pad(g.node_mask, False),
+                        regional_par=g.regional_par, global_par=g.global_par,
+                        deriv_roots=g.deriv_roots, agg=g.agg, out_root=g.out_root,
+                        const_value=pad(g.const_value, 0.0))
+    absent_p = (g.regional_par < 0)[:, None, :].expand_as(batch.theta)
+    theta = torch.where(absent_p, 0.7, batch.theta)
+    psi = torch.where(g.global_par < 0, -0.3, batch.psi)
+    relabelled = dataclasses.replace(g, features=g.features.clone())
+    relabelled.features[..., 15:17] = 9.0                   # sign and log10|c|: recoded away
+    with torch.no_grad():
+        a = module.backbone(batch.theta, batch.psi, batch.sc, g)
+        for args in ((batch.theta, batch.psi, batch.sc, padded), (theta, psi, batch.sc, g),
+                     (batch.theta, batch.psi, batch.sc, relabelled)):
+            b = module.backbone(*args)
+            torch.testing.assert_close(a.h_cls, b.h_cls, rtol=1e-4, atol=1e-5)
+            torch.testing.assert_close(a.regions, b.regions, rtol=1e-4, atol=1e-5)
+    assert (g.regional_par < 0).any() and (g.global_par < 0).any()      # the test bites
+
+
+def test_parameter_tokens_read_global_values(ptok):
+    """A global parameter's value and a constant's value both change the output. Only by
+    attention, so weakly in an untrained network (~1e-4 of h_CLS, 2026-10-29): the threshold
+    asks for more than float rounding, not for a size."""
+    _, batch, module = ptok
+    g = batch.graph
+    psi = torch.where(g.global_par >= 0, batch.psi + 0.2, batch.psi)
+    const = dataclasses.replace(g, const_value=torch.where(g.const_value != 0,
+                                                           g.const_value + 0.2, 0.0))
+    with torch.no_grad():
+        a = module.backbone(batch.theta, batch.psi, batch.sc, g).h_cls
+        b = module.backbone(batch.theta, psi, batch.sc, g).h_cls
+        c = module.backbone(batch.theta, batch.psi, batch.sc, const).h_cls
+    assert (a - b).abs().max() > 1e-5 and (a - c).abs().max() > 1e-5
+    with pytest.raises(ValueError, match="Const values"):
+        module.backbone(batch.theta, batch.psi, batch.sc, dataclasses.replace(g, const_value=None))
+
+
+def test_parameter_tokens_do_not_depend_on_parameter_order(ptok):
+    _, batch, module = ptok
+    perm = torch.tensor([2, 0, 1, 3, 4])
+    g = batch.graph
+    permuted = dataclasses.replace(g, regional_par=g.regional_par[:, perm])
+    with torch.no_grad():
+        a = module.backbone(batch.theta, batch.psi, batch.sc, g)
+        b = module.backbone(batch.theta[..., perm], batch.psi, batch.sc, permuted)
+    torch.testing.assert_close(a.h_cls, b.h_cls, rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(a.regions, b.regions, rtol=1e-4, atol=1e-5)
+
+
+def test_parameter_tokens_fit_one_batch_with_the_cost_loss(ptok, tmp_path):
+    store, batch, _ = ptok
+    torch.manual_seed(0)
+    module = Stage1Module(_ptok_config(tmp_path, tmp_path, cost_loss=True), store.n_fcd_levels,
+                          (0.4, 1.3)).train()
+    module.log = module.log_dict = lambda *a, **k: None          # no trainer attached
+    loss = module.training_step(batch, 0)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(torch.isfinite(p.grad).all() for p in module.parameters() if p.grad is not None)
+    optimiser = torch.optim.Adam(module.parameters(), lr=3e-3)
+    edges = torch.arange(2278)
+    history = []
+    for _ in range(150):
+        optimiser.zero_grad()
+        losses = group_losses(module.predict_statistics(batch, edges), batch.targets, edges)
+        sum(losses.values()).backward()
+        optimiser.step()
+        history.append({g: float(v.detach()) for g, v in losses.items()})
+    first, last = history[0], history[-1]          # as test_the_network_can_fit_one_batch
+    assert last["regional"] < 0.6 * first["regional"]
+    assert last["fc_moments"] < 0.2 * first["fc_moments"]
+    assert last["fcd"] < 0.2 * first["fcd"]
+    assert last["pairwise"] < first["pairwise"]
+
+
+def test_lightning_run_with_parameter_tokens(tiny_store_sinh, tiny_store, tmp_path):
+    cfg, _, _ = tiny_store_sinh
+    stage1 = _ptok_config(cfg.store_dir, tmp_path)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="ptok")
+    from delssome_fm.train.evaluate import evaluate, load_stage1
+    module = load_stage1(checkpoints / "last.ckpt")
+    assert module.backbone.token_scheme == "parameter"
+    metrics = evaluate(module, cfg.store_dir, "val")
+    assert metrics["rows"] > 0 and np.isfinite(metrics["total"])
+    # a multiplier-policy store has no constants on the parameters' scale: refused up front
+    with pytest.raises(ValueError, match="sinh-policy store"):
+        fit(_ptok_config(tiny_store[0].store_dir, tmp_path), config_file, run_name="refused")

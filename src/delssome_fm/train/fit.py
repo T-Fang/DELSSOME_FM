@@ -59,6 +59,13 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     effective.write_text(f"# from {config_path}\n" + to_yaml(cfg))
     logger.experiment.log_artifact(logger.run_id, str(effective))
     logger.log_hyperparams({"train_rows": len(data.train_rows)})
+    if cfg.token_scheme == "parameter" and (data.train.parameter_policy != "sinh"
+                                            or data.train.node_value is None):
+        raise ValueError(f"the parameter-token backbone reads constants as values on the "
+                         f"parameters' scale: it needs a sinh-policy store with node_value.npy "
+                         f"(scripts/pack_node_values.py); {cfg.store_dir} has policy "
+                         f"{data.train.parameter_policy!r}, node values "
+                         f"{'present' if data.train.node_value is not None else 'absent'}")
     for flag, target in ((cfg.catch24_loss, "catch24"), (cfg.fc_net_loss, "fc_net")):
         if flag and target not in data.train.targets:
             raise ValueError(f"{target} is to be trained, but {cfg.store_dir} has no {target} "

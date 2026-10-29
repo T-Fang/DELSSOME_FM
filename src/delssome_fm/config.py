@@ -152,6 +152,9 @@ class Stage1Config:
     cost_loss: bool               # add 1 - r, d and KS (raw units, all edges) to the loss
     max_distance: int             # DAG shortest-path lengths are clipped to this (attention bias)
     max_degree: int               # node in/out degrees are clipped to this (degree embedding)
+    token_scheme: str             # region: one token per region (architecture.md §3);
+                                  # parameter: one per regional parameter per region, global
+                                  # values read by the template encoder (§3.4, 2026-10-29)
     # training data (the scaling sweep of architecture.md §7.2 varies these)
     train_models: int             # number of train corpus models to use
     draws_per_model: int          # and at most this many usable draws of each (100: all)

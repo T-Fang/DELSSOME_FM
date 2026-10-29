@@ -54,7 +54,8 @@ class Stage1Module(L.LightningModule):
             n_regions=N_REGIONS, d_model=cfg.d_model, d_template=cfg.d_template,
             template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
             n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
-            max_distance=cfg.max_distance, max_degree=cfg.max_degree))
+            max_distance=cfg.max_distance, max_degree=cfg.max_degree,
+            token_scheme=cfg.token_scheme))
         decoder, latent_dim = None, 0
         if cfg.pair_head == "latent":
             from delssome_fm.train.autoencoder import load_fc_autoencoder
