@@ -43,6 +43,10 @@ SINH = {   # 100k models x all draws (~40 usable each) of the sinh corpus, mlp_c
                        "outputs/report_sinh/sinh_wide_deep/comparison.npz"),
     "sinh_coupled_only": ("+ cost, coupled draws only *",
                           "outputs/report_sinh/sinh_coupled_only/comparison.npz"),
+    "sinh_ptok_emb_cost": ("+ cost, parameter tokens, θ embedded",
+                           "outputs/report_sinh/sinh_ptok_emb_cost/comparison.npz"),
+    "sinh_ptok_raw_cost": ("+ cost, parameter tokens, θ raw",
+                           "outputs/report_sinh/sinh_ptok_raw_cost/comparison.npz"),
 }
 RUN_SETS = {"d10": ("stage1", D10), "sinh": ("stage1_sinh", SINH)}
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]

@@ -478,3 +478,32 @@ Predicting network FC directly gives a better network pattern than downsampling 
 | coupled draws only | trained, coupled | 3.44 | 0.58 | 0.54 | 0.07 | 0.37 |
 
 Training only on coupled draws improves every term on coupled draws, by more than any change of size, head or target: the uncoupled majority (79% of rows) interferes with learning coupled FC. It also transfers to the reference models, which are all coupled: KS 0.66 / 0.58 / 0.38 for MFM / FIC / Hopf against 0.89 / 0.89 / 0.70, and d 0.11 / 0.31 / 0.04 against 0.25 / 0.49 / 0.28. Its checkpoint is from step 55,000 (0.83 M rows: it overfits sooner). It cannot be used alone, since whether a draw is coupled is known only after simulating it: hence the proposal to predict coupling from the parameters and condition the network on it.
+
+### 7.7 Parameter tokens (2026-10-29 to 2026-11-01)
+
+The parameter-token backbone (§3.4) against the baseline `sinh_m100k_d100_cost`, with the same data (100k models × all draws), heads (pair MLP), losses (cost loss on), optimiser and 200k steps. Test is the same 200,000 rows for every run (medians of cost terms over draws).
+
+| run | train / val / test MSE total | test R² FC | test 1 − r coupled | test d coupled | test KS coupled | test d / KS uncoupled |
+|---|---|---|---|---|---|---|
+| region tokens (`sinh_m100k_d100_cost`) | 1.55 / 1.83 / 1.87 | 0.46 | 0.59 | 0.154 | 0.44 | 0.001 / 0.042 |
+| parameter tokens, θ embedded (`sinh_ptok_emb_cost`) | 0.48 / 0.80 / 0.85 | 0.78 | 0.34 | 0.024 | 0.15 | 0.001 / 0.034 |
+| parameter tokens, θ raw (`sinh_ptok_raw_cost`) | 0.50 / 0.84 / 0.89 | 0.77 | 0.34 | 0.025 | 0.16 | 0.002 / 0.034 |
+
+- **The largest gain of any change so far.** Wider and deeper networks, other heads and other targets had all moved test total by ≤ 0.03 (§7.6); parameter tokens halve it. On coupled test draws the total falls from 5.70 to 2.40, more than training on coupled draws only managed (4.56).
+- **Not overfitting.** Trained rows improve as much as test (1.55 → 0.48), so the gain is in fitting the dynamics at all, which region tokens could not (§7.6). The train–test gap is 0.36, against 0.32 for the baseline.
+- **Raw vs embedded θ.** The two give the same functions and end close. Raw is slightly behind from the start and stays behind (test 0.89 against 0.85; learning curves in `outputs/report_sinh/figures/learning_curves.png`). The single-batch test (§3.4) exaggerated the gap but had its sign right.
+- **Cost.** 4.0 h per run on H100 (13.4 steps/s) against 2.6 h for the baseline.
+- **Remaining failure.** The worst coupled draws (90th percentile of 1 − r) are near-synchronised draws predicted as uncoupled: the errors are now mostly in deciding the regime.
+- **Reference models do not improve.** At their published fits, MFM / FIC / Hopf KS are 0.88 / 0.78 / 0.89 (θ embedded) and 0.88 / 0.89 / 0.78 (raw), against 0.89 / 0.89 / 0.70 for the baseline; the 1 − r values are similar to the baseline's. The hand-written cards lie outside what the synthetic corpus covers well; coupled-only training (§7.6) remains the only change that helped them (KS 0.66 / 0.58 / 0.38).
+
+**Network FC with parameter tokens** (Yeo-7, 50,000 rows per split, same rows as §7.6):
+
+| arm | test coupled 1 − r | test MSE (arctanh) | test d uncoupled | trained-rows coupled 1 − r |
+|---|---|---|---|---|
+| region tokens, network FC only (`sinh_fcnet_only_v2`), h_CLS head | 0.37 | 1.74 | 0.053 | 0.35 |
+| parameter tokens θ raw, network FC only (`sinh_ptok_raw_fcnet_only`), h_CLS head | 0.34 | 0.82 | 0.014 | 0.32 |
+| parameter tokens θ embedded + cost, downsampled from region FC | 0.30 | 0.73 | 0.008 | 0.27 |
+| parameter tokens θ raw + cost, downsampled from region FC | 0.31 | 0.78 | 0.011 | 0.28 |
+
+With region tokens, predicting network FC directly beat downsampling the region predictions (§7.6). With parameter tokens the order reverses: the region-level FC is now good enough that downsampling it gives the best network FC. The direct head reads only $h_{\text{CLS}}$, which gains less from the new tokens than the region outputs do; its MSE still halves (0.82 against 1.74).
+

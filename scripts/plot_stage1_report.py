@@ -21,9 +21,12 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
     composition.png     per-model error vs the share of coupled models in training
     generalisation.png  the 2 x 2 diagnostic as a matrix: seen/new equations x seen/new SC
                         (from scripts/generalisation_report_data.py)
-    learning_curves.png total MSE of the four groups and the three cost terms (1 - r, d, KS)
-                        against training step, train (smoothed) and val, for the MLflow runs
-                        of --curves; val cost terms are logged from 2026-10-29 on
+    learning_curves.png against training step, for the MLflow runs of --curves. Top row:
+                        total MSE of the four groups and the three cost terms (1 - r, d, KS)
+                        as means over all draws, train (smoothed) and val (val cost means
+                        are logged from 2026-10-29 on). Bottom row: val R^2 of FC and the
+                        cost terms' val medians over coupled (solid) and uncoupled (dashed)
+                        draws, which every run with the cost terms logged
     reference_cost_terms.png, reference_examples.png
                         MFM, FIC, Hopf at their published test fits: prediction vs simulation
                         (from scripts/reference_eval_compare.py; skipped if not yet run)
@@ -114,6 +117,11 @@ def mlflow_curves(tracking_uri: str, experiment: str, runs: list[str]) -> dict:
             val = sorted(history(rid, f"val/{key}").items())
             if val:
                 c[key]["val"] = tuple(zip(*val))
+        for key in ("r2_pairwise", *(f"{t}_{r}" for t in ("cost_corr", "cost_mean", "cost_ks")
+                                     for r in ("coupled", "uncoupled"))):
+            val = sorted(history(rid, f"val/{key}").items())
+            if val:
+                c[key] = tuple(zip(*val))
         curves[name] = c
     return curves
 
@@ -121,7 +129,8 @@ def mlflow_curves(tracking_uri: str, experiment: str, runs: list[str]) -> dict:
 def learning_curves_figure(curves: dict, out: Path, smooth: int = 100):
     """One panel per CURVE_PANELS entry: per run, train as a running mean over `smooth`
     logged steps (thin) and val (markers)."""
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8))
+    fig, grid = plt.subplots(2, 4, figsize=(16, 7.6))
+    axes = grid[0]
     colours = (BLUE, ORANGE, AQUA, INK2)
     if len(curves) > len(colours):
         raise ValueError(f"at most {len(colours)} runs per figure, found {len(curves)}")
@@ -134,10 +143,24 @@ def learning_curves_figure(curves: dict, out: Path, smooth: int = 100):
                         color=colour, lw=1.0, alpha=0.55)
             if "val" in c[key]:
                 ax.plot(*c[key]["val"], color=colour, lw=2, marker="o", ms=3.5, label=name)
-        ax.set_title(title, fontsize=10)
+        ax.set_title(title + ", all draws", fontsize=10)
+        style(ax)
+    axes[0].set_ylabel("mean (train thin, val with markers)")
+    bottom = (("r2_pairwise", "val R² of FC"), ("cost_corr", "val 1 - r"), ("cost_mean", "val d"),
+              ("cost_ks", "val KS"))
+    for (key, title), ax in zip(bottom, grid[1]):
+        for (name, c), colour in zip(curves.items(), colours):
+            if key == "r2_pairwise":
+                if key in c:
+                    ax.plot(*c[key], color=colour, lw=2, marker="o", ms=3)
+                continue
+            for regime, ls in (("coupled", "-"), ("uncoupled", "--")):
+                if f"{key}_{regime}" in c:
+                    ax.plot(*c[f"{key}_{regime}"], color=colour, lw=1.8, ls=ls, marker="o", ms=2.5)
+        ax.set_title(title if key == "r2_pairwise" else
+                     f"{title}, median: coupled (solid), uncoupled (dashed)", fontsize=10)
         ax.set_xlabel("training step")
         style(ax)
-    axes[0].set_ylabel("value (train thin, val with markers)")
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(curves), frameon=False,
                bbox_to_anchor=(0.5, 1.06))
