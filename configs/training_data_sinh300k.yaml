@@ -1,0 +1,10 @@
+# The stage-1 training store of the first 300,000 valid sinh train models (configs/corpus_sinh.yaml,
+# extended to candidates 0..834,999 on 2026-10-27: 304,778 valid), for the scaling test of
+# 2026-11-01. Only train is packed: val and test link to training_store_sinh's, and
+# normalisation.npz is copied from it (pack_training_data.py --normalisation-from), so the
+# targets are in the same units as every run on that store. Its first 100,000 models are
+# training_store_sinh's. Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh300k
+
+n_models: {train: 300000, val: 10000, test: 10000}

@@ -1,5 +1,8 @@
 """Pack one split of the corpus into the stage-1 training store (train/pack.py); for the
-train split also compute the z-score statistics. Reads ~100 GB for train: run it as a job.
+train split also compute the z-score statistics, or with --normalisation-from copy another
+store's (so a larger store's targets are in the same units as the smaller one's, and its
+runs compare directly; also adds the Yeo-7 network FC target, whose statistics that file
+holds). Reads ~100 GB for train: run it as a job.
 
     python scripts/submit_job.py --name pack_train --walltime 08:00:00 --mem 32G --submit \\
         -- python scripts/pack_training_data.py --split train
@@ -7,14 +10,17 @@ train split also compute the z-score statistics. Reads ~100 GB for train: run it
 
 import argparse
 import json
+import shutil
 import time
 from pathlib import Path
+
+import numpy as np
 
 from delssome_fm.config import (CorpusConfig, DataConfig, SimConfig, TrainingDataConfig,
                                 load_config)
 from delssome_fm.data.groups import SPLIT_NAMES
 from delssome_fm.sim.corpus import split_scs
-from delssome_fm.train.pack import normalisation, pack_split
+from delssome_fm.train.pack import normalisation, pack_network_fc, pack_split
 
 
 def main() -> None:
@@ -24,6 +30,8 @@ def main() -> None:
     p.add_argument("--sim-config", type=Path, default=Path("configs/sim.yaml"))
     p.add_argument("--data-config", type=Path, default=Path("configs/data.yaml"))
     p.add_argument("--split", choices=SPLIT_NAMES, required=True)
+    p.add_argument("--normalisation-from", type=Path, default=None, metavar="STORE",
+                   help="train split: copy STORE/normalisation.npz instead of computing it")
     args = p.parse_args()
 
     t0 = time.time()
@@ -32,7 +40,14 @@ def main() -> None:
     summary = pack_split(load_config(args.corpus_config, CorpusConfig),
                          load_config(args.sim_config, SimConfig), cfg, args.split, scs)
     print(json.dumps(summary, indent=2))
-    if args.split == "train":
+    if args.split == "train" and args.normalisation_from is not None:
+        with np.load(args.normalisation_from / "normalisation.npz") as n:
+            if "fc_net_mean" in n.files:
+                print(f"network FC: {pack_network_fc(cfg.store_dir / 'train')} rows")
+        shutil.copy(args.normalisation_from / "normalisation.npz",
+                    cfg.store_dir / "normalisation.npz")
+        print(f"normalisation copied from {args.normalisation_from}")
+    elif args.split == "train":
         stats = normalisation(cfg.store_dir)
         print({k: v.round(4).tolist() for k, v in stats.items()})
     print(f"done in {time.time() - t0:.0f} s")
