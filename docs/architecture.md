@@ -519,6 +519,7 @@ All runs: parameter tokens with raw θ (`embed_theta: false`), pair-MLP head, co
 | all draws (`sinh_ptok_raw_cost`) | 2.56 | 0.700 | 0.346 | 0.026 | 0.155 | 1.29 |
 | coupled draws only | 2.37 | 0.730 | 0.350 | 0.024 | 0.176 | 0.97 |
 | all draws, 300k models (`sinh_ptok_raw_m300k`) | 2.09 | 0.763 | 0.336 | 0.022 | 0.147 | 1.51 |
+| all draws, 300k models, 400k steps (`sinh_ptok_raw_m300k_s400k`) | 1.92 | 0.786 | 0.314 | 0.019 | 0.133 | 1.21 |
 
 Mixed: MSE, R² and d improve a little, 1 − r does not move and KS is worse. With a fifth of the rows it overfits (best val at step 100k, rising after). With region tokens the same restriction helped much more (5.70 → 4.56, §7.6); parameter tokens already fit coupled draws, and more models help them more than specialising does.
 
@@ -530,8 +531,9 @@ Mixed: MSE, R² and d improve a little, 1 − r does not move and KS is worse. W
 | 30k (1.2 M) | 0.49 / 1.21 | 0.660 | 3.61 | 0.395 | 0.045 | 0.208 | 120k, then overfits |
 | 100k (4.0 M) | 0.50 / 0.89 | 0.768 | 2.56 | 0.346 | 0.026 | 0.155 | 185k |
 | 300k (12.1 M) | 0.55 / 0.75 | 0.815 | 2.09 | 0.334 | 0.021 | 0.147 | 190k, still falling |
+| 300k, 400k steps | 0.46 / 0.68 | 0.833 | 1.92 | 0.312 | 0.019 | 0.133 | 385k (flat from ~330k) |
 
-Each tripling of the models lowers test total by 16–26%, and the train–test gap halves (1.09, 0.72, 0.39, 0.19). Uncoupled draws are at their floor at every size (d 0.001, KS 0.034). Coupled 1 − r flattens (0.346 → 0.334 from 100k to 300k), while d and KS keep falling. At 300k the val loss was still falling at step 200k (4.2 passes): a 400k-step run (`sinh_ptok_raw_m300k_s400k`) tests whether it is under-trained. Figures: `outputs/report_sinh/figures/scaling_curve.png`, `learning_curves_scaling.png`.
+Each tripling of the models lowers test total by 16–26%, and the train–test gap halves (1.09, 0.72, 0.39, 0.19). Uncoupled draws are at their floor at every size (d 0.001, KS 0.034). Coupled 1 − r flattens (0.346 → 0.334 from 100k to 300k), while d and KS keep falling. At 300k the val loss was still falling at step 200k (4.2 passes), so the 200k-step run was under-trained: with 400k steps (`sinh_ptok_raw_m300k_s400k`, 8.4 passes, same cosine schedule stretched) val total falls from 0.693 to 0.637 and test total from 0.745 to 0.683 (−8%); coupled 1 − r improves too (0.334 → 0.312), so its flattening above was partly the step budget. Val flattens from about step 330k, where the cosine learning rate is already small; train total falls further (0.55 → 0.46), so the gap widens a little (0.19 → 0.22). The sizes are therefore not compared at equal training: the 100k run also had its best val near its last step (185k of 200k), and may gain from more steps as well. Figures: `outputs/report_sinh/figures/scaling_curve.png` (open markers: 400k steps), `learning_curves_scaling.png`, `learning_curves_m300k_steps.png`.
 
 **Coupling classifier** (`sinh_ptok_raw_coupling_cls`, `task: coupling`, train/coupling.py): the same backbone with one MLP on $h_{\text{CLS}}$, trained on binary cross-entropy (coupled vs uncoupled) alone, 100k models. Best val BCE at step ~125k. Against it, the regime that the statistics models imply (predicted mean FC > 0.05; scripts/coupling_report_data.py) on the same test rows:
 
