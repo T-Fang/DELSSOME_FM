@@ -14,6 +14,10 @@ the report needs no separate evaluation job:
 
 Test is evaluated only here, once, on the checkpoint that val selected; it never steers
 training or checkpoint choice.
+
+With task: coupling the module is train/coupling.CouplingModule (val/selection is its val
+BCE) and `final_classification` evaluates it: final/<split>/<classification metric>, and
+final_eval.npz with each evaluated row's logit, label and mean FC.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 
 from delssome_fm.config import Stage1Config, to_yaml
+from delssome_fm.train.coupling import (CouplingModule, check_task, classification_metrics,
+                                        classify_rows, load_coupling)
 from delssome_fm.train.data import Composition, Stage1DataModule, TrainingStore, coupled_rows
 from delssome_fm.train.evaluate import (evaluation_rows, load_stage1, per_model, row_metrics,
                                        summarise_rows)
@@ -38,6 +44,7 @@ from delssome_fm.train.stage1 import Stage1Module
 def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Path:
     """Train stage 1 as configured and evaluate the best checkpoint; returns the run's
     checkpoint directory."""
+    check_task(cfg)
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("high")   # TF32 tensor cores for the float32 parts
     run_name = run_name or datetime.now().strftime("stage1_%Y%m%d_%H%M%S")
@@ -48,8 +55,9 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
                             cfg.seed, composition)
     data.setup()
     norm = data.train.norm
-    module = Stage1Module(cfg, data.train.n_fcd_levels,
-                          (float(norm["pairwise_mean"]), float(norm["pairwise_sd"])))
+    pairwise_norm = (float(norm["pairwise_mean"]), float(norm["pairwise_sd"]))
+    module = (CouplingModule(cfg, pairwise_norm) if cfg.task == "coupling"
+              else Stage1Module(cfg, data.train.n_fcd_levels, pairwise_norm))
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, run_name=run_name,
                           tracking_uri=cfg.mlflow_tracking_uri,
                           artifact_location=cfg.mlflow_artifact_dir.as_uri())
@@ -82,6 +90,10 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
     # Lightning moves the module back to the CPU when fit ends, so module.device is no longer
     # the training device: choose the GPU explicitly (else this runs on 1 CPU thread for hours)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if cfg.task == "coupling":
+        final_classification(load_coupling(Path(best.best_model_path)).to(device), data,
+                             logger, checkpoints)
+        return checkpoints
     final = load_stage1(Path(best.best_model_path)).to(device)
     final_evaluation(final, data, logger, checkpoints)
     final_evaluation(final, data, logger, checkpoints, coupled=True)
@@ -117,6 +129,29 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
             p = predict_fc_fcd(module, store, rows[picks])
             arrays.update({f"test_example_{k}": v for k, v in p.items()})
     path = out / f"{prefix.replace('final', 'final_eval')}.npz"
+    np.savez(path, **arrays)
+    logger.experiment.log_artifact(logger.run_id, str(path))
+    return summary
+
+
+def final_classification(module: CouplingModule, data: Stage1DataModule, logger: MLFlowLogger,
+                         out: Path) -> dict[str, dict[str, float]]:
+    """Evaluate a coupling classifier on train (its own rows), val and test, each a seeded
+    subset of final_eval_rows rows (evaluation_rows: the same val and test rows as a
+    statistics run with the same seed); log final/<split>/<metric> and final_eval.npz."""
+    cfg = module.cfg
+    splits = {"train": (data.train, data.train_rows), "val": (data.val, None),
+              "test": (TrainingStore(cfg.store_dir, "test"), None)}
+    summary, arrays = {}, {}
+    for split, (store, candidates) in splits.items():
+        pool = np.arange(len(store)) if candidates is None else candidates
+        r = classify_rows(module, store, evaluation_rows(pool, cfg), num_workers=cfg.num_workers)
+        summary[split] = classification_metrics(torch.from_numpy(r["logit"]),
+                                                torch.from_numpy(r["label"]))
+        summary[split]["rows"] = len(r["logit"])
+        logger.log_metrics({f"final/{split}/{k}": v for k, v in summary[split].items()})
+        arrays.update({f"{split}_{k}": v for k, v in r.items()})
+    path = out / "final_eval.npz"
     np.savez(path, **arrays)
     logger.experiment.log_artifact(logger.run_id, str(path))
     return summary

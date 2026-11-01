@@ -157,6 +157,9 @@ class Stage1Config:
                                   # values read by the template encoder (§3.4, 2026-10-29)
     embed_theta: bool             # parameter tokens: theta through W_theta (d x 1) before the
                                   # token MLP, or raw (false); region tokens: must be true
+    task: str                     # statistics: the stage-1 heads (train/stage1.py); coupling:
+                                  # only classify draws as coupled (mean FC > coupled_threshold)
+                                  # or not, from h_CLS (train/coupling.py, 2026-11-01)
     # training data (the scaling sweep of architecture.md §7.2 varies these)
     train_models: int             # number of train corpus models to use
     draws_per_model: int          # and at most this many usable draws of each (100: all)

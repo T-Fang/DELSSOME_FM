@@ -47,17 +47,15 @@ class Stage1Module(L.LightningModule):
         """pairwise_norm: (mean, SD) of arctanh FC in the training store, to map predictions
         back to raw FC (kept with the checkpoint)."""
         super().__init__()
+        if cfg.task != "statistics":
+            raise ValueError(f"Stage1Module is the statistics task, the config has {cfg.task!r} "
+                             f"(train/coupling.py)")
         self.save_hyperparameters({**_flat(cfg), "n_fcd_levels": n_fcd_levels,
                                    "pairwise_mean": float(pairwise_norm[0]),
                                    "pairwise_sd": float(pairwise_norm[1])})
         self.cfg = cfg
         self.pairwise_norm = (float(pairwise_norm[0]), float(pairwise_norm[1]))
-        self.backbone = Backbone(BackboneSize(
-            n_regions=N_REGIONS, d_model=cfg.d_model, d_template=cfg.d_template,
-            template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
-            n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
-            max_distance=cfg.max_distance, max_degree=cfg.max_degree,
-            token_scheme=cfg.token_scheme, embed_theta=cfg.embed_theta))
+        self.backbone = Backbone(backbone_size(cfg))
         decoder, latent_dim = None, 0
         if cfg.pair_head == "latent":
             from delssome_fm.train.autoencoder import load_fc_autoencoder
@@ -139,18 +137,33 @@ class Stage1Module(L.LightningModule):
             metric.reset()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.cfg.learning_rate,
-                                      weight_decay=self.cfg.weight_decay)
-        warmup, total = self.cfg.warmup_steps, self.cfg.max_steps
+        return adamw_cosine(self.parameters(), self.cfg)
 
-        def factor(step: int) -> float:
-            """Linear warm-up to the full rate, then cosine decay to 0 at max_steps."""
-            if step < warmup:
-                return (step + 1) / warmup
-            return 0.5 * (1 + math.cos(math.pi * min(1.0, (step - warmup) / max(1, total - warmup))))
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
+def backbone_size(cfg: Stage1Config) -> BackboneSize:
+    """The backbone's widths and depths from the config (shared with train/coupling.py)."""
+    return BackboneSize(
+        n_regions=N_REGIONS, d_model=cfg.d_model, d_template=cfg.d_template,
+        template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
+        n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,
+        max_distance=cfg.max_distance, max_degree=cfg.max_degree,
+        token_scheme=cfg.token_scheme, embed_theta=cfg.embed_theta)
+
+
+def adamw_cosine(parameters, cfg: Stage1Config) -> dict:
+    """AdamW with linear warm-up and cosine decay, Lightning's configure_optimizers form."""
+    optimizer = torch.optim.AdamW(parameters, lr=cfg.learning_rate,
+                                  weight_decay=cfg.weight_decay)
+    warmup, total = cfg.warmup_steps, cfg.max_steps
+
+    def factor(step: int) -> float:
+        """Linear warm-up to the full rate, then cosine decay to 0 at max_steps."""
+        if step < warmup:
+            return (step + 1) / warmup
+        return 0.5 * (1 + math.cos(math.pi * min(1.0, (step - warmup) / max(1, total - warmup))))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
+    return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 
 def _flat(cfg: Stage1Config) -> dict:

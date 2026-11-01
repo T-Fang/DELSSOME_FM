@@ -44,6 +44,7 @@ LEGACY_DEFAULTS = {
     "coupled_draws_only": False,     # added 2026-10-26
     "token_scheme": "region",        # added 2026-10-29: the only scheme before
     "embed_theta": True,             # added 2026-10-29; region tokens always embed theta
+    "task": "statistics",            # added 2026-11-01: the only task before
 }
 
 
@@ -61,11 +62,14 @@ def load_stage1(checkpoint: Path) -> Stage1Module:
     """The Stage1Module of a Lightning checkpoint, rebuilt from the config it recorded."""
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     hp = dict(ckpt["hyper_parameters"])
+    if hp.get("task", "statistics") != "statistics":
+        raise ValueError(f"{checkpoint} is a {hp['task']!r} model, not a stage-1 statistics "
+                         f"model: load it with train/coupling.load_coupling")
     n_fcd_levels = hp.pop("n_fcd_levels")
     hp.pop("train_rows", None)           # logged for information, not a config field
     norm = (hp.pop("pairwise_mean", None), hp.pop("pairwise_sd", None))
     cfg = config_from_dict(Stage1Config, {**LEGACY_DEFAULTS, **hp}, str(checkpoint))
-    if norm[0] is None:                  # checkpoints before 2026-10-19: from the store
+    if norm[0] is None:                 # checkpoints before 2026-10-19: from the store
         with np.load(cfg.store_dir / "normalisation.npz") as n:
             norm = (float(n["pairwise_mean"]), float(n["pairwise_sd"]))
     module = Stage1Module(cfg, n_fcd_levels, norm)

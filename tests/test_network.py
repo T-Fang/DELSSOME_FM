@@ -28,7 +28,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         fc_rank=8, fc_offset=True, pair_head="bilinear", pair_hidden=16, cost_loss=False,
         fc_autoencoder="none", stat_loss=True, catch24_loss=False, fc_net_loss=False,
         max_distance=8,
-        max_degree=8, token_scheme="region", embed_theta=True, train_models=2,
+        max_degree=8, token_scheme="region", embed_theta=True, task="statistics", train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
         coupled_threshold=0.05, coupled_draws_only=False, batch_size=2, edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
@@ -667,3 +667,100 @@ def test_lightning_run_with_parameter_tokens(tiny_store_sinh, tiny_store, tmp_pa
     with pytest.raises(ValueError, match="embed_theta"):
         Stage1Module(dataclasses.replace(stage1, token_scheme="region", embed_theta=False), 10,
                      (0.4, 1.3))
+
+
+# ---------------------------------------------------------------- coupling classification (2026-11-01)
+
+
+def _coupling_config(store_dir, tmp_path, threshold, **changes):
+    changes = {"embed_theta": False, **changes}
+    return _ptok_config(store_dir, tmp_path, task="coupling", stat_loss=False,
+                        coupled_threshold=threshold, **changes)
+
+
+def _median_mean_fc(store_dir, split):
+    """A threshold that puts both classes in the split (0.05 might not in a tiny store)."""
+    return float(np.median(np.asarray(TrainingStore(store_dir, split).rows["fc_moments"][:, 0])))
+
+
+@pytest.mark.parametrize("embed_theta", [True, False])
+def test_coupling_classifier_labels_by_mean_fc_and_fits_one_batch(ptok, tmp_path, embed_theta):
+    """Labels follow the mean of the raw pairwise target. Finite gradients for both theta
+    inputs; the embedded form also fits the batch. The raw form is slower at the start
+    (tokens.py), and here it must tell apart draws of the same model by theta alone, so only
+    its gradients are checked, as in the statistics fit."""
+    from delssome_fm.train.coupling import CouplingModule
+    store, _, _ = ptok
+    batch = store[list(range(len(store)))]
+    norm = (0.4, 1.3)
+    fc = torch.tanh(batch.targets["pairwise"] * norm[1] + norm[0]).mean(1)
+    low = fc.sort().values
+    threshold = float(low[:2].mean())                  # the lowest draw alone is uncoupled
+    torch.manual_seed(0)
+    module = CouplingModule(_coupling_config(tmp_path, tmp_path, threshold,
+                                             embed_theta=embed_theta), norm).train()
+    label = module.labels(batch)
+    assert label.tolist() == (fc > threshold).tolist() and 0 < label.sum() < len(label)
+    module.log = module.log_dict = lambda *a, **k: None          # no trainer attached
+    loss = module.training_step(batch, 0)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(torch.isfinite(p.grad).all() for p in module.parameters() if p.grad is not None)
+    if not embed_theta:
+        return
+    optimiser = torch.optim.Adam(module.parameters(), lr=1e-3)
+    history = []
+    for _ in range(150):
+        optimiser.zero_grad()
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(module.logits(batch),
+                                                                    label.float())
+        loss.backward()
+        optimiser.step()
+        history.append(float(loss.detach()))
+    assert history[-1] < 0.2 * history[0]
+    assert ((module.logits(batch) > 0) == label).all()
+
+
+def test_classification_metrics():
+    from delssome_fm.train.coupling import classification_metrics
+    logit = torch.tensor([2.0, -1.0, 0.5, -3.0, 1.0])
+    label = torch.tensor([True, True, False, False, False])
+    m = classification_metrics(logit, label)
+    assert m["accuracy"] == pytest.approx(2 / 5)
+    assert (m["recall_coupled"], m["recall_uncoupled"]) == (0.5, pytest.approx(1 / 3))
+    assert m["balanced_accuracy"] == pytest.approx((0.5 + 1 / 3) / 2)
+    assert m["auroc"] == pytest.approx(4 / 6)          # 4 of the 6 (coupled, uncoupled) pairs
+    assert m["coupled_share"] == pytest.approx(0.4)
+    assert np.isnan(classification_metrics(logit, torch.ones(5, dtype=torch.bool))["auroc"])
+
+
+def test_lightning_coupling_run_evaluates_and_reloads(tiny_store_sinh, tmp_path):
+    from delssome_fm.train.coupling import CouplingModule, load_coupling
+    from delssome_fm.train.evaluate import load_stage1
+    cfg, _, _ = tiny_store_sinh
+    stage1 = _coupling_config(cfg.store_dir, tmp_path, _median_mean_fc(cfg.store_dir, "val"))
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="coupling")
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    m = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0].data.metrics
+    assert m["val/selection"] == pytest.approx(m["val/bce"])
+    for split in ("train", "val", "test"):
+        assert 0 <= m[f"final/{split}/accuracy"] <= 1 and m[f"final/{split}/rows"] > 0
+    with np.load(checkpoints / "final_eval.npz") as f:
+        assert (f["test_label"] == (f["test_mean_fc"] > stage1.coupled_threshold)).all()
+        assert len(f["test_logit"]) == m["final/test/rows"]
+    module = load_coupling(checkpoints / "last.ckpt")
+    assert isinstance(module, CouplingModule) and module.cfg == stage1
+    with pytest.raises(ValueError, match="load_coupling"):
+        load_stage1(checkpoints / "last.ckpt")
+    # the classifier trains alone, on both classes, and the task must be known
+    for changes, match in (({"stat_loss": True}, "stat_loss"), ({"cost_loss": True}, "cost_loss"),
+                           ({"coupled_draws_only": True}, "both classes")):
+        with pytest.raises(ValueError, match=match):
+            fit(dataclasses.replace(stage1, **changes), config_file, run_name="refused")
+    with pytest.raises(ValueError, match="task must be"):
+        fit(dataclasses.replace(stage1, task="regime"), config_file, run_name="refused")
+    with pytest.raises(ValueError, match="statistics task"):
+        Stage1Module(stage1, 10, (0.4, 1.3))
