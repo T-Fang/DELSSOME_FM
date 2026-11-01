@@ -507,3 +507,41 @@ The parameter-token backbone (§3.4) against the baseline `sinh_m100k_d100_cost`
 
 With region tokens, predicting network FC directly beat downsampling the region predictions (§7.6). With parameter tokens the order reverses: the region-level FC is now good enough that downsampling it gives the best network FC. The direct head reads only $h_{\text{CLS}}$, which gains less from the new tokens than the region outputs do; its MSE still halves (0.82 against 1.74).
 
+
+### 7.8 Parameter tokens: coupled-only training, scaling, and a coupling classifier (2026-11-01)
+
+All runs: parameter tokens with raw θ (`embed_theta: false`), pair-MLP head, cost loss, 200k steps, unless stated. Test is the same 200,000 rows for every run; "coupled" rows are the draws with simulated mean FC > 0.05 (21% of draws in every split).
+
+**Coupled-only training** (`sinh_ptok_raw_coupled_only`: 100k models, coupled draws only, 833k rows), on the same coupled test rows:
+
+| run | test MSE total | R² FC | 1 − r | d | KS | trained-rows MSE total |
+|---|---|---|---|---|---|---|
+| all draws (`sinh_ptok_raw_cost`) | 2.56 | 0.700 | 0.346 | 0.026 | 0.155 | 1.29 |
+| coupled draws only | 2.37 | 0.730 | 0.350 | 0.024 | 0.176 | 0.97 |
+| all draws, 300k models (`sinh_ptok_raw_m300k`) | 2.09 | 0.763 | 0.336 | 0.022 | 0.147 | 1.51 |
+
+Mixed: MSE, R² and d improve a little, 1 − r does not move and KS is worse. With a fifth of the rows it overfits (best val at step 100k, rising after). With region tokens the same restriction helped much more (5.70 → 4.56, §7.6); parameter tokens already fit coupled draws, and more models help them more than specialising does.
+
+**Scaling** (the first n models of the corpus, all their draws; the 300k-model store `training_store_sinh300k` shares val, test and z-score units with the 100k store):
+
+| models (train rows) | train / test MSE total | test R² FC | test coupled MSE total | coupled 1 − r | coupled d | coupled KS | best val step |
+|---|---|---|---|---|---|---|---|
+| 10k (0.40 M) | 0.42 / 1.50 | 0.564 | 4.65 | 0.439 | 0.060 | 0.244 | 90k, then overfits |
+| 30k (1.2 M) | 0.49 / 1.21 | 0.660 | 3.61 | 0.395 | 0.045 | 0.208 | 120k, then overfits |
+| 100k (4.0 M) | 0.50 / 0.89 | 0.768 | 2.56 | 0.346 | 0.026 | 0.155 | 185k |
+| 300k (12.1 M) | 0.55 / 0.75 | 0.815 | 2.09 | 0.334 | 0.021 | 0.147 | 190k, still falling |
+
+Each tripling of the models lowers test total by 16–26%, and the train–test gap halves (1.09, 0.72, 0.39, 0.19). Uncoupled draws are at their floor at every size (d 0.001, KS 0.034). Coupled 1 − r flattens (0.346 → 0.334 from 100k to 300k), while d and KS keep falling. At 300k the val loss was still falling at step 200k (4.2 passes): a 400k-step run (`sinh_ptok_raw_m300k_s400k`) tests whether it is under-trained. Figures: `outputs/report_sinh/figures/scaling_curve.png`, `learning_curves_scaling.png`.
+
+**Coupling classifier** (`sinh_ptok_raw_coupling_cls`, `task: coupling`, train/coupling.py): the same backbone with one MLP on $h_{\text{CLS}}$, trained on binary cross-entropy (coupled vs uncoupled) alone, 100k models. Best val BCE at step ~125k. Against it, the regime that the statistics models imply (predicted mean FC > 0.05; scripts/coupling_report_data.py) on the same test rows:
+
+| model | AUROC | balanced accuracy (at 0.5 / best threshold) | recall coupled | recall uncoupled | recall coupled at 2.7% / 5% false coupled |
+|---|---|---|---|---|---|
+| classifier | 0.976 | 0.893 / 0.915 | 0.820 | 0.966 | 0.79 / 0.86 |
+| statistics, 100k (`sinh_ptok_raw_cost`) | 0.957 | 0.915 / 0.919 | 0.858 | 0.973 | 0.86 / 0.89 |
+| statistics, 300k (`sinh_ptok_raw_m300k`) | 0.968 | 0.927 / 0.931 | 0.879 | 0.975 | 0.89 / 0.91 |
+
+- **A dedicated classifier does not beat the regime the statistics model already predicts.** Its higher AUROC comes from ranking at false-coupled rates ≤ 1%; at any practical operating point the statistics model calls the regime as well or better, and the 300k statistics model better still.
+- **The misses are not borderline draws.** Half the coupled draws the classifier misses have mean FC > 0.26 and 9% of fully synchronised draws (FC > 0.9) are called uncoupled; recall rises only from 50% at FC 0.05–0.06 to 91% above 0.9.
+- **They are new equations.** Among test models with ≥ 5 coupled draws, 4.7% have every coupled draw missed and 12% have most missed; among training models, 0.1% and 0.7%. Coupled recall is no better in models whose draws almost all couple (0.81) than in models that couple on some draws only, so the misses are not draw-level bistability.
+- **The hard set is shared.** Of the classifier's 7,711 missed coupled draws, 4,627 are also missed by the 100k statistics model; 3,448 are missed by all three models. Recognising that an unseen equation synchronises remains the open problem, and more training models is so far the only lever that moves it.

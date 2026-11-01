@@ -257,3 +257,21 @@ def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, see
             res[f"{k}_mean"] = np.abs(p.mean(1) - t.mean(1))
             res[f"{k}_mse"] = ((stable_arctanh(p) - stable_arctanh(t)) ** 2).mean(1)
     return res
+
+
+@torch.no_grad()
+def predicted_mean_fc(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
+                      batch_size: int = 256) -> np.ndarray:
+    """(R,) the mean of each row's predicted raw FC upper triangle (all edges), de-z-scored
+    with the module's training-store statistics: the regime call a statistics model implies
+    (coupled: > coupled_threshold), compared with the coupling classifier's (train/coupling.py)."""
+    check_parameter_policy(module, store)
+    device = next(module.parameters()).device
+    edges = torch.arange(len(module.edges), device=device)
+    out = []
+    batches = [rows[i:i + batch_size].tolist() for i in range(0, len(rows), batch_size)]
+    for batch in DataLoader(store, sampler=batches, batch_size=None):
+        batch = move_data_to_device(batch, device)
+        z = module.predict_statistics(batch, edges).pairwise
+        out.append(costs.raw_fc(z, *module.pairwise_norm).mean(1).cpu().numpy())
+    return np.concatenate(out)

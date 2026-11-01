@@ -27,6 +27,11 @@ generalisation diagnostic. Writes PNGs to <data>/figures/:
                         are logged from 2026-10-29 on). Bottom row: val R^2 of FC and the
                         cost terms' val medians over coupled (solid) and uncoupled (dashed)
                         draws, which every run with the cost terms logged
+    scaling_curve.png   test metrics against the number of training models for the MLflow runs
+                        of --scaling-runs (final/<split>/*, final_coupled/test/*): MSE total
+                        on trained rows and test, test total on coupled draws, and coupled
+                        1 - r, d, KS; extra runs at a given size (e.g. longer training)
+                        drawn as open markers
     reference_cost_terms.png, reference_examples.png
                         MFM, FIC, Hopf at their published test fits: prediction vs simulation
                         (from scripts/reference_eval_compare.py; skipped if not yet run)
@@ -126,7 +131,8 @@ def mlflow_curves(tracking_uri: str, experiment: str, runs: list[str]) -> dict:
     return curves
 
 
-def learning_curves_figure(curves: dict, out: Path, smooth: int = 100):
+def learning_curves_figure(curves: dict, out: Path, smooth: int = 100,
+                           filename: str = "learning_curves.png"):
     """One panel per CURVE_PANELS entry: per run, train as a running mean over `smooth`
     logged steps (thin) and val (markers)."""
     fig, grid = plt.subplots(2, 4, figsize=(16, 7.6))
@@ -165,7 +171,64 @@ def learning_curves_figure(curves: dict, out: Path, smooth: int = 100):
     fig.legend(handles, labels, loc="upper center", ncol=len(curves), frameon=False,
                bbox_to_anchor=(0.5, 1.06))
     fig.tight_layout()
-    save(fig, out, "learning_curves.png")
+    save(fig, out, filename)
+
+
+def mlflow_scaling(tracking_uri: str, experiment: str, spec: str) -> list[dict]:
+    """spec "N=RUN,N=RUN,...[,N=RUN+]": runs by number of training models; a trailing + marks
+    an extra run at that size. Returns one dict per run with its final/* metrics."""
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    found = {r.info.run_name: r for r in
+             client.search_runs([client.get_experiment_by_name(experiment).experiment_id])}
+    out = []
+    for item in spec.split(","):
+        n, run = item.split("=")
+        extra = run.endswith("+")
+        run = run.rstrip("+")
+        if run not in found or "final/test/total" not in found[run].data.metrics:
+            raise ValueError(f"{run}: no final evaluation in MLflow ({experiment})")
+        out.append({"n_models": int(n), "run": run, "extra": extra,
+                    "metrics": found[run].data.metrics})
+    return out
+
+
+SCALING_PANELS = (("MSE total, all draws", (("final/train/total", "trained rows"),
+                                            ("final/test/total", "test"))),
+                  ("MSE total, coupled test draws", (("final_coupled/test/total", "test"),)),
+                  ("1 - r, coupled test draws (median)", (("final/test/cost_corr_coupled", "test"),)),
+                  ("d, coupled test draws (median)", (("final/test/cost_mean_coupled", "test"),)),
+                  ("KS, coupled test draws (median)", (("final/test/cost_ks_coupled", "test"),)))
+
+
+def scaling_curve_figure(runs: list[dict], out: Path, label: str):
+    fig, axes = plt.subplots(1, len(SCALING_PANELS), figsize=(18, 3.8))
+    main = sorted((r for r in runs if not r["extra"]), key=lambda r: r["n_models"])
+    for (title, series), ax in zip(SCALING_PANELS, axes):
+        for key, name in series:
+            colour = {"test": BLUE, "trained rows": ORANGE}[name]       # colour follows the series
+            x = [r["n_models"] for r in main]
+            y = [r["metrics"][key] for r in main]
+            ax.plot(x, y, color=colour, lw=2, marker="o", ms=6, label=name)
+            for r in runs:
+                if r["extra"]:
+                    ax.plot(r["n_models"], r["metrics"][key], ls="none", marker="o", ms=8,
+                            mfc=SURFACE, mec=colour, mew=2)
+            ax.annotate(f"{y[-1]:.3f}", (x[-1], y[-1]), textcoords="offset points",
+                        xytext=(6, 0), va="center", fontsize=9, color=INK2)
+        ax.set_xscale("log")
+        ax.set_xticks([r["n_models"] for r in main])
+        ax.set_xticklabels([f"{r['n_models'] // 1000}k" for r in main])
+        ax.minorticks_off()
+        ax.set_xlabel("training models (all draws each)")
+        ax.set_title(title, fontsize=10)
+        style(ax)
+    axes[0].legend(frameon=False, fontsize=9)
+    extras = [r["run"] for r in runs if r["extra"]]
+    fig.suptitle(f"Scaling, {label}" + (f"  (open markers: {', '.join(extras)})" if extras else ""),
+                 y=1.03)
+    fig.tight_layout()
+    save(fig, out, "scaling_curve.png")
 
 
 def scaling_figure(scaling: dict, out: Path):
@@ -621,6 +684,11 @@ def main():
     p.add_argument("--curves", default=None, metavar="EXPERIMENT:RUN[,RUN...]",
                    help="draw learning_curves.png for these MLflow runs, e.g. "
                    "stage1_sinh:sinh_ptok_emb_cost,sinh_ptok_raw_cost")
+    p.add_argument("--curves-name", default="learning_curves.png",
+                   help="file name of the --curves figure")
+    p.add_argument("--scaling-runs", default=None, metavar="EXPERIMENT:N=RUN[,N=RUN...]",
+                   help="draw scaling_curve.png; a run name ending in + is an extra run at "
+                   "that size, e.g. stage1_sinh:10000=sinh_ptok_raw_m10k,300000=run_s400k+")
     p.add_argument("--mlflow", default="sqlite:////home/ftian/storage/projects/DELSSOME-FM/"
                    "outputs/mlflow/mlflow.db", help="tracking URI holding the runs' val metrics")
     args = p.parse_args()
@@ -633,7 +701,11 @@ def main():
         if (args.data / "report_data_train.npz").is_file() else {}
     if args.curves is not None:
         experiment, runs = args.curves.split(":")
-        learning_curves_figure(mlflow_curves(args.mlflow, experiment, runs.split(",")), out)
+        learning_curves_figure(mlflow_curves(args.mlflow, experiment, runs.split(",")), out,
+                               filename=args.curves_name)
+    if args.scaling_runs is not None:
+        experiment, spec = args.scaling_runs.split(":")
+        scaling_curve_figure(mlflow_scaling(args.mlflow, experiment, spec), out, args.label)
     if args.scaling_grid is not None:
         experiment, prefix = args.scaling_grid.split(":")
         scaling_grid_figure(mlflow_grid(args.mlflow, experiment, prefix), out, args.label)
