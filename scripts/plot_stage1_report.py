@@ -48,10 +48,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.io as spio
-from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+from matplotlib.colors import LinearSegmentedColormap
 
-REPO = Path(__file__).resolve().parents[1]
 # reference palette (dataviz skill, light mode): categorical slots 1-3, ink, chrome
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 INK, INK2, MUTED, GRID, AXIS, SURFACE = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
@@ -60,6 +58,7 @@ plt.rcParams.update({"font.family": "sans-serif", "font.size": 10, "axes.edgecol
                      "axes.titlecolor": INK, "figure.facecolor": SURFACE,
                      "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE})
 FCD_LEVELS = np.linspace(-0.98, 1.0, 100)       # summary.fcd_levels with stride 100
+FC_CMAP = "turbo"     # FC matrices: blue (low) to red (high), rainbow-like (user, 2026-11-03)
 
 
 def style(ax, grid_axis="y"):
@@ -390,7 +389,7 @@ def network_fc_examples_figure(test: dict, train: dict, out: Path, model_label: 
     trained rows (top) and test (bottom)."""
     from delssome_fm.data.networks import NETWORK_PAIRS, YEO7_NAMES
     kinds = [(k, name) for k, name in NETWORK_KINDS if f"{k}_corr" in test]
-    cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
+    cmap = FC_CMAP
     fig, axes = plt.subplots(2, 1 + len(kinds), figsize=(4.6 * (1 + len(kinds)), 8.6))
     short = [n.split()[0][:4] for n in YEO7_NAMES]
 
@@ -465,7 +464,7 @@ def _matrix(upper: np.ndarray, n: int = 68) -> np.ndarray:
 
 
 def fc_examples_figure(d: dict, out: Path, model_label: str, split: str = "test"):
-    cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
+    cmap = FC_CMAP
     labels = ["coupled, good (10th pct of 1 − r)", "coupled, typical (median)",
               "coupled, poor (90th pct)", "uncoupled, typical"]   # coupled: 0.05 < mean FC < 0.9
     labels = labels[:len(d["best_example_fc_true"])]        # no uncoupled example: 3 columns
@@ -626,7 +625,7 @@ def reference_examples_figure(r: dict, out: Path, model_label: str):
     """Per reference model, a typical fitted set (median simulated mean FC): FC simulated and
     predicted on a shared colour range, the prediction on its own range (its pattern), and the
     FCD CDFs with the KS gap."""
-    cmap = ListedColormap(spio.loadmat(REPO / "assets/colormaps/corr_mat_colorscale.mat")["rbmap2"])
+    cmap = FC_CMAP
     fig, axes = plt.subplots(3, 4, figsize=(17, 12))
     for row, (m, label) in enumerate(REFERENCE_MODELS):
         sim, pred = r[f"{m}_example_fc_true"], r[f"{m}_example_fc_pred"]
