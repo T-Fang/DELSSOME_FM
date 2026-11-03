@@ -3,11 +3,13 @@ on each reference model's fitted sets (split <model>_r0), the fitted sets with i
 maps (<model>_scrambled) and corpus draws of the card (<model>_random), against a seeded
 subset of its own synthetic test draws. Per split: the regime call (predicted mean FC above
 coupled_threshold) and the median cost terms per simulated regime (train/report.regime_summary).
-Writes <out>/reference_variants.npz (per-row arrays) and prints the table. A GPU job:
+Writes <out>/<name>.npz (per-row arrays) and prints the table. A GPU job:
 
     python scripts/reference_variants_compare.py \\
         --checkpoint outputs/stage1/sinh_ptok_raw_m300k_s400k/step385000.ckpt \\
         --out outputs/report_sinh/sinh_ptok_raw_m300k_s400k
+    ... --models fic --variants r0 scrambled shuffled scrambled_solved --test-rows 0 \
+        --name reference_variants_fic
 """
 
 import argparse
@@ -28,15 +30,19 @@ def main() -> None:
     p.add_argument("--config", type=Path, default=Path("configs/reference_eval_sinh.yaml"))
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--test-rows", type=int, default=20_000)
+    p.add_argument("--test-rows", type=int, default=20_000, help="0: no synthetic baseline")
+    p.add_argument("--models", nargs="+", default=None, help="default: the config's models")
+    p.add_argument("--variants", nargs="+", default=["r0", "scrambled", "random"],
+                   help="store splits <model>_<variant> (r0: the fitted sets)")
+    p.add_argument("--name", default="reference_variants")
     args = p.parse_args()
 
     cfg = load_config(args.config, ReferenceEvalConfig)
     module = load_stage1(args.checkpoint).to("cuda" if torch.cuda.is_available() else "cpu")
     threshold = module.cfg.coupled_threshold
-    stores = {"synthetic_test": TrainingStore(module.cfg.store_dir, "test")}
+    stores = {"synthetic_test": TrainingStore(module.cfg.store_dir, "test")} if args.test_rows else {}
     stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}")
-                   for n in cfg.models for v in ("r0", "scrambled", "random")})
+                   for n in args.models or cfg.models for v in args.variants})
     arrays, table = {}, {}
     for split, store in stores.items():
         if split == "synthetic_test":
@@ -50,9 +56,9 @@ def main() -> None:
         print(split, json.dumps({k: round(v, 3) if isinstance(v, float) else v
                                  for k, v in table[split].items()}), flush=True)
     args.out.mkdir(parents=True, exist_ok=True)
-    np.savez(args.out / "reference_variants.npz", checkpoint=str(args.checkpoint),
+    np.savez(args.out / f"{args.name}.npz", checkpoint=str(args.checkpoint),
              summary=json.dumps(table), **arrays)
-    print(f"wrote {args.out / 'reference_variants.npz'}")
+    print(f"wrote {args.out / args.name}.npz")
 
 
 if __name__ == "__main__":

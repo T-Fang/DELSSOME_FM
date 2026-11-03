@@ -24,9 +24,13 @@ per repeat, so train/pack.pack_chunks packs it into a store split <model>_r<k>.
 
 Variants (2026-11-04, sinh policy; architecture.md §7.8): the stage-1 model calls every fitted
 set uncoupled. To tell whether it fails on the equation or at the fitted operating point, each
-model is also simulated once per parameter set at `variant_parameters`, into store splits
+model is also simulated once per parameter set at `variant_draw`, into store splits
 <model>_<variant>: `scrambled` keeps the fitted operating point but draws each regional map
-i.i.d. over regions, as the corpus does; `random` draws the parameters as the corpus would.
+i.i.d. over regions, as the corpus does; `random` draws the parameters as the corpus would;
+`shuffled` permutes whole regions; `scrambled_solved` is `scrambled` with the card's solved
+columns re-solved. The last two re-impose a card's implicit constraint (FIC's w_IE, which
+depends on each region's w_EE, w_EI and SC row sum, `fic_solver`), so they separate FIC's
+topography from its per-region balance.
 """
 
 from __future__ import annotations
@@ -40,14 +44,14 @@ import jax
 import numpy as np
 
 from delssome_fm.config import CorpusConfig, ReferenceEvalConfig, ReproduceConfig, SimConfig
-from delssome_fm.sim import reproduce
+from delssome_fm.sim import fic, reproduce
 from delssome_fm.sim.corpus import simulate_given
 from delssome_fm.spec.card import Coef, ModelCard, card_to_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.reference import load_reference
 from delssome_fm.spec.sampler import draw_parameters, positive_params
 
-VARIANTS = ("scrambled", "random")
+VARIANTS = ("scrambled", "random", "shuffled", "scrambled_solved")   # append only: the index seeds
 _VARIANT_STREAM = 1000      # seeds [seed, model, 1000, variant]; the repeats use [seed, model, k]
 
 
@@ -155,8 +159,23 @@ def _write_chunk(path: Path, res: dict, card: ModelCard) -> None:
         {"split": "reference", "index": 0, "sc_group": 0, "card": card_to_dict(card)}) + "\n")
 
 
+def fic_solver(card: ModelCard, factors: dict[str, float], sc: np.ndarray):
+    """FIC's implicit constraint on a set in actual values (`actual_values`'s factors): theta
+    (N, P), psi (K,) -> theta with w_IE re-solved per region (sim/fic.solve_w_ie, card units)
+    from its w_EE, w_EI, the gain and the SC (rescaled to max 0.02) as simulated."""
+    col = {p: k for k, p in enumerate(card.regional_params)}
+
+    def solve(theta: np.ndarray, psi: np.ndarray) -> np.ndarray:
+        out = theta.copy()
+        w_ie = fic.solve_w_ie(theta[:, col["wEE"]] / factors["wEE"],
+                              theta[:, col["wEI"]] / factors["wEI"], psi[0] / factors["G"], sc)
+        out[:, col["wIE"]] = w_ie * factors["wIE"]
+        return out
+    return solve
+
+
 def variant_draw(card: ModelCard, theta: np.ndarray, psi: np.ndarray, variant: str, j: int,
-                 rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+                 rng: np.random.Generator, solve=None) -> tuple[np.ndarray, np.ndarray]:
     """theta (S, N, P), psi (S, K): a card's fitted sets in actual values (`actual_values`).
     Returns draw j of one variant, theta (N, P) and psi (K,):
 
@@ -167,18 +186,30 @@ def variant_draw(card: ModelCard, theta: np.ndarray, psi: np.ndarray, variant: s
                    per-region dependencies (FIC's analytic w_IE) go.
         random     a corpus draw of the card (sampler.draw_parameters, sinh): the equation at
                    parameters the corpus would give it.
+        shuffled   fitted set j with its regions permuted: each region keeps its own parameter
+                   combination, the topography goes; `solve` (the card's implicit constraint,
+                   e.g. fic_solver) is applied after, None if the card has none.
+        scrambled_solved   scrambled, then `solve`; raises without one.
     """
     if variant == "random":
         t, p = draw_parameters(card, rng, 1, theta.shape[1], "sinh")
         return t[0], p[0]
-    if variant != "scrambled":
+    if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}, found {variant!r}")
     if not 0 <= j < len(theta):
-        raise ValueError(f"scrambled draw {j}: there are {len(theta)} fitted sets")
-    mean, sd = theta[j].mean(axis=0), theta[j].std(axis=0)
-    out = mean + sd * rng.standard_normal(theta[j].shape)
-    fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
-    return np.where(fixed, np.abs(out), out), psi[j].copy()
+        raise ValueError(f"{variant} draw {j}: there are {len(theta)} fitted sets")
+    if variant == "scrambled_solved" and solve is None:
+        raise ValueError(f"{card.name}: scrambled_solved needs the card's implicit constraint")
+    if variant == "shuffled":
+        out = theta[j][rng.permutation(theta.shape[1])]
+    else:
+        mean, sd = theta[j].mean(axis=0), theta[j].std(axis=0)
+        out = mean + sd * rng.standard_normal(theta[j].shape)
+        fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
+        out = np.where(fixed, np.abs(out), out)
+    if variant != "scrambled" and solve is not None:
+        out = solve(out, psi[j])
+    return out, psi[j].copy()
 
 
 def simulate_variant(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: ReferenceEvalConfig,
@@ -192,13 +223,14 @@ def simulate_variant(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: Referenc
         raise ValueError(f"variants need the sinh policy, the corpus has "
                          f"{corpus_cfg.parameter_policy!r}")
     theta, psi, sc = fitted_sets(rcfg, name)
-    card, theta, psi, _ = actual_values(load_reference(name), theta, psi)
+    card, theta, psi, factors = actual_values(load_reference(name), theta, psi)
+    solve = fic_solver(card, factors, sc) if name == "fic" else None
     code, v = cfg.models.index(name), VARIANTS.index(variant)
     draws = range(first, first + n)
     thetas, psis, x0s = [], [], []
     for j in draws:
         rng = np.random.default_rng([cfg.seed, code, _VARIANT_STREAM, v, j])
-        t, p = variant_draw(card, theta, psi, variant, j, rng)
+        t, p = variant_draw(card, theta, psi, variant, j, rng, solve)
         thetas.append(t)
         psis.append(p)
         x0s.append(rng.uniform(-corpus_cfg.initial_state_scale, corpus_cfg.initial_state_scale,

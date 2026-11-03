@@ -91,6 +91,34 @@ def test_random_draw_is_the_corpus_draw_and_unknown_draws_raise():
     np.testing.assert_array_equal(t, t2[0])
     np.testing.assert_array_equal(p, p2[0])
     with pytest.raises(ValueError, match="variant must be one of"):
-        variant_draw(card, theta, psi, "shuffled", 0, np.random.default_rng(5))
+        variant_draw(card, theta, psi, "permuted", 0, np.random.default_rng(5))
     with pytest.raises(ValueError, match="2 fitted sets"):
         variant_draw(card, theta, psi, "scrambled", 2, np.random.default_rng(5))
+
+
+def test_shuffled_draw_permutes_whole_regions_and_solved_variants_need_a_constraint():
+    from delssome_fm.sim.reference_eval import variant_draw
+    card = load_reference("mfm")
+    rng = np.random.default_rng(2)
+    theta, psi = rng.uniform(0.5, 2.0, (2, N, 3)), rng.uniform(0.5, 3.0, (2, 1))
+    t, p = variant_draw(card, theta, psi, "shuffled", 1, np.random.default_rng(3))
+    order = np.argsort(t[:, 0])
+    np.testing.assert_array_equal(t[order], theta[1][np.argsort(theta[1][:, 0])])  # same rows
+    assert not np.array_equal(t, theta[1]) and np.array_equal(p, psi[1])
+    with pytest.raises(ValueError, match="implicit constraint"):
+        variant_draw(card, theta, psi, "scrambled_solved", 0, np.random.default_rng(3))
+    solve = lambda th, ps: th + 1.0                                     # noqa: E731
+    t2, _ = variant_draw(card, theta, psi, "scrambled_solved", 0, np.random.default_rng(3), solve)
+    t3, _ = variant_draw(card, theta, psi, "scrambled", 0, np.random.default_rng(3), solve)
+    np.testing.assert_allclose(t2, t3 + 1.0)                     # solve applied, scrambled ignores it
+
+
+@pytest.mark.cluster
+def test_fic_solver_reproduces_the_fitted_w_ie():
+    from delssome_fm.config import ReproduceConfig, load_config
+    from delssome_fm.sim.reference_eval import fic_solver, fitted_sets
+    theta, psi, sc = fitted_sets(load_config("configs/reproduce.yaml", ReproduceConfig), "fic")
+    card, theta, psi, factors = actual_values(load_reference("fic"), theta, psi)
+    solve = fic_solver(card, factors, sc)
+    for s in (0, 17, 49):
+        np.testing.assert_allclose(solve(theta[s], psi[s]), theta[s], rtol=1e-6)
