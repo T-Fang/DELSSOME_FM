@@ -20,4 +20,5 @@ initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
 fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
 
 parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+gain_scope: draw              # coupling gains drawn per draw (2026-11-04: corpora since use "model")
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh

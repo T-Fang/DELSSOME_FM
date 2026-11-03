@@ -382,17 +382,28 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
     P, K = len(card.regional_params), len(card.global_params)
     if policy == "multiplier":
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
-        psi = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, K))
-        return theta, psi
+        return theta, draw_gains(card, rng, n_draws, policy)
     fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
     z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
     mu = SINH_SCALE * np.sinh(np.where(fixed, np.abs(z), z))[:, None, :]
     kappa = rng.uniform(*SPREAD_RANGE, size=(n_draws, P))[:, None, :]
     theta = mu + kappa * np.abs(mu) * rng.standard_normal((n_draws, n_regions, P))
     theta = np.where(fixed, np.abs(theta), theta)
+    return theta, draw_gains(card, rng, n_draws, policy)
+
+
+def draw_gains(card: ModelCard, rng: np.random.Generator, n_draws: int,
+               policy: str = "multiplier") -> np.ndarray:
+    """psi (n_draws, K): the global parameters (coupling gains). multiplier: 10^U(-1, 1);
+    sinh: the gains, log10 G ~ U(-2, 2) in the signed log domain. draw_parameters draws them
+    after theta from the same rng; a corpus with per-model gains draws them once per model
+    (sim/corpus.py)."""
+    _check_policy(policy)
+    K = len(card.global_params)
+    if policy == "multiplier":
+        return 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, K))
     lo, hi = (float(np.arcsinh(10.0 ** b / SINH_SCALE)) for b in GAIN_LOG10)
-    psi = SINH_SCALE * np.sinh(rng.uniform(lo, hi, size=(n_draws, K)))
-    return theta, psi
+    return SINH_SCALE * np.sinh(rng.uniform(lo, hi, size=(n_draws, K)))
 
 
 def positive_params(card: ModelCard) -> set[str]:

@@ -74,6 +74,8 @@ class CorpusConfig:
     initial_state_scale: float    # x0 ~ U(-s, s), drawn per simulation
     fcd_store_stride: int         # store the FCD CDF at every k-th bin (summary.fcd_levels)
     parameter_policy: str         # spec/sampler.py: "multiplier" (corpus, d10) or "sinh" (pilot)
+    gain_scope: str               # coupling gains drawn per "draw" (corpora up to corpus_sinh) or
+                                  # once per "model", shared by all its draws (2026-11-04)
     output_dir: Path
 
 

@@ -216,6 +216,8 @@ Drawing each region independently over eight decades fails because one region fa
 
 **The corpus** (decided 2026-10-23): 100,000 valid train models × 100 draws (val and test 10,000 each), each draw also storing catch24 per region (§8).
 
+**Per-model coupling gains** (decided 2026-11-04, project lead; `corpus_sinh_fixed_gain.yaml`, `gain_scope: model`). With parameter tokens the network reads the constants and the coupling gains alike, as the template's global values (architecture.md §3.4). So a model is its equations, constants *and* gains: the gains are drawn once per model (same rule, $\log_{10} G \sim \mathcal{U}(-2, 2)$), and the model's screen draws and 100 base draws share them, differing only in the regional parameters. The network then learns different gains from different models, and a search over a fixed model (CMA-ES, planned) moves only regional parameters. Same seed as `corpus_sinh`: candidate $i$ has the same equations, constants and SC group, and draw $j$ the same regional parameters, initial state and noise (each draw still draws its own gains and discards them), so the two corpora differ only in how the gains are drawn. Target again 100,000 valid train models × 100 draws, val and test 10,000 each.
+
 ### Every reference model lands on the same triple
 
 | | regional | global |

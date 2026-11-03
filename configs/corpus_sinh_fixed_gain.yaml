@@ -1,0 +1,25 @@
+# Stage-1 corpus with per-model coupling gains (decided 2026-11-04, user): a model is its
+# equations, constants and coupling gains (the template's global values, which the
+# parameter-token network reads alike), so the gains are drawn once per model and its 100
+# draws differ only in the regional parameters (sim/corpus.py, gain_scope). Otherwise as
+# corpus_sinh.yaml, with the same seed: candidate i has the same equations, constants and SC
+# group, and draw j the same regional parameters, initial state and noise, so the two corpora
+# differ only in how the gains are drawn. Target: 100,000 valid train models x 100 draws
+# (val and test: 10,000 each), catch24 per region. Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+gain_scope: model             # gains drawn once per model; draws differ only in regional parameters
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh_fixed_gain

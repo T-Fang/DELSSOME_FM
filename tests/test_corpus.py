@@ -25,7 +25,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
     return CorpusConfig(seed=11, n_param_sets=n_param_sets, first_draw=first_draw, batch_size=2,
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
-                        parameter_policy="multiplier",
+                        parameter_policy="multiplier", gain_scope="draw",
                         output_dir=tmp_path)
 
 
@@ -180,3 +180,44 @@ def test_rebuild_of_an_old_chunk_equals_a_fresh_run(tmp_path, monkeypatch):
     assert new_arrays.keys() == arrays.keys()
     for k in arrays:
         np.testing.assert_array_equal(new_arrays[k], arrays[k], err_msg=k)
+
+
+@pytest.mark.parametrize("policy", ["multiplier", "sinh"])
+def test_model_gains_are_shared_by_all_draws_and_leave_the_rest_unchanged(tmp_path, policy):
+    from dataclasses import replace
+    from delssome_fm.sim.corpus import _SCREEN, model_gains
+    per_draw = replace(_cfg(tmp_path), parameter_policy=policy)
+    per_model = replace(per_draw, gain_scope="model")
+    index = next(i for i in range(50) if len(card_for(per_draw, "train", i).global_params) > 0)
+    card = card_for(per_draw, "train", index)
+    a = draws(per_draw, card, "train", index, _DRAW, 0, 6)
+    b = draws(per_model, card, "train", index, _DRAW, 0, 6)
+    screen = draws(per_model, card, "train", index, _SCREEN, 0, 3)
+    gains = model_gains(per_model, card, "train", index)
+    assert gains.shape == (len(card.global_params),)
+    np.testing.assert_array_equal(b[1], np.broadcast_to(gains, b[1].shape))     # every draw
+    np.testing.assert_array_equal(screen[1], np.broadcast_to(gains, screen[1].shape))
+    assert len(np.unique(a[1][:, 0])) == 6                                       # per draw: all differ
+    for k in (0, 2):                                                             # theta, x0
+        np.testing.assert_array_equal(a[k], b[k])
+    np.testing.assert_array_equal(jax.random.key_data(a[3]), jax.random.key_data(b[3]))
+    other = next(i for i in range(index + 1, 80)
+                 if len(card_for(per_draw, "train", i).global_params) > 0)
+    assert not np.array_equal(model_gains(per_model, card_for(per_model, "train", other), "train",
+                                          other)[:1], gains[:1])
+    with pytest.raises(ValueError, match="gain_scope must be one of"):
+        draws(replace(per_draw, gain_scope="row"), card, "train", index, _DRAW, 0, 1)
+
+
+@pytest.mark.cluster
+def test_per_draw_gains_still_reproduce_the_stored_sinh_corpus():
+    from delssome_fm.config import load_config
+    cfg = load_config(Path("configs/corpus_sinh.yaml"), CorpusConfig)
+    _, arrays = read_chunk(cfg, "train", 0, 5)
+    index = int(arrays["model"][0])
+    card = card_for(cfg, "train", index)
+    theta, psi, _, _ = draws(cfg, card, "train", index, _DRAW, 0, 3)
+    rows = np.flatnonzero(arrays["model"] == index)[:3]
+    P, K = theta.shape[2], psi.shape[1]
+    np.testing.assert_allclose(arrays["theta"][rows][..., :P], theta, rtol=1e-6)
+    np.testing.assert_allclose(arrays["psi"][rows][:, :K], psi, rtol=1e-6)

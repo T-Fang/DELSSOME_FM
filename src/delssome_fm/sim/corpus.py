@@ -13,6 +13,13 @@ A model is identified by (split, index). Everything about it is a deterministic 
        nor flat. Only valid models' arrays are stored; divergent and flat draws of a valid
        model are stored too, labelled (generation.md §7)
 
+Coupling gains (`gain_scope`). "draw": every draw, screen draws included, draws its own gains
+(corpora up to corpus_sinh). "model" (2026-11-04, user decision): a model is its equations,
+constants and gains, so the gains are drawn once from [seed, split, index, _GAIN]
+(`model_gains`) and every draw of the model, screen draws included, uses them; draws differ
+only in the regional parameters. Each draw still draws its own gains and discards them, so
+its theta, initial state and noise equal those of the same draw under "draw".
+
 Every candidate gets one log row (`CandidateLog`): the acceptance rate and mean
 off-diagonal FC per model that brief §8 asks to log, and its validity.
 
@@ -61,7 +68,7 @@ from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
 from delssome_fm.sim.summary import catch24, fcd_levels, summarize
 from delssome_fm.spec.card import ModelCard, card_to_dict
 from delssome_fm.spec.compile import CompiledModel, compile_card
-from delssome_fm.spec.sampler import draw_parameters, sample_card
+from delssome_fm.spec.sampler import draw_gains, draw_parameters, sample_card
 
 P_MAX = 5   # regional parameters: 1 + up to 4 (generation.md §4)
 K_MAX = 2   # global parameters: one per channel, at most 2
@@ -69,7 +76,8 @@ SPLIT_STREAM = {name: code for code, name in enumerate(SPLIT_NAMES)}  # train 0,
 
 # Stream tags for np.random.default_rng([seed, stream, index, tag, ...]); the card itself
 # uses [seed, stream, index] (sampler.sample_card).
-_SC, _DRAW, _SCREEN = 1, 2, 3
+_SC, _DRAW, _SCREEN, _GAIN = 1, 2, 3, 4
+GAIN_SCOPES = ("draw", "model")
 
 
 @dataclass(frozen=True)
@@ -113,15 +121,24 @@ def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
     return int(np.random.default_rng(_key(cfg, split, index, _SC)).integers(n_groups))
 
 
+def model_gains(cfg: CorpusConfig, card: ModelCard, split: str, index: int) -> np.ndarray:
+    """(K,) the model's coupling gains under gain_scope "model" (module docstring)."""
+    rng = np.random.default_rng(_key(cfg, split, index, _GAIN))
+    return draw_gains(card, rng, 1, cfg.parameter_policy)[0]
+
+
 def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, first: int,
           n: int):
     """theta (n, N, P), psi (n, K), x0 (n, N, V), keys (n,) for draws first..first+n-1."""
+    if cfg.gain_scope not in GAIN_SCOPES:
+        raise ValueError(f"gain_scope must be one of {GAIN_SCOPES}, found {cfg.gain_scope!r}")
+    fixed = model_gains(cfg, card, split, index) if cfg.gain_scope == "model" else None
     thetas, psis, x0s = [], [], []
     for j in range(first, first + n):
         rng = np.random.default_rng(_key(cfg, split, index, tag, j))
         theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy)
         thetas.append(theta[0])
-        psis.append(psi[0])
+        psis.append(psi[0] if fixed is None else fixed)
         x0s.append(rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
                                (N_REGIONS, card.n_states)))
     base = jax.random.key(cfg.seed)
