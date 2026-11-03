@@ -275,3 +275,29 @@ def predicted_mean_fc(module: Stage1Module, store: TrainingStore, rows: np.ndarr
         z = module.predict_statistics(batch, edges).pairwise
         out.append(costs.raw_fc(z, *module.pairwise_norm).mean(1).cpu().numpy())
     return np.concatenate(out)
+
+
+def regime_rows(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
+                ) -> dict[str, np.ndarray]:
+    """Per row of `store`: the simulated and predicted mean raw FC (upper triangle; coupled:
+    > coupled_threshold) and the cost terms between prediction and simulation (corr = 1 - r,
+    mean = d, ks). The reference-model variants are compared with synthetic draws on these
+    (scripts/reference_variants_compare.py)."""
+    r = predict_fc_fcd(module, store, np.asarray(rows))
+    return {"true_mean_fc": r["fc_true"].mean(1), "pred_mean_fc": r["fc_pred"].mean(1),
+            **cost_terms(r["fc_pred"], r["fc_true"], r["cdf_pred"], r["cdf_true"])}
+
+
+def regime_summary(r: dict[str, np.ndarray], threshold: float) -> dict[str, float]:
+    """regime_rows -> rows, coupled share, the regime call's recall of each regime (predicted
+    mean FC on the same side of `threshold`), and the median cost terms per simulated regime."""
+    coupled = r["true_mean_fc"] > threshold
+    called = r["pred_mean_fc"] > threshold
+    out = {"rows": len(coupled), "coupled_share": float(coupled.mean())}
+    for regime, mask in (("coupled", coupled), ("uncoupled", ~coupled)):
+        out[f"rows_{regime}"] = int(mask.sum())
+        out[f"recall_{regime}"] = float((called[mask] == (regime == "coupled")).mean()) \
+            if mask.any() else float("nan")
+        for t in ("corr", "mean", "ks"):
+            out[f"{t}_{regime}"] = float(np.nanmedian(r[t][mask])) if mask.any() else float("nan")
+    return out

@@ -537,6 +537,28 @@ Each tripling of the models lowers test total by 16–26%, and the train–test 
 
 **Reference models are not improved by scale** (MFM, FIC, Hopf at their published test fits, 50 sets each; medians, `comparison_table.md`). The 400k-step 300k model gives MFM 1 − r 0.47, d 0.24, KS 0.89; FIC 0.20 / 0.49 / 0.89; Hopf 0.10 / 0.29 / 0.74, against 0.42 / 0.25 / 0.88, 0.17 / 0.49 / 0.89 and 0.12 / 0.27 / 0.78 for the 100k model. d and KS stay worse than the training-average prediction (KS about 0.80) for all three, far above the noise floor of a second simulation (KS 0.10–0.16): the hand-written equations remain outside what the synthetic corpus teaches, however many synthetic models it has. The coupled-only model, evaluated on all test draws, predicts coupling where there is none (uncoupled median d 0.11, KS 0.53, vs 0.00 and 0.03). Per-run figures: `outputs/report_sinh/{sinh_ptok_raw_coupled_only,sinh_ptok_raw_m300k,sinh_ptok_raw_m300k_s400k}/figures/`.
 
+**Why the reference models fail: their variants (2026-11-04).** The best model predicts every fitted set as uncoupled (predicted mean FC 0.000–0.018 against simulated 0.25–0.49), at any coupling gain from 0.01× to 1000× the fitted one. The inputs are inside the training ranges (SC, parameter means and spreads, gains, constants, DAG size), and on synthetic test draws whose simulated mean FC and FCD resemble the reference simulations the model is accurate (d 0.02–0.04, KS 0.12–0.19). To separate the equation from the fitted operating point, each model was also simulated (sim/reference_eval.py, `scripts/submit_reference_variants.py`, 153 single-CPU jobs) at its 50 fitted sets with every regional map redrawn i.i.d. with the same mean and SD (*scrambled*: operating point kept, spatial structure and FIC's per-region $w_{IE}$ balance removed) and at 10,000 corpus draws of the card (*random*, `sampler.draw_parameters`), and evaluated with `scripts/reference_variants_compare.py` (`sinh_ptok_raw_m300k_s400k`; regime call = predicted mean FC > 0.05):
+
+| rows | usable rows | coupled share | coupled recall | uncoupled recall | coupled 1 − r / d / KS | uncoupled d / KS |
+|---|---|---|---|---|---|---|
+| synthetic test (20k of the final-evaluation rows) | 20,000 | 0.215 | 0.883 | 0.978 | 0.30 / 0.019 / 0.13 | 0.001 / 0.033 |
+| MFM fitted | 50 | 0.92 | 0.00 | (4 rows) | 0.42 / 0.27 / 0.89 | — |
+| MFM scrambled | 50 | 0.48 | 0.00 | 1.00 | 0.47 / 0.13 / 0.86 | 0.016 / 0.31 |
+| MFM random | 3,635 | 0.012 | 0.36 | 0.997 | 0.39 / 0.020 / 0.30 | 0.001 / 0.033 |
+| FIC fitted | 50 | 0.98 | 0.00 | (1 row) | 0.20 / 0.49 / 0.89 | — |
+| FIC scrambled | 50 | 0.08 | 0.00 | 1.00 | 0.53 / 0.058 / 0.57 | 0.026 / 0.15 |
+| FIC random | 3,982 | 0.039 | 0.00 | 1.00 | 0.36 / 0.063 / 0.64 | 0.001 / 0.037 |
+| Hopf fitted | 50 | 1.00 | 0.00 | — | 0.10 / 0.29 / 0.74 | — |
+| Hopf scrambled | 50 | 1.00 | 0.00 | — | 0.09 / 0.41 / 0.74 | — |
+| Hopf random | 5,565 | 0.24 | 0.53 | 0.82 | 0.18 / 0.22 / 0.84 | 0.004 / 0.088 |
+
+(Random draws: 53%, 51% and 44% diverged, 11%, 9% and 0% flat, the corpus's usual rates.)
+
+- **Spatial structure is not why the network fails.** It misses every coupled scrambled draw as well (24 MFM, 4 FIC, 50 Hopf). The structure matters to the simulation instead: scrambling turns MFM from 92% to 48% coupled and FIC from 98% to 8%, so the fitted maps (FIC's per-region balance above all) are what put these models in their regime.
+- **Hopf fails on its equation.** At corpus parameters it is coupled as often as a typical corpus model (24%), yet the model is far worse than on synthetic test equations: coupled recall 0.53 vs 0.88, uncoupled recall 0.82 vs 0.98, coupled KS 0.84 vs 0.13. Its one gain shared by two coupling channels never occurs in the grammar (no training model has its $(V, P, K, C)$ and direct observation).
+- **MFM and FIC fail in a regime their equations rarely reach.** At corpus parameters they are almost always uncoupled (1.2% and 3.9% coupled), and there the model is at the synthetic baseline (d 0.001, KS 0.033–0.037). Their coupled draws it rarely recognises (recall 0.36 and 0.00), and the fitted sets lie in that corner. Synthetic models show the same pattern: the recall of a test draw that is coupled falls with how often its model couples (0.93 when > 90% of the model's draws are coupled, 0.88 at 15–50%, 0.73 at 5–15%, 0.48 below 5%).
+- So the synthetic distribution does differ from the reference models, in two specific ways: an equation structure the grammar lacks (Hopf), and regimes that are a small corner of an equation's parameter space under i.i.d. sampling, reached by the fits through structured, mutually dependent parameters (MFM, FIC). Reweighting existing draws (oversampling, coupled-only training) repeats the few coupled draws such a model has; covering that corner needs new draws there.
+
 **Coupling classifier** (`sinh_ptok_raw_coupling_cls`, `task: coupling`, train/coupling.py): the same backbone with one MLP on $h_{\text{CLS}}$, trained on binary cross-entropy (coupled vs uncoupled) alone, 100k models. Best val BCE at step ~125k. Against it, the regime that the statistics models imply (predicted mean FC > 0.05; scripts/coupling_report_data.py) on the same test rows:
 
 | model | AUROC | balanced accuracy (at 0.5 / best threshold) | recall coupled | recall uncoupled | recall coupled at 2.7% / 5% false coupled |

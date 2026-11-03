@@ -734,6 +734,20 @@ def test_classification_metrics():
     assert np.isnan(classification_metrics(logit, torch.ones(5, dtype=torch.bool))["auroc"])
 
 
+def test_regime_summary():
+    from delssome_fm.train.report import regime_summary
+    r = {"true_mean_fc": np.array([0.3, 0.4, 0.01, 0.02, 0.0]),
+         "pred_mean_fc": np.array([0.2, 0.0, 0.0, 0.1, 0.01]),
+         "corr": np.array([0.1, 0.9, 1.0, 0.95, np.nan]), "mean": np.array([0.1, 0.4, 0, 0.08, 0.01]),
+         "ks": np.array([0.2, 0.8, 0.05, 0.3, 0.02])}
+    s = regime_summary(r, 0.05)
+    assert (s["rows"], s["rows_coupled"], s["rows_uncoupled"]) == (5, 2, 3)
+    assert s["coupled_share"] == pytest.approx(0.4)
+    assert (s["recall_coupled"], s["recall_uncoupled"]) == (0.5, pytest.approx(2 / 3))
+    assert s["corr_coupled"] == pytest.approx(0.5) and s["corr_uncoupled"] == pytest.approx(0.975)
+    assert s["ks_uncoupled"] == pytest.approx(0.05)
+
+
 def test_lightning_coupling_run_evaluates_and_reloads(tiny_store_sinh, tmp_path):
     from delssome_fm.train.coupling import CouplingModule, load_coupling
     from delssome_fm.train.evaluate import load_stage1

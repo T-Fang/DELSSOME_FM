@@ -21,6 +21,12 @@ corpus) and every fitted set is usable, MFM's sign-changing ones included.
 Each usable set is simulated `n_repeats` times with independent noise and initial states
 (x0 ~ U(-s, s) as in the corpus) on the test group's SC, and written as a corpus-style chunk
 per repeat, so train/pack.pack_chunks packs it into a store split <model>_r<k>.
+
+Variants (2026-11-04, sinh policy; architecture.md §7.8): the stage-1 model calls every fitted
+set uncoupled. To tell whether it fails on the equation or at the fitted operating point, each
+model is also simulated once per parameter set at `variant_parameters`, into store splits
+<model>_<variant>: `scrambled` keeps the fitted operating point but draws each regional map
+i.i.d. over regions, as the corpus does; `random` draws the parameters as the corpus would.
 """
 
 from __future__ import annotations
@@ -39,6 +45,10 @@ from delssome_fm.sim.corpus import simulate_given
 from delssome_fm.spec.card import Coef, ModelCard, card_to_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.reference import load_reference
+from delssome_fm.spec.sampler import draw_parameters, positive_params
+
+VARIANTS = ("scrambled", "random")
+_VARIANT_STREAM = 1000      # seeds [seed, model, 1000, variant]; the repeats use [seed, model, k]
 
 
 def fitted_sets(rcfg: ReproduceConfig, name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -131,14 +141,98 @@ def simulate_model(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: ReferenceE
         res = simulate_given(dataclasses.replace(corpus_cfg, batch_size=len(sets)), sim_cfg,
                              model, theta[sets], psi[sets], x0, keys, sc)
         res.update(model=np.zeros(len(sets), np.int64), draw=sets)
-        path = out / f"{name}_r{k}"
-        np.savez(path.with_suffix(".npz"), **res)
-        path.with_suffix(".cards.jsonl").write_text(json.dumps(
-            {"split": "reference", "index": 0, "sc_group": 0, "card": card_to_dict(card)}) + "\n")
+        _write_chunk(out / f"{name}_r{k}", res, card)
     t = np.abs(theta[sets])
     return {"model": name, "sets": int(len(sets)), "excluded_sets": int((~usable).sum()),
             "parameter_policy": corpus_cfg.parameter_policy, "factors": factors, "sc": sc,
             "log10_abs_theta_range": [float(np.log10(t).min()), float(np.log10(t).max())]}
+
+
+def _write_chunk(path: Path, res: dict, card: ModelCard) -> None:
+    """A corpus-style chunk of one model: path.npz and path.cards.jsonl."""
+    np.savez(path.with_suffix(".npz"), **res)
+    path.with_suffix(".cards.jsonl").write_text(json.dumps(
+        {"split": "reference", "index": 0, "sc_group": 0, "card": card_to_dict(card)}) + "\n")
+
+
+def variant_draw(card: ModelCard, theta: np.ndarray, psi: np.ndarray, variant: str, j: int,
+                 rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """theta (S, N, P), psi (S, K): a card's fitted sets in actual values (`actual_values`).
+    Returns draw j of one variant, theta (N, P) and psi (K,):
+
+        scrambled  fitted set j with every regional map replaced by values i.i.d. over regions
+                   with the map's mean and SD (the corpus's mu + kappa |mu| eps,
+                   sampler.draw_parameters; |theta| for sigma and free L diagonals); its psi
+                   unchanged. The operating point stays; the spatial structure and the
+                   per-region dependencies (FIC's analytic w_IE) go.
+        random     a corpus draw of the card (sampler.draw_parameters, sinh): the equation at
+                   parameters the corpus would give it.
+    """
+    if variant == "random":
+        t, p = draw_parameters(card, rng, 1, theta.shape[1], "sinh")
+        return t[0], p[0]
+    if variant != "scrambled":
+        raise ValueError(f"variant must be one of {VARIANTS}, found {variant!r}")
+    if not 0 <= j < len(theta):
+        raise ValueError(f"scrambled draw {j}: there are {len(theta)} fitted sets")
+    mean, sd = theta[j].mean(axis=0), theta[j].std(axis=0)
+    out = mean + sd * rng.standard_normal(theta[j].shape)
+    fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
+    return np.where(fixed, np.abs(out), out), psi[j].copy()
+
+
+def simulate_variant(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, cfg: ReferenceEvalConfig,
+                     rcfg: ReproduceConfig, name: str, variant: str, first: int, n: int) -> dict:
+    """Simulate draws first..first+n-1 of one variant of a reference model (module docstring)
+    on the fitted sets' SC and write chunk <output_dir>/chunks/<name>_<variant>_<first>.npz;
+    returns a summary. A draw depends only on its index (seeds [seed, model, 1000, variant,
+    j]), so any split into chunks gives the same draws. Sinh policy only: the variants are
+    actual values."""
+    if corpus_cfg.parameter_policy != "sinh":
+        raise ValueError(f"variants need the sinh policy, the corpus has "
+                         f"{corpus_cfg.parameter_policy!r}")
+    theta, psi, sc = fitted_sets(rcfg, name)
+    card, theta, psi, _ = actual_values(load_reference(name), theta, psi)
+    code, v = cfg.models.index(name), VARIANTS.index(variant)
+    draws = range(first, first + n)
+    thetas, psis, x0s = [], [], []
+    for j in draws:
+        rng = np.random.default_rng([cfg.seed, code, _VARIANT_STREAM, v, j])
+        t, p = variant_draw(card, theta, psi, variant, j, rng)
+        thetas.append(t)
+        psis.append(p)
+        x0s.append(rng.uniform(-corpus_cfg.initial_state_scale, corpus_cfg.initial_state_scale,
+                               (sc.shape[0], card.n_states)))
+    base = jax.random.key(cfg.seed)
+    for x in (code, _VARIANT_STREAM, v):
+        base = jax.random.fold_in(base, x)
+    keys = jax.numpy.stack([jax.random.fold_in(base, j) for j in draws])
+    batch = dataclasses.replace(corpus_cfg, batch_size=min(n, corpus_cfg.batch_size))
+    res = simulate_given(batch, sim_cfg, compile_card(card), np.stack(thetas), np.stack(psis),
+                         np.stack(x0s), keys, sc)
+    res.update(model=np.zeros(n, np.int64), draw=np.arange(first, first + n))
+    out = cfg.output_dir / "chunks"
+    out.mkdir(parents=True, exist_ok=True)
+    _write_chunk(out / f"{name}_{variant}_{first:06d}", res, card)
+    return {"model": name, "variant": variant, "first": first, "draws": n,
+            "diverged": int(res["diverged"].sum()), "flat": int(res["flat"].sum())}
+
+
+def pack_variant(cfg: ReferenceEvalConfig, sim_cfg: SimConfig, rcfg: ReproduceConfig, name: str,
+                 variant: str, n_draws: int) -> dict:
+    """Pack the chunks <name>_<variant>_*.npz into store split <output_dir>/store/
+    <name>_<variant>, beside the fitted sets' splits (the same normalisation.npz). Raises
+    unless the chunks hold draws 0..n_draws-1 exactly once."""
+    from delssome_fm.train.pack import n_window_pairs, pack_chunks
+    chunks = sorted((cfg.output_dir / "chunks").glob(f"{name}_{variant}_*.npz"))
+    found = np.sort(np.concatenate([np.load(c)["draw"] for c in chunks])) if chunks else []
+    if not np.array_equal(found, np.arange(n_draws)):
+        raise ValueError(f"{name}_{variant}: chunks hold {len(found)} draws "
+                         f"({len(np.unique(found))} distinct), expected draws 0..{n_draws - 1}")
+    sc = fitted_sets(rcfg, name)[2]
+    return pack_chunks(chunks, [0], n_window_pairs(sim_cfg),
+                       cfg.output_dir / "store" / f"{name}_{variant}", sc[None],
+                       {"model": name, "variant": variant, "parameter_policy": "sinh"})
 
 
 def pack_model(cfg: ReferenceEvalConfig, sim_cfg: SimConfig, name: str, sc: np.ndarray,

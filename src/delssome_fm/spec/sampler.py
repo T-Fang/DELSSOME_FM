@@ -384,7 +384,7 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
         psi = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, K))
         return theta, psi
-    fixed = np.array([p in _positive_params(card) for p in card.regional_params], dtype=bool)
+    fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
     z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
     mu = SINH_SCALE * np.sinh(np.where(fixed, np.abs(z), z))[:, None, :]
     kappa = rng.uniform(*SPREAD_RANGE, size=(n_draws, P))[:, None, :]
@@ -395,7 +395,7 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
     return theta, psi
 
 
-def _positive_params(card: ModelCard) -> set[str]:
+def positive_params(card: ModelCard) -> set[str]:
     """Regional parameters whose sign the slot fixes: sigma and free L diagonals."""
     diagonal = {card.linear[v][v].param for v in range(card.n_states)
                 if card.linear[v][v] is not None}
