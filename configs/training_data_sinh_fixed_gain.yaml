@@ -1,0 +1,8 @@
+# The stage-1 training store packed from configs/corpus_sinh_fixed_gain.yaml (per-model coupling
+# gains, generation.md §5; sinh policy, 100 draws per model; 2026-11-04). Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_sinh_fixed_gain
+
+# the first valid models of each split (submitted 2026-11-04: train candidates 0..299,999,
+# val and test 0..30,999; pilot valid rate 34.3%)
+n_models: {train: 100000, val: 10000, test: 10000}
