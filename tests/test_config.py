@@ -70,7 +70,8 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "training_data_sinh300k": TrainingDataConfig, "training_data_sinh_fixed_gain": TrainingDataConfig,
                   "stage1_d10": Stage1Config, "stage1_sinh_smoke": Stage1Config, "stage1_sinh": Stage1Config, "fc_autoencoder": FCAutoencoderConfig,
                   "reference_eval": ReferenceEvalConfig,
-                  "reference_eval_sinh": ReferenceEvalConfig, "cmaes_pilot": CmaesConfig}
+                  "reference_eval_sinh": ReferenceEvalConfig, "cmaes_pilot": CmaesConfig,
+                  "cmaes": CmaesConfig}
 
 
 @pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))

@@ -1,0 +1,16 @@
+# CMA-ES around coupled draws, full run (sim/cmaes.py; generation.md §9): the rarely coupled
+# models (0 < coupled share <= 15% of usable base draws) of corpus_sinh_fixed_gain's corpus,
+# all three splits. Settings chosen from the pilot (configs/cmaes_pilot.yaml; project lead,
+# 2026-11-05): sigma0 0.05, 16 x 30. Every field is required.
+
+corpus_config: configs/corpus_sinh_fixed_gain.yaml
+n_models: {train: 100000, val: 10000, test: 10000}   # the corpus: first valid models
+coupled_threshold: 0.05       # coupled: mean off-diagonal FC > 0.05 (the regime call)
+max_coupled_share: 0.15       # the 0-5% and 5-15% bands
+max_runs: 2                   # run 2 (second-lowest-cost coupled draw) only if run 1 fails
+min_coupled_share: 0.5        # run fails: < 50% of its usable candidates coupled
+population: 16
+generations: 30
+sigma0: 0.05                  # u spans [0, 1]: a level moves by ~2 of its 38 asinh units
+failed_cost: 5.0              # the largest possible total: 2 (1 - r) + 2 (d) + 1 (KS)
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/cmaes
