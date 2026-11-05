@@ -2,7 +2,7 @@
 training store (scripts/pack_training_data.py) and a GPU; run it as a job in the training env:
 
     python scripts/submit_job.py --name stage1 --walltime 48:00:00 --mem 64G --ncpus 9 \\
-        --ngpus 1 --gpu-type H100 --conda-env delssome_fm_train --submit \\
+        --ngpus 1 --conda-env delssome_fm_train --submit \\
         -- env OMP_NUM_THREADS=1 python scripts/train_stage1.py --run-name first
 
 OMP_NUM_THREADS=1: torch otherwise starts one thread per core of the node in every data

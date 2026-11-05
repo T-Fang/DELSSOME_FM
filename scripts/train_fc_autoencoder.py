@@ -2,7 +2,7 @@
 packed store and a GPU; run it as a job in the training env:
 
     python scripts/submit_job.py --name fc_ae_64 --walltime 12:00:00 --mem 32G --ncpus 9 \\
-        --ngpus 1 --gpu-type L40S --conda-env delssome_fm_train --submit \\
+        --ngpus 1 --conda-env delssome_fm_train --submit \\
         -- env OMP_NUM_THREADS=1 python scripts/train_fc_autoencoder.py --run-name fc_ae_64
 """
 

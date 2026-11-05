@@ -14,6 +14,11 @@ script's own forwarding uses plain `ssh headnode`, which the sandbox rejects (it
 Dry run is the default. It prints the script and the command it would run, and writes
 nothing.
 
+GPU type (decided 2026-11-05, project lead): `pick_gpu_type` takes an H200 if some H200 node
+can take the job now (state free, enough free GPUs, CPUs and memory on that node), else an
+H100 by the same test, else the L40S queue. `free_gpu_type` reads the nodes with
+`pbsnodes -a` on the headnode. Free GPUs can still go to jobs already queued for them.
+
 This module does not decide what to run or how to split work into jobs; the corpus and
 training code do that. It does not write job manifests either; each job writes its own.
 """
@@ -31,6 +36,10 @@ from pathlib import Path
 from delssome_fm.config import ClusterConfig
 
 GPU_TYPES: tuple[str, ...] = ("L40S", "H200", "H100")  # queues gpuQ-<type> in CBIG_pbsubmit
+GPU_PREFERENCE: tuple[str, ...] = ("H200", "H100")     # taken when free; else DEFAULT_GPU
+DEFAULT_GPU = "L40S"
+_SIZE = re.compile(r"^(\d+)(b|kb|mb|gb|tb|k|m|g|t)?$")
+_UNITS = {"b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}
 MAX_GPUS = 4  # per-user limit stated in CBIG_pbsubmit -help
 _WALLTIME = re.compile(r"^\d{2,3}:[0-5]\d:[0-5]\d$")
 _MEMORY = re.compile(r"^\d+(G|GB|M|MB)$")
@@ -126,6 +135,68 @@ def submission_argv(job: Job, cluster: ClusterConfig, host: str) -> list[str]:
     if host == "headnode":
         return list(job.argv)
     return [*cluster.headnode_ssh, shlex.join(job.argv)]
+
+
+def parse_pbsnodes(text: str) -> list[dict[str, str]]:
+    """`pbsnodes -a` output -> one dict per node: "name" and every "key = value" line."""
+    nodes: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            nodes.append({"name": line.strip()})
+        elif " = " in line:
+            if not nodes:
+                raise ValueError(f"pbsnodes output starts with an attribute: {line!r}")
+            key, _, value = line.strip().partition(" = ")
+            nodes[-1][key] = value
+    return nodes
+
+
+def _bytes(size: str) -> int:
+    """'1030580mb', '587202560kb', '0b', '64G' -> bytes (PBS units are powers of 1024)."""
+    m = _SIZE.match(size.strip().lower())
+    if m is None:
+        raise ValueError(f"cannot read the size {size!r}")
+    return int(m[1]) * _UNITS[(m[2] or "b")[0]]
+
+
+def free_on_node(node: dict[str, str]) -> dict[str, int]:
+    """Free GPUs, CPUs and memory (bytes) of one parsed node; all 0 unless its state is free."""
+    if node.get("state") != "free":
+        return {"ngpus": 0, "ncpus": 0, "mem": 0}
+    free = {}
+    for key, read in (("ngpus", int), ("ncpus", int), ("mem", _bytes)):
+        have, used = (node.get(f"resources_{k}.{key}") for k in ("available", "assigned"))
+        free[key] = 0 if have is None else read(have) - (0 if used is None else read(used))
+    return free
+
+
+def pick_gpu_type(nodes: list[dict[str, str]], resources: Resources) -> str:
+    """The first of GPU_PREFERENCE with a node that can take the job now, else DEFAULT_GPU."""
+    need = {"ngpus": resources.ngpus, "ncpus": resources.ncpus, "mem": _bytes(resources.memory)}
+    for gpu_type in GPU_PREFERENCE:
+        for node in nodes:
+            free = free_on_node(node)
+            if node.get("queue") == f"gpuQ-{gpu_type}" and all(free[k] >= v
+                                                               for k, v in need.items()):
+                return gpu_type
+    return DEFAULT_GPU
+
+
+def free_gpu_type(resources: Resources, cluster: ClusterConfig) -> tuple[str, dict[str, int]]:
+    """(pick_gpu_type on the live nodes, free GPUs per type) via `pbsnodes -a` on the
+    headnode."""
+    if resources.ngpus < 1:
+        raise ValueError("a GPU type is chosen only for GPU jobs (ngpus >= 1)")
+    argv = ["pbsnodes", "-a"]
+    if socket.gethostname() != "headnode":
+        argv = [*cluster.headnode_ssh, shlex.join(argv)]
+    nodes = parse_pbsnodes(subprocess.run(argv, check=True, capture_output=True, text=True,
+                                          stdin=subprocess.DEVNULL).stdout)
+    if not any(n.get("queue", "").startswith("gpuQ-") for n in nodes):
+        raise ValueError("pbsnodes -a listed no GPU node (no queue gpuQ-*)")
+    free = {t: sum(free_on_node(n)["ngpus"] for n in nodes if n.get("queue") == f"gpuQ-{t}")
+            for t in GPU_TYPES}
+    return pick_gpu_type(nodes, resources), free
 
 
 def submit_batch(requests: list[tuple[str, str, Resources]], cluster: ClusterConfig,

@@ -1,4 +1,6 @@
 """Submit one shell command as a cluster job. Prints a dry run unless --submit is given.
+GPU jobs: --gpu-type auto (the default) takes a free H200, else a free H100, else the L40S
+queue (cluster/submit.py, pick_gpu_type).
 
     python scripts/submit_job.py --name verify --walltime 01:00:00 --mem 16G \\
         -- python scripts/verify_groups.py
@@ -9,7 +11,7 @@ import dataclasses
 import shlex
 from pathlib import Path
 
-from delssome_fm.cluster.submit import Resources, submit
+from delssome_fm.cluster.submit import GPU_TYPES, Resources, free_gpu_type, submit
 from delssome_fm.config import ClusterConfig, load_config
 
 
@@ -21,7 +23,7 @@ def main() -> None:
     parser.add_argument("--mem", required=True, help="e.g. 16G")
     parser.add_argument("--ngpus", type=int, default=0)
     parser.add_argument("--ncpus", type=int, default=1)
-    parser.add_argument("--gpu-type", default="L40S")
+    parser.add_argument("--gpu-type", choices=("auto", *GPU_TYPES), default="auto")
     parser.add_argument("--conda-env", default=None,
                         help="override cluster.yaml's env, e.g. delssome_fm_train for training")
     parser.add_argument("--submit", action="store_true", help="actually submit (default: dry run)")
@@ -30,8 +32,14 @@ def main() -> None:
 
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     resources = Resources(walltime=args.walltime, memory=args.mem, ngpus=args.ngpus,
-                          ncpus=args.ncpus, gpu_type=args.gpu_type)
+                          ncpus=args.ncpus)
     cluster = load_config(args.config, ClusterConfig)
+    if args.ngpus > 0:
+        gpu_type = args.gpu_type
+        if gpu_type == "auto":
+            gpu_type, free = free_gpu_type(resources, cluster)
+            print(f"[gpu] free GPUs {free}; chosen {gpu_type}")
+        resources = dataclasses.replace(resources, gpu_type=gpu_type)
     if args.conda_env is not None:
         cluster = dataclasses.replace(cluster, conda_env=args.conda_env)
     submit(shlex.join(command), args.name, resources, cluster, dry_run=not args.submit)

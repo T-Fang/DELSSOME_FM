@@ -2,7 +2,7 @@
 and log it into that run's MLflow record, for runs trained before it existed. Use a GPU job:
 
     python scripts/submit_job.py --name final_eval --walltime 02:00:00 --mem 64G --ncpus 9 \\
-        --ngpus 1 --gpu-type H200 --conda-env delssome_fm_train --submit -- \\
+        --ngpus 1 --conda-env delssome_fm_train --submit -- \\
         python scripts/evaluate_final.py --run-name d10_n300k_natural \\
         --checkpoint outputs/stage1/d10_n300k_natural/step80000.ckpt
 """

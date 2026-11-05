@@ -106,3 +106,48 @@ def test_batch_dry_run_writes_nothing_and_uses_one_remote_call(cluster, capsys, 
     out = capsys.readouterr().out
     remote = out.strip().splitlines()[-1]
     assert remote.startswith(shlex.join(cluster.headnode_ssh)) and "bash" in remote
+
+
+def _node(name, queue, ngpus=(8, 0), ncpus=(128, 0), mem=("1000gb", "0kb"), state="free"):
+    return (f"{name}\n     state = {state}\n     resources_available.mem = {mem[0]}\n"
+            f"     resources_available.ncpus = {ncpus[0]}\n     resources_available.ngpus = {ngpus[0]}\n"
+            f"     resources_assigned.mem = {mem[1]}\n     resources_assigned.ncpus = {ncpus[1]}\n"
+            f"     resources_assigned.ngpus = {ngpus[1]}\n     queue = {queue}\n\n")
+
+
+JOB = Resources("01:00:00", "64G", ngpus=1, ncpus=9)
+
+
+def test_parse_pbsnodes_and_free_resources():
+    nodes = submit_mod.parse_pbsnodes(_node("gpuserver8", "gpuQ-H200", ngpus=(8, 5),
+                                            ncpus=(128, 34), mem=("1030580mb", "587202560kb"))
+                                      + _node("cpu1", "defaultQ"))
+    assert [n["name"] for n in nodes] == ["gpuserver8", "cpu1"]
+    free = submit_mod.free_on_node(nodes[0])
+    assert free == {"ngpus": 3, "ncpus": 94, "mem": 1030580 * 1024 ** 2 - 587202560 * 1024}
+    with pytest.raises(ValueError, match="starts with an attribute"):
+        submit_mod.parse_pbsnodes("     state = free\n")
+
+
+@pytest.mark.parametrize("text,expected", [
+    # H200 free -> H200, even when an H100 is free too
+    (_node("g8", "gpuQ-H200", ngpus=(8, 5)) + _node("g6", "gpuQ-H100"), "H200"),
+    # H200 full -> H100 if free
+    (_node("g8", "gpuQ-H200", ngpus=(8, 8)) + _node("g6", "gpuQ-H100", ngpus=(4, 3)), "H100"),
+    # both full -> L40S
+    (_node("g8", "gpuQ-H200", ngpus=(8, 8)) + _node("g6", "gpuQ-H100", ngpus=(4, 4))
+     + _node("g5", "gpuQ-L40S"), "L40S"),
+    # a free GPU on a node without the CPUs, the memory, or not in state free does not count
+    (_node("g8", "gpuQ-H200", ncpus=(128, 125)) + _node("g6", "gpuQ-H100", mem=("100gb", "50gb")),
+     "L40S"),
+    (_node("g8", "gpuQ-H200", state="offline") + _node("g6", "gpuQ-H100", state="down"), "L40S"),
+])
+def test_pick_gpu_type_prefers_free_h200_then_h100_then_l40s(text, expected):
+    assert submit_mod.pick_gpu_type(submit_mod.parse_pbsnodes(text), JOB) == expected
+
+
+def test_pick_gpu_type_needs_all_gpus_on_one_node():
+    two = Resources("01:00:00", "8G", ngpus=2)
+    nodes = submit_mod.parse_pbsnodes(_node("a", "gpuQ-H200", ngpus=(8, 7))
+                                      + _node("b", "gpuQ-H200", ngpus=(8, 7)))
+    assert submit_mod.pick_gpu_type(nodes, two) == "L40S"
