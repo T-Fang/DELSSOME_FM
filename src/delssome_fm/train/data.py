@@ -2,9 +2,12 @@
 
 `TrainingStore` opens one split's arrays (memory-mapped, so many loader workers can share
 them) and builds a whole batch from a list of row indices: inputs, the models' equation
-graphs padded to the batch's largest graph, and the z-scored targets.
+graphs padded to the batch's largest graph, and the z-scored targets. With cma=True it also
+serves the split's CMA-ES draws (<split>_cma, train/pack.py): rows 0..n_base-1 are the base
+draws, the rows after them the CMA-ES draws, and every row weighs the same.
 
-`Stage1DataModule` gives Lightning a shuffled train loader and a fixed validation subset.
+`Stage1DataModule` gives Lightning a shuffled train loader and a fixed validation set (all
+val rows, or a fixed random subset).
 The loader samples batches of row indices and each worker builds one batch at a time, so a
 batch is read with one sorted fancy-index per array rather than B separate reads.
 """
@@ -33,13 +36,14 @@ Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24", "fc_net")   # fcd: 
 class Stage1Batch:
     """theta (B, N, P) and psi (B, K): the parameters as encode_parameters gives them, 0
     where the model has no such parameter; sc (B, N, N); graph: the rows' DAGs; targets:
-    name -> tensor (pack.TARGETS)."""
+    name -> tensor (pack.TARGETS); cma (B,) bool: which rows are CMA-ES draws."""
 
     theta: torch.Tensor
     psi: torch.Tensor
     sc: torch.Tensor
     graph: GraphBatch
     targets: dict[str, torch.Tensor]
+    cma: torch.Tensor
 
     def pin_memory(self) -> "Stage1Batch":
         """Called by DataLoader(pin_memory=True) for faster copies to the GPU."""
@@ -47,13 +51,15 @@ class Stage1Batch:
         graph = GraphBatch(**{f.name: pin(getattr(self.graph, f.name))
                               for f in dataclasses.fields(GraphBatch)})
         return Stage1Batch(pin(self.theta), pin(self.psi), pin(self.sc), graph,
-                           {k: pin(v) for k, v in self.targets.items()})
+                           {k: pin(v) for k, v in self.targets.items()}, pin(self.cma))
 
 
 class TrainingStore(Dataset):
-    """One split of the store. Indexing with a list of row indices returns a Stage1Batch."""
+    """One split of the store, with its CMA-ES draws after the base draws if cma. Indexing
+    with a list of row indices returns a Stage1Batch. `rows` holds the base draws' arrays;
+    `column` reads any row."""
 
-    def __init__(self, store_dir: Path, split: str):
+    def __init__(self, store_dir: Path, split: str, cma: bool = False):
         root = Path(store_dir) / split
         if not (root / "summary.json").is_file():
             raise FileNotFoundError(f"{root}: no packed split (run scripts/pack_training_data.py)")
@@ -79,9 +85,45 @@ class TrainingStore(Dataset):
         if self.parameter_policy not in POLICIES:
             raise ValueError(f"{root}/summary.json must name the corpus's parameter_policy "
                              f"(one of {POLICIES}), found {self.parameter_policy!r}")
+        self.n_base = len(self.rows["model"])
+        self.cma_rows = self._cma_rows(Path(store_dir), split) if cma else None
+
+    def _cma_rows(self, store_dir: Path, split: str) -> dict[str, np.ndarray]:
+        root = store_dir / f"{split}_cma"
+        if not (root / "summary.json").is_file():
+            raise FileNotFoundError(f"{root}: no packed CMA-ES draws (run scripts/pack_cmaes.py)")
+        info = json.loads((root / "summary.json").read_text())
+        if (info.get("base_split"), info.get("parameter_policy")) != (split, self.parameter_policy):
+            raise ValueError(f"{root} holds CMA-ES draws of split {info.get('base_split')!r} under "
+                             f"policy {info.get('parameter_policy')!r}, expected {split!r} under "
+                             f"{self.parameter_policy!r}")
+        missing = [k for k in self.targets if not (root / f"{k}.npy").is_file()]
+        if missing:
+            raise ValueError(f"{root} lacks the targets {missing} that {split} has")
+        rows = {k: np.load(root / f"{k}.npy", mmap_mode="r")
+                for k in ("model", "theta", "psi", *self.targets)}
+        lengths = {k: len(v) for k, v in rows.items()}
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"{root}: its arrays have different numbers of rows {lengths} "
+                             f"(an array left from an earlier packing?)")
+        return rows
 
     def __len__(self) -> int:
-        return len(self.rows["model"])
+        return self.n_base + (0 if self.cma_rows is None else len(self.cma_rows["model"]))
+
+    def column(self, name: str, rows: np.ndarray) -> np.ndarray:
+        """The row array `name` at store rows `rows` (base draws, then CMA-ES draws)."""
+        rows = np.asarray(rows)
+        cma = rows >= self.n_base
+        if not cma.any():
+            return np.asarray(self.rows[name][rows])
+        if self.cma_rows is None or rows.max() >= len(self):
+            raise IndexError(f"row {rows.max()} is outside the store's {len(self)} rows")
+        base = self.rows[name]
+        out = np.empty((len(rows), *base.shape[1:]), base.dtype)
+        out[~cma] = base[rows[~cma]]
+        out[cma] = self.cma_rows[name][rows[cma] - self.n_base]
+        return out
 
     @property
     def n_fcd_levels(self) -> int:
@@ -89,13 +131,14 @@ class TrainingStore(Dataset):
 
     def __getitem__(self, rows: list[int]) -> Stage1Batch:
         idx = np.sort(np.asarray(rows))
-        model = self.rows["model"][idx]
-        targets = {k: torch.from_numpy(self._target(k, self.rows[k][idx])) for k in self.targets}
+        model = self.column("model", idx)
+        targets = {k: torch.from_numpy(self._target(k, self.column(k, idx))) for k in self.targets}
         encode = lambda x: encode_parameters(x, self.parameter_policy)    # noqa: E731
-        return Stage1Batch(theta=encode(self.rows["theta"][idx]),
-                           psi=encode(self.rows["psi"][idx]),
+        return Stage1Batch(theta=encode(self.column("theta", idx)),
+                           psi=encode(self.column("psi", idx)),
                            sc=torch.from_numpy(self.sc[self.models["sc_group"][model]]),
-                           graph=self._graphs(model), targets=targets)
+                           graph=self._graphs(model), targets=targets,
+                           cma=torch.from_numpy(idx >= self.n_base))
 
     def _target(self, name: str, x: np.ndarray) -> np.ndarray:
         if name not in Z_SCORED:
@@ -161,9 +204,12 @@ class Composition:
     coupled_share     None: the first n_models models of the corpus, as they come. A number:
                       that share of coupled models, the rest uncoupled, each the first ones
                       of their kind (models without usable draws are skipped)
-    coupled_threshold a model is coupled if its mean FC, over its stored draws, exceeds this
+    coupled_threshold a model is coupled if its mean FC, over its base draws, exceeds this
     coupled_draws     True: of the chosen rows keep only coupled draws (the draw's own mean
                       FC > coupled_threshold; 2026-10-26, the coupled-only test)
+
+    A store opened with cma=True adds every CMA-ES row of the chosen models; draws_per_model
+    limits their base draws only.
     """
 
     n_models: int
@@ -175,13 +221,14 @@ class Composition:
 
 def coupled_rows(store: TrainingStore, rows: np.ndarray, threshold: float) -> np.ndarray:
     """The rows of `rows` whose simulated draw is coupled: mean off-diagonal FC > threshold."""
-    rows = np.asarray(rows)
-    fc = np.asarray(store.rows["fc_moments"][np.sort(rows), 0])     # column 0: mean FC
-    return np.sort(rows)[fc > threshold]
+    rows = np.sort(np.asarray(rows))
+    fc = store.column("fc_moments", rows)[:, 0]                      # column 0: mean FC
+    return rows[fc > threshold]
 
 
 def model_mean_fc(store: TrainingStore) -> np.ndarray:
-    """(models,) each model's mean off-diagonal FC averaged over its rows; NaN without rows."""
+    """(models,) each model's mean off-diagonal FC averaged over its base rows; NaN without
+    rows."""
     n_rows = store.models["n_rows"]
     fc = np.asarray(store.rows["fc_moments"][:, 0], np.float64)   # column 0: mean FC
     sums = np.bincount(np.asarray(store.rows["model"]), weights=fc, minlength=len(n_rows))
@@ -211,30 +258,38 @@ def subset_rows(store: TrainingStore, c: Composition) -> np.ndarray:
     start = np.concatenate([[0], np.cumsum(n_rows)])[models]
     take = np.minimum(n_rows[models], c.draws_per_model)
     rows = np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
+    if store.cma_rows is not None:
+        cma_model = np.asarray(store.cma_rows["model"])
+        rows = np.concatenate([rows, store.n_base + np.flatnonzero(np.isin(cma_model, models))])
     return coupled_rows(store, rows, c.coupled_threshold) if c.coupled_draws else rows
 
 
 class Stage1DataModule(L.LightningDataModule):
-    """Shuffled train batches (seeded) over a subset of models and draws (`subset_rows`); a
-    fixed random subset of `val_rows` val rows (of its coupled draws, if the composition
-    keeps only coupled draws)."""
+    """Shuffled train batches (seeded) over a subset of models and draws (`subset_rows`);
+    every val row, or a fixed random subset of `val_rows` of them (of its coupled draws, if
+    the composition keeps only coupled draws). cma: train and val serve their CMA-ES draws
+    too (TrainingStore)."""
 
-    def __init__(self, store_dir: Path, batch_size: int, val_rows: int, num_workers: int,
-                 seed: int, composition: Composition):
+    def __init__(self, store_dir: Path, batch_size: int, val_rows: int | None, num_workers: int,
+                 seed: int, composition: Composition, cma: bool = False):
         super().__init__()
         self.store_dir, self.batch_size, self.val_rows = Path(store_dir), batch_size, val_rows
         self.num_workers, self.seed, self.composition = num_workers, seed, composition
+        self.cma = cma
 
     def setup(self, stage: str | None = None) -> None:
-        self.train = TrainingStore(self.store_dir, "train")
+        self.train = TrainingStore(self.store_dir, "train", cma=self.cma)
         self.train_rows = subset_rows(self.train, self.composition)
-        self.val = TrainingStore(self.store_dir, "val")
+        self.val = TrainingStore(self.store_dir, "val", cma=self.cma)
         pool = np.arange(len(self.val))
         if self.composition.coupled_draws:
             pool = coupled_rows(self.val, pool, self.composition.coupled_threshold)
-        rng = np.random.default_rng(self.seed)
-        self.val_subset = np.sort(rng.choice(pool, min(self.val_rows, len(pool)),
-                                             replace=False))
+        if self.val_rows is None:
+            self.val_subset = pool
+        else:
+            rng = np.random.default_rng(self.seed)
+            self.val_subset = np.sort(rng.choice(pool, min(self.val_rows, len(pool)),
+                                                 replace=False))
 
     def train_dataloader(self) -> DataLoader:
         sampler = SubsetRandomSampler(self.train_rows.tolist(),

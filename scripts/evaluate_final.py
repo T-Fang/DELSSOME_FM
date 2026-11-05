@@ -14,6 +14,7 @@ import mlflow
 import torch
 from lightning.pytorch.loggers import MLFlowLogger
 
+from delssome_fm.config import override
 from delssome_fm.train.data import Stage1DataModule
 from delssome_fm.train.evaluate import load_stage1
 from delssome_fm.train.fit import final_evaluation
@@ -26,10 +27,14 @@ def main() -> None:
     p.add_argument("--run-name", required=True, help="the MLflow run to log into")
     p.add_argument("--coupled", action="store_true",
                    help="evaluate coupled draws only, logged as final_coupled/<split>/*")
+    p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
+                   help="evaluate under other settings than the run's, e.g. final_eval_rows=null "
+                        "cma_draws=true (all rows, with the CMA-ES draws; 2026-11-05)")
     args = p.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     module = load_stage1(args.checkpoint).to(device)
+    module.cfg = override(module.cfg, args.set)
     cfg = module.cfg
     client = mlflow.MlflowClient(tracking_uri=cfg.mlflow_tracking_uri)
     runs = client.search_runs([client.get_experiment_by_name(cfg.mlflow_experiment).experiment_id],
@@ -39,7 +44,7 @@ def main() -> None:
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, tracking_uri=cfg.mlflow_tracking_uri,
                           run_id=runs[0].info.run_id)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers, cfg.seed,
-                            training_composition(module))
+                            training_composition(module), cma=cfg.cma_draws)
     data.setup()
     summary = final_evaluation(module, data, logger, args.checkpoint.parent, coupled=args.coupled)
     for split, s in summary.items():

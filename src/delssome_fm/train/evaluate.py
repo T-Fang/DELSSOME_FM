@@ -45,15 +45,19 @@ LEGACY_DEFAULTS = {
     "token_scheme": "region",        # added 2026-10-29: the only scheme before
     "embed_theta": True,             # added 2026-10-29; region tokens always embed theta
     "task": "statistics",            # added 2026-11-01: the only task before
+    "cma_draws": False,              # added 2026-11-05: no CMA-ES draws before
 }
 
 
 def evaluation_rows(pool: np.ndarray, cfg: Stage1Config) -> np.ndarray:
     """The rows of `pool` that a run is evaluated on after training: a subset of
-    cfg.final_eval_rows drawn with the run's seed, sorted. The final evaluation and the report
-    figures both use it, so their numbers come from the same rows; for val and test the pool
-    is the whole split, so every run with the same seed sees the same rows."""
+    cfg.final_eval_rows drawn with the run's seed, sorted, or all of them when it is None.
+    The final evaluation and the report figures both use it, so their numbers come from the
+    same rows; for val and test the pool is the whole split, so every run with the same seed
+    sees the same rows."""
     pool = np.asarray(pool)
+    if cfg.final_eval_rows is None:
+        return np.sort(pool)
     rng = np.random.default_rng(cfg.seed)
     return np.sort(rng.choice(pool, min(cfg.final_eval_rows, len(pool)), replace=False))
 
@@ -128,7 +132,7 @@ def per_model_errors(module: Stage1Module, store_dir: Path, split: str,
         for g in GROUPS:
             d = (getattr(pred, g).float() - batch.targets[g]) ** 2
             errors[g].append(d.reshape(len(d), -1).mean(1).cpu().numpy())
-    row_model = np.asarray(store.rows["model"][rows])
+    row_model = store.column("model", rows)
     models, inverse = np.unique(row_model, return_inverse=True)
     counts = np.bincount(inverse)
     out = {g: np.bincount(inverse, np.concatenate(v)) / counts for g, v in errors.items()}
@@ -187,7 +191,7 @@ def row_metrics(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
         for k, v in module.raw_costs(pred, batch).items():
             out[k].append(v)
     res = {k: torch.cat(v).cpu().numpy() for k, v in out.items()}
-    res["model"] = np.asarray(store.rows["model"][rows])
+    res["model"] = store.column("model", rows)
     return res
 
 

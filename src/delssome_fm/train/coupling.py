@@ -149,5 +149,5 @@ def classify_rows(module: CouplingModule, store: TrainingStore, rows: np.ndarray
         out["mean_fc"].append(module.mean_fc(batch))
     res = {k: torch.cat(v).cpu().numpy() for k, v in out.items()}
     res["row"] = rows
-    res["model"] = np.asarray(store.rows["model"][rows])
+    res["model"] = store.column("model", rows)
     return res

@@ -442,7 +442,7 @@ The full run (`configs/cmaes.yaml`) uses σ₀ = 0.05 and 16 × 30 on all 26,391
 
 **Use in training (decided 2026-11-05, project lead).** Each model contributes at most 100 usable candidates of its kept run, or all of them if it has fewer. The selection takes the first 3 usable members of every generation, in member order, then a random choice (seeded per model) from its remaining usable candidates. It uses when a candidate was proposed, never how it came out. The members of a generation are independent draws from CMA-ES's search distribution, so member order is as good as random; keeping only low-cost or coupled outcomes would teach the network that these parameters couple more often than they do. In the pilot this sample matched the whole run (80% coupled, median total 1.985 in both).
 
-Every draw, base or CMA-ES, weighs the same in training and in validation: CMA-ES draws are about 35% of training rows and 34% of val rows. Val and test use all draws of all their models, with no random row subset. Test reports the base and CMA-ES sets separately and pooled.
+Every draw, base or CMA-ES, weighs the same in training and in validation: CMA-ES draws are about 35% of training rows and 34% of val rows. Val and test use all draws of all their models, with no random row subset. Test reports the base and CMA-ES sets separately and pooled. `scripts/pack_cmaes.py` packs a split's selected draws into the training store as `<split>_cma` (architecture.md §7.9).
 
 ---
 

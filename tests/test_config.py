@@ -98,3 +98,18 @@ def test_overrides_are_typed_and_strict(tmp_path):
     path = tmp_path / "effective.yaml"                          # to_yaml round-trips
     path.write_text(to_yaml(new))
     assert load_config(path, Stage1Config) == new
+
+
+def test_optional_fields_take_null_or_their_type(tmp_path):
+    from delssome_fm.config import override, to_yaml
+    cfg = load_config(DATA_CONFIG_PATH.parent / "stage1_sinh.yaml", Stage1Config)
+    assert cfg.val_rows is None and cfg.final_eval_rows is None      # null: every row
+    subset = override(cfg, ["val_rows=50000", "final_eval_rows=null"])
+    assert (subset.val_rows, subset.final_eval_rows) == (50000, None)
+    with pytest.raises(TypeError, match="val_rows"):
+        override(cfg, ["val_rows=all"])
+    with pytest.raises(TypeError, match="val_rows"):
+        override(cfg, ["val_rows=true"])
+    path = tmp_path / "effective.yaml"
+    path.write_text(to_yaml(subset))
+    assert load_config(path, Stage1Config) == subset

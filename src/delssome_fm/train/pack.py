@@ -44,20 +44,31 @@ Store layout, under <store_dir>/<split>/ (rows are ordered by model, then draw):
                                parameter_policy (spec/sampler.py), which decides how the data
                                loader encodes theta and psi (train/data.encode_parameters)
 
+CMA-ES draws (generation.md §9, decided 2026-11-05) go into <store_dir>/<split>_cma/, beside
+the split whose models they belong to. It has the same row arrays, but `model` is the model's
+row in <split>/models.npz, so the graphs and SCs are the base split's, and `draw` is the
+candidate's number in its run (generation x population + member). cma.npz gives each row's
+corpus index, run, generation, member, level, spread and cost terms. Per model, at most
+CMA_DRAWS_PER_MODEL of its kept run's candidates enter, chosen by `select_cma` among those that
+pass the same checks as base draws. The z-score statistics stay the base train split's.
+
 This module only reads the corpus and writes the store. It does not know about torch.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
+from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
-from delssome_fm.config import CorpusConfig, GeneralisationConfig, SimConfig, TrainingDataConfig
-from delssome_fm.sim.corpus import K_MAX, P_MAX, first_valid
+from delssome_fm.config import (CmaesConfig, CorpusConfig, GeneralisationConfig, SimConfig,
+                                TrainingDataConfig)
+from delssome_fm.sim.corpus import CMA_SELECT_TAG, K_MAX, P_MAX, SPLIT_STREAM, first_valid
 from delssome_fm.sim.generalisation import CELLS, read_sample
 from delssome_fm.spec.card import card_from_dict
 from delssome_fm.spec.compile import compile_card
@@ -70,6 +81,10 @@ C_MAX = 2          # coupling channels per model
 TARGETS = ("regional", "pairwise", "fcd", "fc_moments")
 OPTIONAL_TARGETS = ("catch24", "fc_net")   # catch24 when the corpus has it; fc_net added later
 ROW_ARRAYS = ("model", "draw", "theta", "psi", *TARGETS)
+CMA_DRAWS_PER_MODEL = 100        # CMA-ES candidates per model in the store (2026-11-05,
+CMA_FIRST_PER_GENERATION = 3     # project lead): 3 per generation, then a random rest
+CMA_ROW_INFO = ("run", "generation", "member", "level", "spread", "cost")
+_CMA_CHUNK = re.compile(r"plan(\d{6})-(\d{6})\.npz")
 
 
 # ---------------------------------------------------------------- targets
@@ -192,6 +207,17 @@ def pack_chunks(chunks: list[Path], members: list[int], full: int, out: Path, sc
     return summary
 
 
+def _row_flags(d: Any, full: int) -> dict[str, np.ndarray]:
+    """Per draw of an opened arrays file: usable (neither diverged nor flat), complete FCD
+    (every window pair present) and finite targets after the transforms."""
+    finite = (np.isfinite(transform_regional(d["regional"])).all(axis=(1, 2))
+              & np.isfinite(transform_fc_moments(d["fc_moments"])).all(axis=1))
+    if "catch24" in d.files:
+        finite &= np.isfinite(transform_catch24(d["catch24"])).all(axis=(1, 2))
+    return {"usable": ~d["diverged"] & ~d["flat"], "complete": d["fcd_cdf"][:, -1] == full,
+            "finite": finite}
+
+
 def _select_rows(chunks: list[Path], members: np.ndarray, full: int,
                  ) -> tuple[dict[Path, np.ndarray], dict[str, int]]:
     """Pass 1, flags only: per chunk, the boolean mask of rows to keep."""
@@ -201,12 +227,8 @@ def _select_rows(chunks: list[Path], members: np.ndarray, full: int,
             if "model" not in d.files:
                 continue
             ours = np.isin(d["model"], members)
-            usable = ours & ~d["diverged"] & ~d["flat"]
-            complete = d["fcd_cdf"][:, -1] == full
-            finite = (np.isfinite(transform_regional(d["regional"])).all(axis=(1, 2))
-                      & np.isfinite(transform_fc_moments(d["fc_moments"])).all(axis=1))
-            if "catch24" in d.files:
-                finite &= np.isfinite(transform_catch24(d["catch24"])).all(axis=(1, 2))
+            flags = _row_flags(d, full)
+            usable, complete, finite = ours & flags["usable"], flags["complete"], flags["finite"]
             counts["draws"] += int(ours.sum())
             counts["diverged"] += int((ours & d["diverged"]).sum())
             counts["flat"] += int((ours & d["flat"]).sum())
@@ -217,8 +239,10 @@ def _select_rows(chunks: list[Path], members: np.ndarray, full: int,
 
 
 def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[int],
-                full: int, out: Path) -> dict[str, Any]:
-    """Pass 2: the row arrays, written straight into memory-mapped .npy files."""
+                full: int, out: Path, draw_of: Callable[[Any], np.ndarray] | None = None,
+                ) -> dict[str, Any]:
+    """Pass 2: the row arrays, written straight into memory-mapped .npy files. draw_of: an
+    opened arrays file -> each row's draw number (default: its `draw` column)."""
     n = int(sum(m.sum() for m in keep.values()))
     if n == 0:
         raise ValueError(f"{out}: no usable draws among the corpus models")
@@ -243,7 +267,8 @@ def _write_rows(chunks: list[Path], keep: dict[Path, np.ndarray], members: list[
             continue
         with np.load(path) as d:
             block = {"model": np.array([model_row[i] for i in d["model"][mask]], np.int32),
-                     "draw": d["draw"][mask], "theta": d["theta"][mask], "psi": d["psi"][mask],
+                     "draw": (d["draw"] if draw_of is None else draw_of(d))[mask],
+                     "theta": d["theta"][mask], "psi": d["psi"][mask],
                      "regional": transform_regional(d["regional"][mask]),
                      "pairwise": d["pairwise"][mask], "fcd": d["fcd_cdf"][mask] / full,
                      "fc_moments": transform_fc_moments(d["fc_moments"][mask])}
@@ -317,6 +342,126 @@ def pack_node_values(split_dir: Path, chunks: list[Path]) -> int:
     np.save(tmp, values)
     tmp.replace(split_dir / "node_value.npy")
     return len(members)
+
+
+# ---------------------------------------------------------------- CMA-ES draws
+
+
+def select_cma(generation: np.ndarray, member: np.ndarray, usable: np.ndarray, k: int,
+               per_generation: int, rng: np.random.Generator) -> np.ndarray:
+    """Positions of one model's kept-run candidates that enter the store (generation.md §9):
+    the first `per_generation` usable members of every generation, in member order, then a
+    random choice (rng) among its other usable candidates, k in all, or every usable one if
+    there are at most k. Sorted by generation, then member.
+
+    The choice uses when a candidate was proposed, never how it came out: the members of a
+    generation are independent draws from CMA-ES's search distribution, so member order is as
+    good as random, while keeping low-cost or coupled outcomes would bias the network."""
+    pos = np.flatnonzero(usable)
+    pos = pos[np.lexsort((member[pos], generation[pos]))]
+    gen = generation[pos]
+    rank = np.arange(len(pos)) - np.searchsorted(gen, gen)   # position within its generation
+    first, rest = pos[rank < per_generation], pos[rank >= per_generation]
+    if len(first) > k:
+        raise ValueError(f"the first {per_generation} usable members of each generation are "
+                         f"{len(first)} candidates, more than the {k} to keep")
+    chosen = np.concatenate([first, rng.choice(rest, min(k - len(first), len(rest)),
+                                               replace=False)])
+    return chosen[np.lexsort((member[chosen], generation[chosen]))]
+
+
+def cma_chunks(output_dir: Path, split: str, n_plan: int) -> list[tuple[int, int, Path]]:
+    """(first, stop, path) of a split's CMA-ES chunk arrays, sorted; raises unless they cover
+    plan positions 0..n_plan-1 exactly once."""
+    found = []
+    for path in (output_dir / split).glob("plan*.npz"):
+        m = _CMA_CHUNK.fullmatch(path.name)
+        if m is None:
+            raise ValueError(f"{path}: not a CMA-ES chunk name (plan<first>-<stop>.npz)")
+        found.append((int(m[1]), int(m[2]), path))
+    found.sort()
+    expect, gaps = 0, []
+    for first, stop, path in found:
+        if first < expect:
+            raise ValueError(f"{path} overlaps the chunk before it")
+        if first > expect:
+            gaps.append((expect, first))
+        expect = stop
+    if expect > n_plan:
+        raise ValueError(f"{output_dir / split}: chunks reach plan position {expect - 1}, the "
+                         f"plan has {n_plan}")
+    if expect < n_plan:
+        gaps.append((expect, n_plan))
+    if gaps:
+        raise ValueError(f"{output_dir / split}: {len(gaps)} ranges of plan positions have no "
+                         f"chunk, e.g. {gaps[:5]}: wait for or resubmit them "
+                         f"(submit_cmaes.py --only-missing)")
+    return found
+
+
+def pack_cma_split(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
+                   store_dir: Path, split: str, per_model: int = CMA_DRAWS_PER_MODEL,
+                   per_generation: int = CMA_FIRST_PER_GENERATION) -> dict[str, Any]:
+    """Write <store_dir>/<split>_cma/ from the split's CMA-ES chunks (module docstring) and
+    return its summary. <store_dir>/<split> must be packed: the rows refer to its models."""
+    from delssome_fm.sim.cmaes import read_plan      # imports pycma, which reading a store
+    base = store_dir / split                          # does not need
+    with np.load(base / "models.npz") as m:
+        members = m["index"].tolist()
+    policy = json.loads((base / "summary.json").read_text())["parameter_policy"]
+    plan = [r["index"] for r in read_plan(cfg, split)]
+    outside = sorted(set(plan) - set(members))
+    if outside:
+        raise ValueError(f"{len(outside)} planned models are not among {base}'s models, e.g. "
+                         f"{outside[:5]}: the store and the plan come from different corpora")
+    full = n_window_pairs(sim_cfg)
+    keep, counts = {}, Counter()
+    for first, stop, path in cma_chunks(cfg.output_dir, split, len(plan)):
+        with np.load(path) as d:
+            flags = _row_flags(d, full)
+            ok = flags["usable"] & flags["complete"] & flags["finite"]
+            index, want = d["model"], plan[first:stop]
+            if list(dict.fromkeys(index.tolist())) != want:
+                raise ValueError(f"{path}: its models differ from plan positions "
+                                 f"{first}..{stop - 1}")
+            mask = np.zeros(len(index), bool)
+            for i in want:
+                at = np.flatnonzero(index == i)
+                if len(np.unique(d["run"][at])) != 1:
+                    raise ValueError(f"{path}: model {i} has candidates of several runs")
+                rng = np.random.default_rng([corpus_cfg.seed, SPLIT_STREAM[split], i,
+                                             CMA_SELECT_TAG])
+                mask[at[select_cma(d["generation"][at], d["member"][at], ok[at], per_model,
+                                   per_generation, rng)]] = True
+            counts.update(candidates=len(index), diverged=int(d["diverged"].sum()),
+                          flat=int(d["flat"].sum()),
+                          incomplete_fcd=int((flags["usable"] & ~flags["complete"]).sum()),
+                          non_finite=int((flags["usable"] & flags["complete"]
+                                          & ~flags["finite"]).sum()),
+                          usable=int(ok.sum()))
+            keep[path] = mask
+    out = store_dir / f"{split}_cma"
+    out.mkdir(parents=True, exist_ok=True)
+    rows = _write_rows(list(keep), keep, members, full, out,
+                       draw_of=lambda d: d["generation"] * cfg.population + d["member"])
+    info = {k: [] for k in ("index", *CMA_ROW_INFO)}
+    for path, mask in keep.items():
+        with np.load(path) as d:
+            info["index"].append(d["model"][mask])
+            for k in CMA_ROW_INFO:
+                info[k].append(d[k][mask])
+    np.savez(out / "cma.npz", **{k: np.concatenate(v) for k, v in info.items()})
+    n_rows = rows["rows_per_model"][rows["rows_per_model"] > 0]
+    mean_fc = np.load(out / "fc_moments.npy", mmap_mode="r")[:, 0]
+    summary = {"split": out.name, "base_split": split, "parameter_policy": policy,
+               "cmaes_output_dir": str(cfg.output_dir), "per_model": per_model,
+               "first_per_generation": per_generation, **counts, "rows": rows["rows"],
+               "models": len(plan), "models_with_rows": len(n_rows),
+               "rows_per_model": {"min": int(n_rows.min()), "median": float(np.median(n_rows)),
+                                  "max": int(n_rows.max())},
+               "coupled_share": float((mean_fc > cfg.coupled_threshold).mean())}
+    (out / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
 
 
 # ---------------------------------------------------------------- network FC

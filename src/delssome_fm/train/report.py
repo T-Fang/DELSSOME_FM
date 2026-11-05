@@ -33,8 +33,10 @@ def training_composition(module: Stage1Module) -> Composition:
 
 
 def training_rows(module: Stage1Module) -> np.ndarray:
-    """Row indices of the train split of module.cfg.store_dir that `module` trained on."""
-    return subset_rows(TrainingStore(module.cfg.store_dir, "train"), training_composition(module))
+    """Row indices of the train split of module.cfg.store_dir that `module` trained on
+    (with its CMA-ES rows, after the base rows, if it trained on them)."""
+    return subset_rows(TrainingStore(module.cfg.store_dir, "train", cma=module.cfg.cma_draws),
+                       training_composition(module))
 
 
 @torch.no_grad()

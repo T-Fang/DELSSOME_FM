@@ -7,10 +7,15 @@ same GPU, so
 the report needs no separate evaluation job:
 
     final/<split>/<metric>   for split = train (the run's own training rows), val, test, each
-                             a seeded subset of final_eval_rows rows: MSE per group, total,
-                             r2_pairwise, and the median raw-unit cost terms by regime
+                             a seeded subset of final_eval_rows rows (all rows if null): MSE
+                             per group, total, r2_pairwise, and the median raw-unit cost
+                             terms by regime. Base draws only, so runs with and without
+                             CMA-ES draws compare directly.
+    final/<split>_cma/...    with cma_draws: the same on the split's CMA-ES draws, and
+    final/<split>_pooled/... on base and CMA-ES draws together (2026-11-05)
     final_eval.npz           (artifact) per-model total MSE and coupled share for val and
-                             test; a few test examples' predicted and simulated FC and CDF
+                             test (and val_cma, test_cma); a few test examples' predicted and
+                             simulated FC and CDF
 
 Test is evaluated only here, once, on the checkpoint that val selected; it never steers
 training or checkpoint choice.
@@ -52,7 +57,7 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
                               cfg.coupled_share if cfg.oversample_coupled else None,
                               cfg.coupled_threshold, cfg.coupled_draws_only)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
-                            cfg.seed, composition)
+                            cfg.seed, composition, cma=cfg.cma_draws)
     data.setup()
     norm = data.train.norm
     pairwise_norm = (float(norm["pairwise_mean"]), float(norm["pairwise_sd"]))
@@ -111,22 +116,31 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
     cfg = module.cfg
     prefix = "final_coupled" if coupled else "final"
     splits = {"train": (data.train, data.train_rows), "val": (data.val, None),
-              "test": (TrainingStore(cfg.store_dir, "test"), None)}
+              "test": (TrainingStore(cfg.store_dir, "test", cma=cfg.cma_draws), None)}
     summary, arrays = {}, {}
     for split, (store, candidates) in splits.items():
         pool = np.arange(len(store)) if candidates is None else candidates
         if coupled or cfg.coupled_draws_only:
             pool = coupled_rows(store, pool, cfg.coupled_threshold)
-        rows = evaluation_rows(pool, cfg)
+        rows = evaluation_rows(pool, cfg)        # sorted: row_metrics keeps this order
         r = row_metrics(module, store, rows, num_workers=cfg.num_workers)
-        summary[split] = summarise_rows(r)
-        logger.log_metrics({f"{prefix}/{split}/{k}": v for k, v in summary[split].items()})
-        if split != "train":
-            arrays.update({f"{split}_{k}": v for k, v in per_model(r).items()})
-        if split == "test":
-            picks = _examples(r)
-            arrays["test_example_rows"] = rows[picks]
-            p = predict_fc_fcd(module, store, rows[picks])
+        cma = rows >= store.n_base
+        parts = {split: ~cma}
+        if cma.any():
+            parts.update({f"{split}_cma": cma, f"{split}_pooled": np.ones_like(cma)})
+        for name, mask in parts.items():
+            if not mask.any():
+                continue
+            part = {k: v[mask] for k, v in r.items()}
+            summary[name] = summarise_rows(part)
+            logger.log_metrics({f"{prefix}/{name}/{k}": v for k, v in summary[name].items()})
+            if split != "train" and not name.endswith("_pooled"):
+                arrays.update({f"{name}_{k}": v for k, v in per_model(part).items()})
+        if split == "test" and (~cma).any():
+            base_rows = rows[~cma]
+            picks = _examples({k: v[~cma] for k, v in r.items()})
+            arrays["test_example_rows"] = base_rows[picks]
+            p = predict_fc_fcd(module, store, base_rows[picks])
             arrays.update({f"test_example_{k}": v for k, v in p.items()})
     path = out / f"{prefix.replace('final', 'final_eval')}.npz"
     np.savez(path, **arrays)

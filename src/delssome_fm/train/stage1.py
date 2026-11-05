@@ -13,7 +13,9 @@ on, which picks the checkpoint), val/r2_pairwise (R^2 of the z-scored arctanh FC
 the DELSSOME cost terms between prediction and simulation in raw units (train/costs.py), as
 means over all val rows, val/cost_<corr|mean|ks> (what the cost loss trains on, logged from
 2026-10-29), and as medians over uncoupled and coupled draws:
-val/cost_<corr|mean|ks>_<uncoupled|coupled>.
+val/cost_<corr|mean|ks>_<uncoupled|coupled>. When the val set has CMA-ES draws
+(cma_draws), every number above pools them with the base draws, each draw weighing the same,
+and val/base_total and val/cma_total give the total over each part (2026-11-05).
 """
 
 from __future__ import annotations
@@ -109,7 +111,13 @@ class Stage1Module(L.LightningModule):
             self.val_mse[g].update(getattr(pred, g).float().flatten(), batch.targets[g].flatten())
         self.val_r2_pairwise.update(pred.pairwise.float().flatten(),
                                     batch.targets["pairwise"].flatten())
-        self._val_costs.append(self.raw_costs(pred, batch))
+        costs = self.raw_costs(pred, batch)
+        # per row, for the totals over base and CMA-ES draws (each row has as many elements
+        # per group, so the mean of these is the pooled MSE that val_mse computes)
+        costs["cma"] = batch.cma
+        for g in GROUPS:
+            costs[f"mse_{g}"] = ((getattr(pred, g).float() - batch.targets[g]) ** 2).flatten(1).mean(1)
+        self._val_costs.append(costs)
 
     def raw_costs(self, pred, batch: Stage1Batch, eps: float = 0.0) -> dict[str, torch.Tensor]:
         """Per row: the cost terms between prediction and simulation in raw units (all edges
@@ -121,8 +129,13 @@ class Stage1Module(L.LightningModule):
         return out
 
     def on_validation_epoch_end(self) -> None:
-        costs = {k: torch.cat([c[k] for c in self._val_costs]) for k in (*TERMS, "coupled")}
+        costs = {k: torch.cat([c[k] for c in self._val_costs]) for k in self._val_costs[0]}
         self._val_costs.clear()
+        if costs["cma"].any():
+            for part, mask in (("base", ~costs["cma"]), ("cma", costs["cma"])):
+                if mask.any():
+                    self.log(f"val/{part}_total",
+                             torch.stack([costs[f"mse_{g}"][mask].mean() for g in GROUPS]).sum())
         self.log_dict({f"val/cost_{t}": torch.nanmean(costs[t]) for t in TERMS})
         for regime, mask in (("uncoupled", ~costs["coupled"]), ("coupled", costs["coupled"])):
             if mask.any():

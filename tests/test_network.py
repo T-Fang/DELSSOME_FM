@@ -30,7 +30,8 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         max_distance=8,
         max_degree=8, token_scheme="region", embed_theta=True, task="statistics", train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
-        coupled_threshold=0.05, coupled_draws_only=False, batch_size=2, edges_per_step=64,
+        coupled_threshold=0.05, coupled_draws_only=False, cma_draws=False, batch_size=2,
+        edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, final_eval_rows=16, num_workers=0, precision="32-true",
         gradient_clip=1.0,
@@ -778,3 +779,67 @@ def test_lightning_coupling_run_evaluates_and_reloads(tiny_store_sinh, tmp_path)
         fit(dataclasses.replace(stage1, task="regime"), config_file, run_name="refused")
     with pytest.raises(ValueError, match="statistics task"):
         Stage1Module(stage1, 10, (0.4, 1.3))
+
+
+def test_store_serves_cma_draws_after_the_base_draws(tiny_cma_store):
+    from delssome_fm.train.data import Composition, coupled_rows, subset_rows
+    store_dir = tiny_cma_store[0]
+    base = TrainingStore(store_dir, "train")
+    both = TrainingStore(store_dir, "train", cma=True)
+    n = base.n_base
+    cma_model = np.load(store_dir / "train_cma" / "model.npy")
+    assert len(base) == n and len(both) == n + len(cma_model)
+    batch = both[[0, n, len(both) - 1]]
+    assert batch.cma.tolist() == [False, True, True]
+    torch.testing.assert_close(batch.targets["pairwise"][0], base[[0]].targets["pairwise"][0])
+    raw = np.load(store_dir / "train_cma" / "pairwise.npy")[0]
+    np.testing.assert_allclose(batch.targets["pairwise"][1].numpy(),
+                               (raw - base.norm["pairwise_mean"]) / base.norm["pairwise_sd"],
+                               rtol=1e-5, atol=1e-6)
+    # a CMA-ES row has its model's graph and SC
+    first = int(np.flatnonzero(np.asarray(base.rows["model"]) == cma_model[0])[0])
+    alone, ref = both[[n]], base[[first]]
+    torch.testing.assert_close(alone.graph.features, ref.graph.features)
+    torch.testing.assert_close(alone.sc, ref.sc)
+    # draws_per_model limits base draws only; every CMA-ES row of the chosen models joins
+    model0 = (n + np.flatnonzero(cma_model == 0)).tolist()
+    assert subset_rows(both, Composition(1, 1, None, 0.05)).tolist() == [0] + model0
+    assert subset_rows(base, Composition(1, 1, None, 0.05)).tolist() == [0]
+    every = np.arange(len(both))
+    fc = both.column("fc_moments", every)[:, 0]
+    np.testing.assert_array_equal(coupled_rows(both, every, 0.0), every[fc > 0.0])
+    with pytest.raises(IndexError, match="outside"):
+        base.column("model", np.array([n]))
+    import shutil
+    shutil.copytree(store_dir / "train", store_dir.parent / "lonely" / "train")
+    shutil.copy(store_dir / "normalisation.npz", store_dir.parent / "lonely")
+    with pytest.raises(FileNotFoundError, match="no packed CMA-ES draws"):
+        TrainingStore(store_dir.parent / "lonely", "train", cma=True)
+
+
+def test_lightning_run_with_cma_draws_reports_each_part(tiny_cma_store, tmp_path):
+    store_dir = tiny_cma_store[0]
+    stage1 = dataclasses.replace(tiny_config(store_dir, tmp_path), cma_draws=True,
+                                 val_rows=None, final_eval_rows=None, batch_size=4)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="cma")
+    import mlflow
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
+    m = run.data.metrics
+    for key in ("val/total", "val/base_total", "val/cma_total"):
+        assert np.isfinite(m[key]), key
+    for split in ("train", "val", "test"):
+        for part in (split, f"{split}_cma", f"{split}_pooled"):
+            assert np.isfinite(m[f"final/{part}/total"]), part
+    # every val and test row is evaluated: base and CMA-ES rows add up to the pooled rows
+    for split in ("val", "test"):
+        rows = {p: sum(m[f"final/{p}/rows_{r}"] for r in ("coupled", "uncoupled")
+                       if f"final/{p}/rows_{r}" in m)
+                for p in (split, f"{split}_cma", f"{split}_pooled")}
+        store = TrainingStore(store_dir, split, cma=True)
+        assert rows[split] == store.n_base and rows[f"{split}_pooled"] == len(store)
+        assert rows[split] + rows[f"{split}_cma"] == rows[f"{split}_pooled"]
+    with np.load(checkpoints / "final_eval.npz") as e:
+        assert {"val_total", "val_cma_total", "test_cma_total"} <= set(e.files)

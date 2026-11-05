@@ -9,6 +9,7 @@ makes sense is checked by the code that uses the field.
 from __future__ import annotations
 
 import dataclasses
+import types
 import typing
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,6 +171,9 @@ class Stage1Config:
     coupled_threshold: float      # coupled: the model's mean FC over its draws exceeds this
     coupled_draws_only: bool      # train and validate on coupled draws only (draw mean FC >
                                   # coupled_threshold; the coupled-only test, 2026-10-26)
+    cma_draws: bool               # also the store's CMA-ES draws (<split>_cma, generation.md
+                                  # §9) of the chosen models, in train, val and test, each
+                                  # draw weighing the same as a base draw (2026-11-05)
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)
@@ -177,9 +181,11 @@ class Stage1Config:
     weight_decay: float
     warmup_steps: int
     max_steps: int
-    val_rows: int                 # fixed random subset of the val split used for validation
+    val_rows: int | None          # fixed random subset of the val split used for validation;
+                                  # null: every val row (2026-11-05)
     val_every_steps: int
-    final_eval_rows: int          # rows per split in the evaluation after training (train/fit.py)
+    final_eval_rows: int | None   # rows per split in the evaluation after training
+                                  # (train/fit.py); null: every row
     num_workers: int              # DataLoader worker processes
     precision: str                # Lightning precision, e.g. bf16-mixed
     gradient_clip: float          # max gradient norm
@@ -320,6 +326,14 @@ def config_from_dict(cls: type[T], raw: Any, where: str) -> T:
 
 
 def _build(tp: Any, value: Any, where: str) -> Any:
+    if typing.get_origin(tp) in (typing.Union, types.UnionType):
+        # only `X | None`: YAML null is None, anything else must be an X
+        args = typing.get_args(tp)
+        if len(args) != 2 or type(None) not in args:
+            raise TypeError(f"{where}: field type {tp!r} is not supported by the config loader")
+        if value is None:
+            return None
+        return _build(next(a for a in args if a is not type(None)), value, where)
     if dataclasses.is_dataclass(tp):
         return _build_dataclass(tp, value, where)
     if typing.get_origin(tp) is tuple:

@@ -90,6 +90,72 @@ def test_catch24_is_packed_transformed_and_z_scored(tiny_store):
     assert t[0, 0, 22] == np.float32(np.arcsinh(1.0)) and t[0, 0, 0] == 10.0  # mean/SD, raw
 
 
+def test_select_cma_takes_the_first_members_then_a_random_rest():
+    from delssome_fm.train.pack import select_cma
+    generation, member = np.repeat(np.arange(5), 4), np.tile(np.arange(4), 5)
+    usable = np.ones(20, bool)
+    usable[[0, 5, 6]] = False        # generation 0 member 0, generation 1 members 1 and 2
+
+    def pick(k, seed=0):
+        return select_cma(generation, member, usable, k, 2, np.random.default_rng(seed))
+
+    chosen = pick(12)
+    assert len(set(chosen.tolist())) == 12 and usable[chosen].all()
+    assert {1, 2, 4, 7, 8, 9, 12, 13, 16, 17} <= set(chosen.tolist())   # 2 per generation
+    assert (np.diff(chosen) > 0).all()                    # generation, then member order
+    np.testing.assert_array_equal(chosen, pick(12))       # the rng decides the rest
+    assert len({tuple(pick(12, s).tolist()) for s in range(10)}) > 1
+    assert pick(100).tolist() == np.flatnonzero(usable).tolist()       # fewer than k: all
+    with pytest.raises(ValueError, match="more than"):
+        pick(5)
+
+
+def test_cma_chunks_must_cover_the_plan(tmp_path):
+    from delssome_fm.train.pack import cma_chunks
+    (tmp_path / "train").mkdir()
+    for name in ("plan000000-000002.npz", "plan000003-000005.npz"):
+        (tmp_path / "train" / name).touch()
+    with pytest.raises(ValueError, match="no chunk, e.g. \\[\\(2, 3\\)\\]"):
+        cma_chunks(tmp_path, "train", 5)
+    (tmp_path / "train" / "plan000002-000003.npz").touch()
+    assert [c[:2] for c in cma_chunks(tmp_path, "train", 5)] == [(0, 2), (2, 3), (3, 5)]
+    with pytest.raises(ValueError, match="the plan has 4"):
+        cma_chunks(tmp_path, "train", 4)
+    (tmp_path / "train" / "plan000001-000002.npz").touch()
+    with pytest.raises(ValueError, match="overlaps"):
+        cma_chunks(tmp_path, "train", 5)
+
+
+def test_cma_draws_are_packed_beside_their_split(tiny_cma_store):
+    from delssome_fm.train.pack import _row_flags, n_window_pairs, pack_cma_split
+    store, cfg, corpus_cfg, sim_cfg = tiny_cma_store
+    root = store / "train_cma"
+    summary = json.loads((root / "summary.json").read_text())
+    model, info = np.load(root / "model.npy"), np.load(root / "cma.npz")
+    assert len(model) == summary["rows"] > 0 and (np.diff(model) >= 0).all()
+    index = np.load(store / "train" / "models.npz")["index"]
+    np.testing.assert_array_equal(index[model], info["index"])     # rows point at base models
+    np.testing.assert_array_equal(np.load(root / "draw.npy"),
+                                  info["generation"] * cfg.population + info["member"])
+    for path in sorted((cfg.output_dir / "train").glob("plan*.npz")):
+        with np.load(path) as d:
+            f = _row_flags(d, n_window_pairs(sim_cfg))
+            ok = f["usable"] & f["complete"] & f["finite"]
+            for i in np.unique(d["model"]):
+                at, mine = d["model"] == i, info["index"] == i
+                assert mine.sum() == min(7, ok[at].sum())
+                for g in range(3):                # the first 2 usable members are always in
+                    first = np.sort(d["member"][at & ok & (d["generation"] == g)])[:2]
+                    assert set(first) <= set(info["member"][mine & (info["generation"] == g)])
+                assert not (mine & (info["generation"] == 0) & (info["member"] == 0)).any()
+    np.testing.assert_allclose(np.load(root / "fcd.npy")[:, -1], 1.0)
+    assert np.isfinite(np.load(root / "regional.npy")).all()
+    before = {k: np.load(root / f"{k}.npy") for k in ("model", "theta", "pairwise")}
+    pack_cma_split(cfg, corpus_cfg, sim_cfg, store, "train", per_model=7, per_generation=2)
+    for k, v in before.items():
+        np.testing.assert_array_equal(np.load(root / f"{k}.npy"), v, err_msg=k)
+
+
 def test_node_values_are_packed_and_can_be_backfilled(tiny_store, tmp_path):
     """node_value.npy holds each Const node's value (NaN elsewhere), consistent with the sign
     and log10 feature columns; pack_node_values rebuilds it from the cards and refuses a

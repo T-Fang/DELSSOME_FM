@@ -76,9 +76,11 @@ K_MAX = 2   # global parameters: one per channel, at most 2
 SPLIT_STREAM = {name: code for code, name in enumerate(SPLIT_NAMES)}  # train 0, val 1, test 2
 
 # Stream tags for np.random.default_rng([seed, stream, index, tag, ...]); the card itself
-# uses [seed, stream, index] (sampler.sample_card). CMA_TAG: sim/cmaes.py's candidates.
+# uses [seed, stream, index] (sampler.sample_card). CMA_TAG: sim/cmaes.py's candidates;
+# CMA_SELECT_TAG: which CMA-ES candidates enter the training store (train/pack.select_cma).
 _SC, _DRAW, _SCREEN, _GAIN = 1, 2, 3, 4
 CMA_TAG = 5
+CMA_SELECT_TAG = 6
 GAIN_SCOPES = ("draw", "model")
 
 

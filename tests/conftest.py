@@ -67,3 +67,58 @@ def _tiny_store(tmp_path_factory, policy: str):
     shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "val")
     shutil.copytree(cfg.store_dir / "train", cfg.store_dir / "test")
     return cfg, corpus_cfg, sim_cfg
+
+
+@pytest.fixture(scope="session")
+def tiny_cma_store(tiny_store, tmp_path_factory):
+    """(store_dir, CmaesConfig, CorpusConfig, SimConfig): a copy of tiny_store with CMA-ES
+    draws packed from fake chunks (train/pack.pack_cma_split, 7 per model, the first 2 of each
+    generation; with the network FC). Each model's candidates are its base draws repeated as
+    3 generations of 4,
+    candidate 0 marked diverged, in two chunks. val_cma and test_cma are copies of train_cma,
+    as val and test are copies of train."""
+    import json
+    import shutil
+
+    import numpy as np
+
+    from delssome_fm.config import CmaesConfig, SplitSizes
+    from delssome_fm.sim.cmaes import write_plan
+    from delssome_fm.train.pack import pack_cma_split, pack_network_fc
+
+    _, corpus_cfg, sim_cfg = tiny_store
+    root = tmp_path_factory.mktemp("tiny_cma")
+    store = root / "store"
+    shutil.copytree(tiny_store[0].store_dir, store)
+    members = np.load(store / "train" / "models.npz")["index"].tolist()
+    assert len(members) >= 2, "the tiny corpus needs two valid models"
+    cfg = CmaesConfig(corpus_config=root / "corpus.yaml", n_models=SplitSizes(len(members), 1, 1),
+                      coupled_threshold=0.05, max_coupled_share=1.0, max_runs=2,
+                      min_coupled_share=0.5, population=4, generations=3, sigma0=0.05,
+                      failed_cost=5.0, output_dir=root / "cma")
+    write_plan(cfg, "train", [{"index": i, "usable": 1, "coupled": 1} for i in members])
+    (chunk,) = (corpus_cfg.output_dir / "train").glob("candidates*_draws0-*.npz")
+    d = dict(np.load(chunk))
+    per_draw = [k for k in d if k != "draw" and d[k].shape[:1] == d["model"].shape]
+
+    def fake(i):
+        at = np.resize(np.flatnonzero(d["model"] == i), 12)
+        out = {k: d[k][at].copy() for k in per_draw}
+        out["diverged"][0] = True
+        out.update(run=np.zeros(12, np.int64), generation=np.repeat(np.arange(3), 4),
+                   member=np.tile(np.arange(4), 3), level=np.zeros((12, 5), np.float32),
+                   spread=np.zeros((12, 5), np.float32), cost=np.zeros((12, 3), np.float32))
+        return out
+
+    for first, stop in ((0, 1), (1, len(members))):
+        parts = [fake(i) for i in members[first:stop]]
+        np.savez(cfg.output_dir / "train" / f"plan{first:06d}-{stop:06d}.npz",
+                 **{k: np.concatenate([p[k] for p in parts]) for k in parts[0]})
+    pack_cma_split(cfg, corpus_cfg, sim_cfg, store, "train", per_model=7, per_generation=2)
+    pack_network_fc(store / "train_cma")           # the base splits have the network FC too
+    for split in ("val", "test"):
+        shutil.copytree(store / "train_cma", store / f"{split}_cma")
+        summary = json.loads((store / f"{split}_cma" / "summary.json").read_text())
+        summary.update(split=f"{split}_cma", base_split=split)
+        (store / f"{split}_cma" / "summary.json").write_text(json.dumps(summary))
+    return store, cfg, corpus_cfg, sim_cfg

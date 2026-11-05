@@ -31,8 +31,8 @@ def main() -> None:
     args = p.parse_args()
 
     module = load_stage1(args.checkpoint).to("cuda" if torch.cuda.is_available() else "cpu")
-    train = TrainingStore(module.cfg.store_dir, "train")
-    trained_rows = np.unique(np.asarray(train.rows["model"])[training_rows(module)])
+    train = TrainingStore(module.cfg.store_dir, "train", cma=module.cfg.cma_draws)
+    trained_rows = np.unique(train.column("model", training_rows(module)))
     trained = set(train.models["index"][trained_rows].tolist())
     arrays = {}
     for cell, (model_split, _) in CELLS.items():

@@ -312,7 +312,7 @@ Code: `train/pack.py` (training store), `train/data.py`, `nn/` (network), `train
 - **Template encoder (Graphormer).** Node input is the 21 features plus learned embeddings of in- and out-degree (clipped at 16). Attention gets a learned per-head bias for the undirected shortest-path length between nodes (clipped at 16, with one more bucket for "no path"). There are 4 pre-LN layers of width d_t = 128. The readouts are taken after projecting to d.
 - **Sequence.** [CLS, 68 regions, M template tokens] with three segment embeddings. Padded template positions are masked out of attention.
 - **Losses.** Mean squared error per group (regional, pairwise on 256 random edges per step, FCD, FC moments), combined by uncertainty weighting. Optimisation is AdamW with linear warm-up and cosine decay, bf16 mixed precision, and gradient clipping at 1.
-- **Validation.** A fixed random subset of 50,000 val rows. Logged: MSE per group, their sum (`val/total`, which also selects checkpoints), and R² of the pairwise targets over all edges.
+- **Validation.** A fixed random subset of 50,000 val rows. Logged: MSE per group, their sum (`val/total`, which also selects checkpoints), and R² of the pairwise targets over all edges. From 2026-11-05, every val row (§7.9).
 
 ### 7.2 Stage-1 results so far (2026-10-16)
 
@@ -572,3 +572,15 @@ Each tripling of the models lowers test total by 16–26%, and the train–test 
 - **The misses are not borderline draws.** Half the coupled draws the classifier misses have mean FC > 0.26 and 9% of fully synchronised draws (FC > 0.9) are called uncoupled; recall rises only from 50% at FC 0.05–0.06 to 91% above 0.9.
 - **They are new equations.** Among test models with ≥ 5 coupled draws, 4.7% have every coupled draw missed and 12% have most missed; among training models, 0.1% and 0.7%. Coupled recall is no better in models whose draws almost all couple (0.81) than in models that couple on some draws only, so the misses are not draw-level bistability.
 - **The hard set is shared.** Of the classifier's 7,711 missed coupled draws, 4,627 are also missed by the 100k statistics model; 3,448 are missed by all three models. Recognising that an unseen equation synchronises remains the open problem, and more training models is so far the only lever that moves it.
+
+### 7.9 CMA-ES draws in training, and every val and test row (decided 2026-11-05, project lead)
+
+With `cma_draws: true`, stage 1 also uses the CMA-ES draws of generation.md §9. `scripts/pack_cmaes.py` packs them into the store beside the split they belong to, as `train_cma`, `val_cma` and `test_cma` (`train/pack.pack_cma_split`). The store is `training_store_sinh_fixed_gain`.
+
+- **Which draws.** At most 100 per rarely coupled model; generation.md §9 gives the selection. That is about 2.2 M train rows beside 4.15 M base rows (35%), and 0.22 M val rows beside 0.42 M (34%).
+- **Weight.** Every draw, base or CMA-ES, weighs the same in training and in validation. An equal weight for each part was considered and dropped for simplicity (project lead). Upweighting would repeat CMA-ES rows, and §7.3 found that oversampling coupled models hurt uncoupled ones. To give the regime more weight, raise the per-model cap instead.
+- **A CMA-ES row's model.** Each CMA-ES row refers to its model's row in the base split, so it shares that model's graph and SC. It is z-scored with the train split's statistics. `draws_per_model` limits base draws only: a chosen model brings all its CMA-ES rows.
+- **Validation on every val row** (`val_rows: null` in `configs/stage1_sinh.yaml`; before, a fixed random 50,000). With CMA-ES draws that is about 640,000 rows, about a minute per validation, or about 18% more run time when validating every 5,000 steps (kept, project lead). `val/total` and `val/selection` pool both parts. `val/base_total` and `val/cma_total` give each part's total.
+- **Final evaluation on every row** (`final_eval_rows: null`). `final/<split>/*` still covers base draws only, so runs with and without CMA-ES draws compare directly. `final/<split>_cma/*` covers the CMA-ES draws, and `final/<split>_pooled/*` covers both.
+- **Test size.** Test keeps all 10,000 models. With 1,000, a test-total difference of about 0.05 between runs (for example raw vs embedded θ, §7.7) would be within noise: the paired standard error is about 0.035, against 0.013 with 10,000 models.
+- **Re-evaluating older runs.** A run evaluated before this change can be evaluated the same way with `scripts/evaluate_final.py --set final_eval_rows=null cma_draws=true`.
