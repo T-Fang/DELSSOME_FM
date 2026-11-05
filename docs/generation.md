@@ -413,6 +413,27 @@ A job that fails writes nothing, and resubmitting the same range recomputes it e
 
 Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is one training sample.
 
+### CMA-ES around coupled draws (decided 2026-11-04/05, project lead)
+
+**Why.** The stage-1 network calls every fitted MFM and FIC parameter set uncoupled. Their equations reach the coupled regime in only 1–4% of random draws, and the network's recall falls with a model's coupled share (architecture.md §7.8). The corpus has many such models. In `corpus_sinh_fixed_gain`, 22% of corpus models have a coupled share of their usable base draws in $(0, 15\%]$: 6,825 at 0–5% and 15,172 at 5–15% of 100,000 train models; 2,170 and 2,224 in val and test. A further 36% are never coupled. For the rarely coupled models, CMA-ES adds draws near the empirical data, so the network sees more of the coupled regime there.
+
+**What is searched.** Only regional parameters. The model's equations, constants, coupling gains and SC group stay fixed, which is why this needs per-model gains (§4). CMA-ES (pycma) searches the $2P$ per-draw hyperparameters of the `sinh` policy: each regional parameter's level $z_p$ and spread $\kappa_p$, mapped to $[0, 1]$. Every candidate gets fresh regional noise $\varepsilon$, initial state and simulation noise, so its regional values are $\mu + \kappa|\mu|\varepsilon$ as for a base draw.
+
+**Objective.** The original DELSSOME cost $(1 - r) + d + \mathrm{KS}$ (`sim/cost.py`) against the empirical FC and FCD of the model's SC group. It is computed from the stored statistics, with the KS over the stored 100 FCD levels, so base draws and candidates are scored identically. There is no coupling term (project lead): the empirical FC is coupled, so a low cost needs coupling. A diverged, flat or non-finite candidate is told the largest possible total, 5.
+
+**Starts.** Two runs per model: from the coupled base draw with the lowest cost and from the second lowest. A model with a single coupled draw starts both runs there, with different CMA-ES randomness.
+
+**Splits.** All three splits:
+- **Train.** The candidates are further training draws.
+- **Val.** Its CMA-ES draws join the validation set, so checkpoint selection reflects the distribution we care about.
+- **Test.** The base test set stays the cross-run benchmark. The CMA-ES test draws are a separate set that measures this regime.
+
+**Determinism and files.** Every candidate is keyed by (seed, split, index, `CMA_TAG`, run, generation, member). pycma draws its normals from a generator keyed by (seed, split, index, `CMA_TAG`, run) through its `randn` option, never from the global RNG.
+
+`scripts/cmaes_data.py plan` writes the split's list of models (`plan.json`). `scripts/submit_cmaes.py` submits jobs over its positions. Each job writes `plan<first>-<stop>.npz`, with every candidate's corpus arrays plus model, run, generation, member, level, spread and cost terms. It also writes a `.log.jsonl` (one row per run, with each generation's best and median cost, coupled count and σ) and a manifest.
+
+**Budget.** Population, generations and σ₀ are set after a pilot (`configs/cmaes_pilot.yaml`: 16 × 30, σ₀ = 0.05).
+
 ---
 
 ## 10. What to run, in order

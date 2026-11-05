@@ -38,7 +38,11 @@ class Cost(NamedTuple):
 def fc_cost(fc_sim: Array, fc_emp: Array) -> tuple[Array, Array]:
     """fc_sim, fc_emp: (N, N) -> (1 - r, d) over the strict upper triangle."""
     rows, cols = upper(fc_emp.shape[0])
-    s, e = fc_sim[rows, cols], fc_emp[rows, cols]
+    return upper_fc_cost(fc_sim[rows, cols], fc_emp[rows, cols])
+
+
+def upper_fc_cost(s: Array, e: Array) -> tuple[Array, Array]:
+    """s, e: (E,) the simulated and empirical upper-triangle FC entries -> (1 - r, d)."""
     sc, ec = s - jnp.mean(s), e - jnp.mean(e)
     r = jnp.sum(sc * ec) / jnp.sqrt(jnp.sum(sc ** 2) * jnp.sum(ec ** 2))
     return 1.0 - r, jnp.abs(jnp.mean(s) - jnp.mean(e))

@@ -16,6 +16,7 @@ dependencies = [
     "jax",
     "equinox",
     "pycatch22",       # catch24 features of the corpus (sim/summary.py), added 2026-10-23
+    "cma",             # pycma: CMA-ES around coupled draws (sim/cmaes.py), added 2026-11-05
 ]
 
 [project.optional-dependencies]

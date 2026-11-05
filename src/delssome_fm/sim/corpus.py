@@ -68,15 +68,17 @@ from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
 from delssome_fm.sim.summary import catch24, fcd_levels, summarize
 from delssome_fm.spec.card import ModelCard, card_to_dict
 from delssome_fm.spec.compile import CompiledModel, compile_card
-from delssome_fm.spec.sampler import draw_gains, draw_parameters, sample_card
+from delssome_fm.spec.sampler import (draw_gains, draw_level_spread, draw_parameters,
+                                     regional_values, sample_card)
 
 P_MAX = 5   # regional parameters: 1 + up to 4 (generation.md §4)
 K_MAX = 2   # global parameters: one per channel, at most 2
 SPLIT_STREAM = {name: code for code, name in enumerate(SPLIT_NAMES)}  # train 0, val 1, test 2
 
 # Stream tags for np.random.default_rng([seed, stream, index, tag, ...]); the card itself
-# uses [seed, stream, index] (sampler.sample_card).
+# uses [seed, stream, index] (sampler.sample_card). CMA_TAG: sim/cmaes.py's candidates.
 _SC, _DRAW, _SCREEN, _GAIN = 1, 2, 3, 4
+CMA_TAG = 5
 GAIN_SCOPES = ("draw", "model")
 
 
@@ -141,11 +143,29 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
         psis.append(psi[0] if fixed is None else fixed)
         x0s.append(rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
                                (N_REGIONS, card.n_states)))
-    base = jax.random.key(cfg.seed)
-    for v in (SPLIT_STREAM[split], index, tag):
-        base = jax.random.fold_in(base, v)
+    base = jax_key(cfg, split, index, tag)
     keys = jnp.stack([jax.random.fold_in(base, j) for j in range(first, first + n)])
     return np.stack(thetas), np.stack(psis), np.stack(x0s), keys
+
+
+def base_level_spread(cfg: CorpusConfig, card: ModelCard, split: str, index: int, j: int
+                      ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """sinh policy: z (P,), kappa (P,) and theta (N, P) of base draw j, replaying the start of
+    its rng as `draws` does (draw_parameters = draw_level_spread, then regional_values)."""
+    if cfg.parameter_policy != "sinh":
+        raise ValueError(f"levels and spreads exist under the sinh policy only, found "
+                         f"{cfg.parameter_policy!r}")
+    rng = np.random.default_rng(_key(cfg, split, index, _DRAW, j))
+    z, kappa = draw_level_spread(card, rng, 1)
+    return z[0], kappa[0], regional_values(card, z, kappa, rng, N_REGIONS)[0]
+
+
+def jax_key(cfg: CorpusConfig, split: str, index: int, *more: int) -> jax.Array:
+    """The noise key of [seed, split, index, *more] (as `draws` folds them)."""
+    key = jax.random.key(cfg.seed)
+    for v in (SPLIT_STREAM[split], index, *more):
+        key = jax.random.fold_in(key, v)
+    return key
 
 
 STAT_NAMES = ("fcd_cdf", "regional", "pairwise", "fc_moments")
@@ -215,12 +235,14 @@ def simulate_draws(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel, 
 
 def simulate_given(cfg: CorpusConfig, sim_cfg: SimConfig, model: CompiledModel,
                    theta: np.ndarray, psi: np.ndarray, x0: np.ndarray, keys: jax.Array,
-                   sc: np.ndarray) -> dict[str, np.ndarray]:
+                   sc: np.ndarray, simulate: Callable | None = None) -> dict[str, np.ndarray]:
     """Simulate and summarise given parameters, exactly as the corpus does (simulate_draws).
     theta (n, N, P), psi (n, K), x0 (n, N, V), keys (n,), sc (N, N). Returns the per-draw
-    arrays of simulate_draws except `draw`."""
+    arrays of simulate_draws except `draw`. simulate: make_batch_simulate(model, sim_cfg),
+    passed by callers that call this repeatedly for one model so it compiles once."""
     n = len(keys)
-    simulate = make_batch_simulate(model, sim_cfg)
+    if simulate is None:
+        simulate = make_batch_simulate(model, sim_cfg)
     summarise = _summariser(sim_cfg, cfg.fcd_store_stride)
     parts = []
     for start in range(0, n, cfg.batch_size):

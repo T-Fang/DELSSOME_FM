@@ -379,17 +379,39 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
     """returns: theta (n_draws, N, P), psi (n_draws, K). multiplier: 10^U(-1, 1) each.
     sinh: theta the regions' coefficients, psi the gains (module docstring)."""
     _check_policy(policy)
-    P, K = len(card.regional_params), len(card.global_params)
     if policy == "multiplier":
+        P = len(card.regional_params)
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
         return theta, draw_gains(card, rng, n_draws, policy)
-    fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
-    z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
-    mu = SINH_SCALE * np.sinh(np.where(fixed, np.abs(z), z))[:, None, :]
-    kappa = rng.uniform(*SPREAD_RANGE, size=(n_draws, P))[:, None, :]
-    theta = mu + kappa * np.abs(mu) * rng.standard_normal((n_draws, n_regions, P))
-    theta = np.where(fixed, np.abs(theta), theta)
+    z, kappa = draw_level_spread(card, rng, n_draws)
+    theta = regional_values(card, z, kappa, rng, n_regions)
     return theta, draw_gains(card, rng, n_draws, policy)
+
+
+def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int
+                      ) -> tuple[np.ndarray, np.ndarray]:
+    """sinh policy: z (n_draws, P) the regional parameters' levels, mu_p = S sinh(z_p) (only
+    |z_p| matters for a fixed sign), and kappa (n_draws, P) their spreads (module docstring)."""
+    P = len(card.regional_params)
+    z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
+    kappa = rng.uniform(*SPREAD_RANGE, size=(n_draws, P))
+    return z, kappa
+
+
+def regional_values(card: ModelCard, z: np.ndarray, kappa: np.ndarray,
+                    rng: np.random.Generator, n_regions: int) -> np.ndarray:
+    """sinh policy: theta (n, N, P) from levels z and spreads kappa (n, P), with fresh
+    regional noise eps ~ N(0, 1) from rng (module docstring)."""
+    fixed = sign_fixed(card)
+    mu = SINH_SCALE * np.sinh(np.where(fixed, np.abs(z), z))[:, None, :]
+    eps = rng.standard_normal((len(z), n_regions, len(card.regional_params)))
+    theta = mu + kappa[:, None, :] * np.abs(mu) * eps
+    return np.where(fixed, np.abs(theta), theta)
+
+
+def sign_fixed(card: ModelCard) -> np.ndarray:
+    """(P,) bool: the regional parameters whose sign the slot fixes (positive_params)."""
+    return np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
 
 
 def draw_gains(card: ModelCard, rng: np.random.Generator, n_draws: int,

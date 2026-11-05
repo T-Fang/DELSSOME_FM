@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from conftest import DATA_CONFIG_PATH
-from delssome_fm.config import (ClusterConfig, CorpusConfig, DataConfig, FCAutoencoderConfig,
+from delssome_fm.config import (ClusterConfig, CmaesConfig, CorpusConfig, DataConfig, FCAutoencoderConfig,
                                  GeneralisationConfig,
                                  ReproduceConfig, SimConfig, SplitBounds, Stage1Config,
                                  TrainingDataConfig, ReferenceEvalConfig, load_config)
@@ -70,7 +70,7 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "training_data_sinh300k": TrainingDataConfig, "training_data_sinh_fixed_gain": TrainingDataConfig,
                   "stage1_d10": Stage1Config, "stage1_sinh_smoke": Stage1Config, "stage1_sinh": Stage1Config, "fc_autoencoder": FCAutoencoderConfig,
                   "reference_eval": ReferenceEvalConfig,
-                  "reference_eval_sinh": ReferenceEvalConfig}
+                  "reference_eval_sinh": ReferenceEvalConfig, "cmaes_pilot": CmaesConfig}
 
 
 @pytest.mark.parametrize("name,cls", sorted(CONFIG_CLASSES.items()))

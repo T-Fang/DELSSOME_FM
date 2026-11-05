@@ -49,7 +49,7 @@ from delssome_fm.sim.corpus import simulate_given
 from delssome_fm.spec.card import Coef, ModelCard, card_to_dict
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.reference import load_reference
-from delssome_fm.spec.sampler import draw_parameters, positive_params
+from delssome_fm.spec.sampler import draw_parameters, sign_fixed
 
 VARIANTS = ("scrambled", "random", "shuffled", "scrambled_solved")   # append only: the index seeds
 _VARIANT_STREAM = 1000      # seeds [seed, model, 1000, variant]; the repeats use [seed, model, k]
@@ -205,7 +205,7 @@ def variant_draw(card: ModelCard, theta: np.ndarray, psi: np.ndarray, variant: s
     else:
         mean, sd = theta[j].mean(axis=0), theta[j].std(axis=0)
         out = mean + sd * rng.standard_normal(theta[j].shape)
-        fixed = np.array([p in positive_params(card) for p in card.regional_params], dtype=bool)
+        fixed = sign_fixed(card)
         out = np.where(fixed, np.abs(out), out)
     if variant != "scrambled" and solve is not None:
         out = solve(out, psi[j])
