@@ -421,7 +421,7 @@ Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is 
 
 **Objective.** The original DELSSOME cost $(1 - r) + d + \mathrm{KS}$ (`sim/cost.py`) against the empirical FC and FCD of the model's SC group. It is computed from the stored statistics, with the KS over the stored 100 FCD levels, so base draws and candidates are scored identically. There is no coupling term (project lead): the empirical FC is coupled, so a low cost needs coupling. A diverged, flat or non-finite candidate is told the largest possible total, 5.
 
-**Starts.** Two runs per model: from the coupled base draw with the lowest cost and from the second lowest. A model with a single coupled draw starts both runs there, with different CMA-ES randomness.
+**Runs (decided 2026-11-05, project lead).** Run 1 starts at the coupled base draw with the lowest cost. A second run starts only if run 1 fails, meaning fewer than half of its usable candidates are coupled (CMA-ES left the coupled regime). It starts at the coupled draw with the second-lowest cost, or, for a model with a single coupled draw, at that draw again with different CMA-ES randomness. Each model contributes the candidates of one run: run 1's if it succeeds, otherwise run 2's, and run 1's are discarded.
 
 **Splits.** All three splits:
 - **Train.** The candidates are further training draws.
@@ -430,7 +430,7 @@ Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is 
 
 **Determinism and files.** Every candidate is keyed by (seed, split, index, `CMA_TAG`, run, generation, member). pycma draws its normals from a generator keyed by (seed, split, index, `CMA_TAG`, run) through its `randn` option, never from the global RNG.
 
-`scripts/cmaes_data.py plan` writes the split's list of models (`plan.json`). `scripts/submit_cmaes.py` submits jobs over its positions. Each job writes `plan<first>-<stop>.npz`, with every candidate's corpus arrays plus model, run, generation, member, level, spread and cost terms. It also writes a `.log.jsonl` (one row per run, with each generation's best and median cost, coupled count and σ) and a manifest.
+`scripts/cmaes_data.py plan` writes the split's list of models (`plan.json`). `scripts/submit_cmaes.py` submits jobs over its positions. Each job writes `plan<first>-<stop>.npz`, with every candidate's corpus arrays plus model, run, generation, member, level, spread and cost terms. Only the kept run's candidates are stored. The `.log.jsonl` has one row per run, kept or not, with the run's usable and coupled counts, whether it succeeded, and each generation's best and median cost, coupled count and σ. A manifest records the configs.
 
 **Budget.** Population, generations and σ₀ are set after a pilot (`configs/cmaes_pilot.yaml`: 16 × 30, σ₀ = 0.05).
 

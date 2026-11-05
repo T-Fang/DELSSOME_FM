@@ -7,7 +7,8 @@ corpus_config: configs/corpus_sinh_fixed_gain.yaml
 n_models: {train: 100000, val: 10000, test: 10000}   # the corpus: first valid models
 coupled_threshold: 0.05       # coupled: mean off-diagonal FC > 0.05 (the regime call)
 max_coupled_share: 0.15       # the 0-5% and 5-15% bands
-runs: 2                       # from the lowest- and second-lowest-cost coupled base draws
+max_runs: 2                   # run 2 (second-lowest-cost coupled draw) only if run 1 fails
+min_coupled_share: 0.5        # run fails: < 50% of its usable candidates coupled (2026-11-05)
 population: 16
 generations: 30
 sigma0: 0.05                  # u spans [0, 1]: a level moves by ~2 of its 38 asinh units

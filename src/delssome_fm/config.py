@@ -251,8 +251,9 @@ class CmaesConfig:
     n_models: SplitSizes          # each split's corpus: its first n valid models
     coupled_threshold: float      # a usable draw is coupled if its mean FC > this
     max_coupled_share: float      # models with 0 < coupled share of usable base draws <= this
-    runs: int                     # CMA-ES runs per model: from the lowest-cost coupled base
-                                  # draw, the second lowest, ... (the lowest again if too few)
+    max_runs: int                 # runs per model: the next starts only if the last failed
+                                  # (from the next-lowest-cost coupled base draw); the last is kept
+    min_coupled_share: float      # a run fails if fewer of its usable candidates are coupled
     population: int               # candidates per generation (lambda)
     generations: int
     sigma0: float                 # initial step size, in coordinates where each level and

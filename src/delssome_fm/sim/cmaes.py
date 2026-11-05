@@ -28,13 +28,17 @@ statistics the corpus stores: FC = tanh(pairwise), KS over the stored FCD levels
 (summary.fcd_levels, also applied to the empirical CDF). Base draws are ranked by the same
 function. A diverged, flat or non-finite candidate is told `failed_cost`.
 
-Starts (decided 2026-11-05). Run k starts at the base draw with the k-th lowest total among
-the model's coupled base draws (usable, mean FC > coupled_threshold), or at the lowest when
-there are fewer than k + 1 (then only CMA-ES's own randomness differs between runs).
+Runs (decided 2026-11-05). Run 0 starts at the coupled base draw (usable, mean FC >
+coupled_threshold) with the lowest total. A run fails when fewer than min_coupled_share of its
+usable candidates are coupled (or none is usable): CMA-ES left the coupled regime. Only then
+does the next run start, at the coupled base draw with the next lowest total, or at the lowest
+again when there is none (then only CMA-ES's own randomness differs), up to max_runs runs.
+The last run is kept, failed or not: its candidates are the model's data, and the earlier
+(failed) runs' candidates are discarded.
 
-Output. Every candidate is kept, with the per-draw arrays the corpus stores
+Output. Every candidate of the kept run, with the per-draw arrays the corpus stores
 (corpus.simulate_given), so training can use them as further draws of the model; plus model,
-run, generation, member, level, spread and cost terms. One log row per run.
+run, generation, member, level, spread and cost terms. One log row per run, kept or not.
 """
 
 from __future__ import annotations
@@ -265,7 +269,8 @@ def _pad(a: np.ndarray, width: int) -> np.ndarray:
 def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
               data_cfg: DataConfig, split: str, index: int, scs: np.ndarray
               ) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
-    """All CMA-ES runs of one model: (per-candidate arrays, one log row per run)."""
+    """The CMA-ES runs of one model (module docstring): (the kept run's per-candidate
+    arrays, one log row per run)."""
     if corpus_cfg.gain_scope != "model" or corpus_cfg.parameter_policy != "sinh":
         raise ValueError("CMA-ES needs a corpus with gain_scope model and the sinh policy, "
                          f"found {corpus_cfg.gain_scope!r}, {corpus_cfg.parameter_policy!r}")
@@ -280,14 +285,15 @@ def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
         raise ValueError(f"{split} model {index}: stored gains differ from model_gains")
     usable, coupled = usable_coupled(base, cfg.coupled_threshold)
     base_cost = draw_costs(base, emp)
-    starts = start_draws(base_cost.sum(axis=1), coupled, cfg.runs)
+    starts = start_draws(base_cost.sum(axis=1), coupled, cfg.max_runs)
 
     sim_corpus = dataclasses.replace(corpus_cfg, batch_size=cfg.population)
     simulate = make_batch_simulate(model, sim_cfg)
     psi = np.broadcast_to(gains, (cfg.population, K))
-    parts, logs = [], []
+    logs = []
     for run, j in enumerate(starts):
         t0 = time.time()
+        parts = []
         z0, kappa0, theta_j = base_level_spread(corpus_cfg, card, split, index, j)
         if not np.allclose(_pad(theta_j, P_MAX), base["theta"][j], rtol=1e-5, equal_nan=True):
             raise ValueError(f"{split} model {index} draw {j}: stored theta differs from its "
@@ -318,14 +324,20 @@ def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
                             "coupled": int(hot.sum()), "failed": int((told == cfg.failed_cost).sum()),
                             "sigma": float(es.sigma)})
             generation += 1
+        arrays = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
+        ok, hot = usable_coupled(arrays, cfg.coupled_threshold)
+        succeeded = bool(ok.any() and hot.sum() >= cfg.min_coupled_share * ok.sum())
         logs.append({
             "split": split, "index": index, "run": run, "start_draw": j,
             "start_cost": dict(zip(COST_TERMS, base_cost[j].tolist())),
             "base_usable": int(usable.sum()), "base_coupled": int(coupled.sum()),
             "base_best_total": float(np.nanmin(np.where(usable, base_cost.sum(axis=1), np.nan))),
             "generations": generation, "stop": {k: str(v) for k, v in es.stop().items()},
-            "history": history, "wall_time_s": time.time() - t0})
-    arrays = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
+            "usable": int(ok.sum()), "coupled": int(hot.sum()), "succeeded": succeeded,
+            "kept": False, "history": history, "wall_time_s": time.time() - t0})
+        if succeeded:
+            break
+    logs[-1]["kept"] = True
     return arrays, logs
 
 

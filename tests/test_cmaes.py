@@ -30,7 +30,8 @@ def _corpus(tmp_path: Path) -> CorpusConfig:
 
 def _cfg(tmp_path: Path, **kw) -> CmaesConfig:
     base = dict(corpus_config=tmp_path / "corpus.yaml", n_models=SplitSizes(1, 1, 1),
-                coupled_threshold=-1.0, max_coupled_share=1.0, runs=2, population=4,
+                coupled_threshold=-1.0, max_coupled_share=1.0, max_runs=2,
+                min_coupled_share=0.5, population=4,
                 generations=2, sigma0=0.05, failed_cost=5.0, output_dir=tmp_path / "cma")
     return CmaesConfig(**{**base, **kw})
 
@@ -158,24 +159,35 @@ def test_tiny_end_to_end(tmp_path, monkeypatch):
     again, _ = cmaes.run_model(cfg, corpus, SIM, None, "train", index, scs)
     for k in out:
         np.testing.assert_array_equal(out[k], again[k], err_msg=k)
-    n = cfg.runs * cfg.generations * cfg.population
+    n = cfg.generations * cfg.population
     assert len(out["model"]) == n and set(out["model"].tolist()) == {index}
-    assert out["run"].tolist() == np.repeat([0, 1], n // 2).tolist()
-    assert out["generation"].tolist() == np.tile(np.repeat([0, 1], 4), 2).tolist()
+    assert out["run"].tolist() == [0] * n                            # all coupled: run 0 succeeds
+    assert out["generation"].tolist() == np.repeat([0, 1], 4).tolist()
     K = len(card_for(corpus, "train", index).global_params)
     np.testing.assert_allclose(out["psi"][:, :K], np.broadcast_to(
         model_gains(corpus, card_for(corpus, "train", index), "train", index), (n, K)), rtol=1e-6)
     ok = ~out["diverged"] & ~out["flat"]
     assert np.isfinite(out["cost"][ok]).all() and np.isnan(out["cost"][out["diverged"]]).all()
-    assert [r["run"] for r in rows] == [0, 1] and all(r["generations"] == 2 for r in rows)
+    assert len(rows) == 1 and rows[0]["succeeded"] and rows[0]["kept"]
+    assert rows[0]["generations"] == 2 and rows[0]["usable"] == int(ok.sum())
+
+    # every run fails (no share reaches 110%): run 1 starts, and only its candidates are kept
+    strict = dataclasses.replace(cfg, min_coupled_share=1.1)
+    fell, fell_rows = cmaes.run_model(strict, corpus, SIM, None, "train", index, scs)
+    assert [(r["run"], r["succeeded"], r["kept"]) for r in fell_rows] == [(0, False, False),
+                                                                          (1, False, True)]
+    assert fell_rows[0]["history"] == rows[0]["history"]             # run 0 is the same run
+    assert fell["run"].tolist() == [1] * n
+    assert not np.array_equal(fell["theta"], out["theta"])
     base = cmaes.model_arrays(corpus, "train", index)
     usable = ~base["diverged"] & ~base["flat"]
     total = cmaes.draw_costs(base, emp).sum(axis=1)
-    assert [r["start_draw"] for r in rows] == cmaes.start_draws(total, usable, 2)
+    assert [r["start_draw"] for r in fell_rows] == cmaes.start_draws(total, usable, 2)
+
     paths = cmaes.run_chunk(cfg, corpus, SIM, None, "train", 0, 1, scs)
     with np.load(paths["arrays"]) as d:
         np.testing.assert_array_equal(d["cost"], out["cost"])
-    assert len(paths["log"].read_text().splitlines()) == cfg.runs
+    assert len(paths["log"].read_text().splitlines()) == 1
     with pytest.raises(ValueError, match="outside"):
         cmaes.run_chunk(cfg, corpus, SIM, None, "train", 0, len(plan) + 1, scs)
     with pytest.raises(ValueError, match="gain_scope model"):
