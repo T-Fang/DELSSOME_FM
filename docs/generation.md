@@ -423,6 +423,8 @@ Cheaper than it looks: stage 1 needs no empirical pairing, so one simulation is 
 
 **Runs (decided 2026-11-05, project lead).** Run 1 starts at the coupled base draw with the lowest cost. A second run starts only if run 1 fails, meaning fewer than half of its usable candidates are coupled (CMA-ES left the coupled regime). It starts at the coupled draw with the second-lowest cost, or, for a model with a single coupled draw, at that draw again with different CMA-ES randomness. Each model contributes the candidates of one run: run 1's if it succeeds, otherwise run 2's, and run 1's are discarded.
 
+**Skipped models (decided 2026-11-06, project lead).** A model none of whose coupled base draws has a finite cost gets no CMA-ES, because there is no draw to start from. In the first 10,000 train models of the plan this happened 3 times, each time because every coupled draw had an empty FCD (0 window pairs). Stage 1 drops such draws anyway, so for training these are never-coupled models. The run log records them as skipped.
+
 **Splits.** All three splits:
 - **Train.** The candidates are further training draws.
 - **Val.** Its CMA-ES draws join the validation set, so checkpoint selection reflects the distribution we care about.

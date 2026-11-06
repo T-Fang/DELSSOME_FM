@@ -36,6 +36,12 @@ again when there is none (then only CMA-ES's own randomness differs), up to max_
 The last run is kept, failed or not: its candidates are the model's data, and the earlier
 (failed) runs' candidates are discarded.
 
+Skipped (decided 2026-11-06, project lead). A model none of whose coupled base draws has a
+finite cost gets no CMA-ES: there is no start. In practice its coupled draws all have an
+empty FCD, which stage 1 drops too, so for training it is a never-coupled model. Its log row
+says why (`skipped`); a chunk whose models were all skipped writes an arrays file with no
+arrays.
+
 Output. Every candidate of the kept run, with the per-draw arrays the corpus stores
 (corpus.simulate_given), so training can use them as further draws of the model; plus model,
 run, generation, member, level, spread and cost terms. One log row per run, kept or not.
@@ -268,9 +274,9 @@ def _pad(a: np.ndarray, width: int) -> np.ndarray:
 
 def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
               data_cfg: DataConfig, split: str, index: int, scs: np.ndarray
-              ) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
+              ) -> tuple[dict[str, np.ndarray] | None, list[dict[str, Any]]]:
     """The CMA-ES runs of one model (module docstring): (the kept run's per-candidate
-    arrays, one log row per run)."""
+    arrays, one log row per run), or (None, one log row) for a skipped model."""
     if corpus_cfg.gain_scope != "model" or corpus_cfg.parameter_policy != "sinh":
         raise ValueError("CMA-ES needs a corpus with gain_scope model and the sinh policy, "
                          f"found {corpus_cfg.gain_scope!r}, {corpus_cfg.parameter_policy!r}")
@@ -285,6 +291,11 @@ def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
         raise ValueError(f"{split} model {index}: stored gains differ from model_gains")
     usable, coupled = usable_coupled(base, cfg.coupled_threshold)
     base_cost = draw_costs(base, emp)
+    if not (coupled & np.isfinite(base_cost.sum(axis=1))).any():
+        return None, [{"split": split, "index": index,
+                       "skipped": "no coupled base draw with a finite cost (an empty FCD)",
+                       "base_usable": int(usable.sum()), "base_coupled": int(coupled.sum()),
+                       "kept": False}]
     starts = start_draws(base_cost.sum(axis=1), coupled, cfg.max_runs)
 
     sim_corpus = dataclasses.replace(corpus_cfg, batch_size=cfg.population)
@@ -354,17 +365,20 @@ def chunk_paths(cfg: CmaesConfig, split: str, first: int, stop: int) -> dict[str
 def run_chunk(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
               data_cfg: DataConfig, split: str, first: int, stop: int, scs: np.ndarray
               ) -> dict[str, Path]:
-    """CMA-ES for plan positions first..stop-1; writes the arrays and the run log."""
+    """CMA-ES for plan positions first..stop-1; writes the arrays (none if every model was
+    skipped) and the run log."""
     plan = read_plan(cfg, split)
     if not 0 <= first < stop <= len(plan):
         raise ValueError(f"plan positions {first}..{stop - 1} outside 0..{len(plan) - 1}")
     parts, logs = [], []
     for row in plan[first:stop]:
         arrays, rows = run_model(cfg, corpus_cfg, sim_cfg, data_cfg, split, row["index"], scs)
-        parts.append(arrays)
+        if arrays is not None:
+            parts.append(arrays)
         logs.extend(rows)
     paths = chunk_paths(cfg, split, first, stop)
     paths["arrays"].parent.mkdir(parents=True, exist_ok=True)
-    np.savez(paths["arrays"], **{k: np.concatenate([p[k] for p in parts]) for k in parts[0]})
+    np.savez(paths["arrays"], **({k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
+                                 if parts else {}))
     paths["log"].write_text("".join(json.dumps(r) + "\n" for r in logs))
     return paths

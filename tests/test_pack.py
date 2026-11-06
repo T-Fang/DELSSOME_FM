@@ -137,8 +137,11 @@ def test_cma_draws_are_packed_beside_their_split(tiny_cma_store):
     np.testing.assert_array_equal(index[model], info["index"])     # rows point at base models
     np.testing.assert_array_equal(np.load(root / "draw.npy"),
                                   info["generation"] * cfg.population + info["member"])
+    assert summary["skipped_models"] == 1 and index[-1] not in info["index"]  # fixture skips it
     for path in sorted((cfg.output_dir / "train").glob("plan*.npz")):
         with np.load(path) as d:
+            if "model" not in d.files:                   # every model of the chunk skipped
+                continue
             f = _row_flags(d, n_window_pairs(sim_cfg))
             ok = f["usable"] & f["complete"] & f["finite"]
             for i in np.unique(d["model"]):

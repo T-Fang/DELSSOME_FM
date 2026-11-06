@@ -2,6 +2,7 @@
 touches the global RNG), base draws' levels and spreads, and a tiny end-to-end run."""
 
 import dataclasses
+import json
 from pathlib import Path
 
 import jax
@@ -193,3 +194,14 @@ def test_tiny_end_to_end(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="gain_scope model"):
         cmaes.run_model(cfg, dataclasses.replace(corpus, gain_scope="draw"), SIM, None, "train",
                         index, scs)
+
+    # no coupled base draw with a finite cost (here: every FCD empty): skipped, not an error
+    real = cmaes.model_arrays
+    monkeypatch.setattr(cmaes, "model_arrays", lambda *a: {
+        **real(*a), "fcd_cdf": np.zeros_like(real(*a)["fcd_cdf"])})
+    none, skip = cmaes.run_model(cfg, corpus, SIM, None, "train", index, scs)
+    assert none is None and len(skip) == 1 and "empty FCD" in skip[0]["skipped"]
+    paths = cmaes.run_chunk(cfg, corpus, SIM, None, "train", 0, 1, scs)
+    with np.load(paths["arrays"]) as d:
+        assert d.files == []                             # every model skipped: no arrays
+    assert "skipped" in json.loads(paths["log"].read_text())

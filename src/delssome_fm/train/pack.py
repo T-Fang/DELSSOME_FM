@@ -50,7 +50,8 @@ row in <split>/models.npz, so the graphs and SCs are the base split's, and `draw
 candidate's number in its run (generation x population + member). cma.npz gives each row's
 corpus index, run, generation, member, level, spread and cost terms. Per model, at most
 CMA_DRAWS_PER_MODEL of its kept run's candidates enter, chosen by `select_cma` among those that
-pass the same checks as base draws. The z-score statistics stay the base train split's.
+pass the same checks as base draws; a model that CMA-ES skipped (its chunk's log says so) has
+none. The z-score statistics stay the base train split's.
 
 This module only reads the corpus and writes the store. It does not know about torch.
 """
@@ -417,13 +418,21 @@ def pack_cma_split(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfi
     full = n_window_pairs(sim_cfg)
     keep, counts = {}, Counter()
     for first, stop, path in cma_chunks(cfg.output_dir, split, len(plan)):
+        log = [json.loads(line) for line in path.with_suffix(".log.jsonl").read_text().splitlines()]
+        skipped = {r["index"] for r in log if r.get("skipped")}     # no CMA-ES (sim/cmaes.py)
+        want = [i for i in plan[first:stop] if i not in skipped]
+        counts.update(skipped_models=len(skipped))
         with np.load(path) as d:
+            if not want:
+                if d.files:
+                    raise ValueError(f"{path}: every model was skipped, yet it holds arrays")
+                continue
             flags = _row_flags(d, full)
             ok = flags["usable"] & flags["complete"] & flags["finite"]
-            index, want = d["model"], plan[first:stop]
+            index = d["model"]
             if list(dict.fromkeys(index.tolist())) != want:
                 raise ValueError(f"{path}: its models differ from plan positions "
-                                 f"{first}..{stop - 1}")
+                                 f"{first}..{stop - 1} less the skipped ones")
             mask = np.zeros(len(index), bool)
             for i in want:
                 at = np.flatnonzero(index == i)

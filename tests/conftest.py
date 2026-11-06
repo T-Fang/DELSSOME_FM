@@ -73,7 +73,8 @@ def _tiny_store(tmp_path_factory, policy: str):
 def tiny_cma_store(tiny_store, tmp_path_factory):
     """(store_dir, CmaesConfig, CorpusConfig, SimConfig): a copy of tiny_store with CMA-ES
     draws packed from fake chunks (train/pack.pack_cma_split, 7 per model, the first 2 of each
-    generation; with the network FC). Each model's candidates are its base draws repeated as
+    generation; with the network FC). The last model was skipped by CMA-ES (no candidates, a
+    log row saying so). Each other model's candidates are its base draws repeated as
     3 generations of 4,
     candidate 0 marked diverged, in two chunks. val_cma and test_cma are copies of train_cma,
     as val and test are copies of train."""
@@ -111,9 +112,14 @@ def tiny_cma_store(tiny_store, tmp_path_factory):
         return out
 
     for first, stop in ((0, 1), (1, len(members))):
-        parts = [fake(i) for i in members[first:stop]]
-        np.savez(cfg.output_dir / "train" / f"plan{first:06d}-{stop:06d}.npz",
-                 **{k: np.concatenate([p[k] for p in parts]) for k in parts[0]})
+        ran = [i for i in members[first:stop] if i != members[-1]]
+        path = cfg.output_dir / "train" / f"plan{first:06d}-{stop:06d}.npz"
+        parts = [fake(i) for i in ran]
+        np.savez(path, **({k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
+                          if parts else {}))
+        path.with_suffix(".log.jsonl").write_text("".join(
+            json.dumps({"index": i, "kept": i in ran} | ({} if i in ran else {"skipped": "test"}))
+            + "\n" for i in members[first:stop]))
     pack_cma_split(cfg, corpus_cfg, sim_cfg, store, "train", per_model=7, per_generation=2)
     pack_network_fc(store / "train_cma")           # the base splits have the network FC too
     for split in ("val", "test"):
