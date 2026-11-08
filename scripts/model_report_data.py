@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from delssome_fm.config import ReferenceEvalConfig, load_config
+from delssome_fm.config import ReferenceEvalConfig, load_config, override
 from delssome_fm.train.evaluate import load_stage1
 from delssome_fm.train.report import (catch24_fit, prediction_vs_simulation,
                                       reference_comparison, training_average)
@@ -36,11 +36,15 @@ def main() -> None:
                         "those of the final evaluation)")
     p.add_argument("--split", choices=("test", "train"), default="test")
     p.add_argument("--reference-config", type=Path, default=Path("configs/reference_eval.yaml"))
+    p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
+                   help="evaluate under other settings than the run's, e.g. final_eval_rows=null "
+                        "(every test row, as scripts/evaluate_final.py --set; 2026-11-08)")
     args = p.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     module = load_stage1(args.checkpoint).to(device)
+    module.cfg = override(module.cfg, args.set)
     name = "report_data.npz" if args.split == "test" else "report_data_train.npz"
     result = {}
     if module.cfg.stat_loss:                    # FC and FCD predictions are trained

@@ -843,3 +843,60 @@ def test_lightning_run_with_cma_draws_reports_each_part(tiny_cma_store, tmp_path
         assert rows[split] + rows[f"{split}_cma"] == rows[f"{split}_pooled"]
     with np.load(checkpoints / "final_eval.npz") as e:
         assert {"val_total", "val_cma_total", "test_cma_total"} <= set(e.files)
+
+
+def test_final_evaluation_of_val_and_test_only_keeps_the_train_numbers(tiny_store, tmp_path):
+    """evaluate_final.py --splits val test --set final_eval_rows=null (2026-11-08): every val
+    and test row, and final/train/* is not logged again."""
+    import mlflow
+    from lightning.pytorch.loggers import MLFlowLogger
+    from delssome_fm.config import override
+    from delssome_fm.train.data import Stage1DataModule
+    from delssome_fm.train.evaluate import load_stage1
+    from delssome_fm.train.fit import final_evaluation
+    from delssome_fm.train.report import training_composition
+    store_dir = tiny_store[0].store_dir
+    stage1 = dataclasses.replace(tiny_config(store_dir, tmp_path), final_eval_rows=4)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="subset")
+    client = mlflow.MlflowClient(tracking_uri=stage1.mlflow_tracking_uri)
+    run = client.search_runs([client.get_experiment_by_name("test").experiment_id])[0]
+    m = run.data.metrics
+    assert m["final/test/rows_coupled"] + m["final/test/rows_uncoupled"] == 4 < len(
+        TrainingStore(store_dir, "test"))
+    module = load_stage1(next(checkpoints.glob("step*.ckpt")))
+    module.cfg = override(module.cfg, ["final_eval_rows=null"])
+    data = Stage1DataModule(module.cfg.store_dir, module.cfg.batch_size, module.cfg.val_rows,
+                            0, module.cfg.seed, training_composition(module))
+    data.setup()
+    logger = MLFlowLogger(experiment_name="test", tracking_uri=stage1.mlflow_tracking_uri,
+                          run_id=run.info.run_id)
+    with pytest.raises(ValueError, match="val and test"):
+        final_evaluation(module, data, logger, checkpoints, splits=("train", "test"))
+    summary = final_evaluation(module, data, logger, checkpoints, splits=("val", "test"))
+    assert set(summary) == {"val", "test"}
+    for split in ("val", "test"):
+        s = summary[split]
+        assert s["rows_coupled"] + s["rows_uncoupled"] == len(TrainingStore(store_dir, split))
+    assert len(client.get_metric_history(run.info.run_id, "final/train/total")) == 1
+    assert len(client.get_metric_history(run.info.run_id, "final/test/total")) == 2
+
+
+def test_report_cost_terms_in_chunks_equal_one_pass():
+    from delssome_fm.train.report import cost_terms
+    rng = np.random.default_rng(0)
+    fc_a, fc_b = rng.uniform(-1, 1, (10, 15)), rng.uniform(-1, 1, (10, 15))
+    cdf_a, cdf_b = np.sort(rng.uniform(size=(10, 7))), np.sort(rng.uniform(size=(10, 7)))
+    whole = cost_terms(fc_a, fc_b, cdf_a, cdf_b, chunk=100)
+    # a broadcast reference (as prediction_vs_simulation passes it) works chunk by chunk too
+    chunked = cost_terms(np.broadcast_to(fc_a[0], fc_a.shape), fc_b,
+                         np.broadcast_to(cdf_a[0], cdf_a.shape), cdf_b, chunk=3)
+    reference = cost_terms(np.tile(fc_a[0], (10, 1)), fc_b, np.tile(cdf_a[0], (10, 1)), cdf_b)
+    for k in ("corr", "mean", "ks"):
+        assert whole[k].shape == (10,)
+        np.testing.assert_array_equal(chunked[k], reference[k])
+    np.testing.assert_array_equal(cost_terms(fc_a, fc_b, cdf_a, cdf_b, chunk=4)["corr"],
+                                  whole["corr"])
+    with pytest.raises(ValueError, match="at least one row"):
+        cost_terms(fc_a[:0], fc_b[:0], cdf_a[:0], cdf_b[:0])

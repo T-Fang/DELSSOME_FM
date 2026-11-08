@@ -5,6 +5,12 @@ and log it into that run's MLflow record, for runs trained before it existed. Us
         --ngpus 1 --conda-env delssome_fm_train --submit -- \\
         python scripts/evaluate_final.py --run-name d10_n300k_natural \\
         --checkpoint outputs/stage1/d10_n300k_natural/step80000.ckpt
+
+Every val and test row, leaving final/train/* as it was (2026-11-08):
+
+    ... python scripts/evaluate_final.py --run-name sinh_orig \
+        --checkpoint outputs/stage1/sinh_orig/step140000.ckpt --splits val test \
+        --set final_eval_rows=null
 """
 
 import argparse
@@ -17,7 +23,7 @@ from lightning.pytorch.loggers import MLFlowLogger
 from delssome_fm.config import override
 from delssome_fm.train.data import Stage1DataModule
 from delssome_fm.train.evaluate import load_stage1
-from delssome_fm.train.fit import final_evaluation
+from delssome_fm.train.fit import FINAL_SPLITS, final_evaluation
 from delssome_fm.train.report import training_composition
 
 
@@ -27,6 +33,8 @@ def main() -> None:
     p.add_argument("--run-name", required=True, help="the MLflow run to log into")
     p.add_argument("--coupled", action="store_true",
                    help="evaluate coupled draws only, logged as final_coupled/<split>/*")
+    p.add_argument("--splits", nargs="+", default=list(FINAL_SPLITS), choices=FINAL_SPLITS,
+                   help="splits to evaluate (val and test always; default all three)")
     p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
                    help="evaluate under other settings than the run's, e.g. final_eval_rows=null "
                         "cma_draws=true (all rows, with the CMA-ES draws; 2026-11-05)")
@@ -46,7 +54,8 @@ def main() -> None:
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers, cfg.seed,
                             training_composition(module), cma=cfg.cma_draws)
     data.setup()
-    summary = final_evaluation(module, data, logger, args.checkpoint.parent, coupled=args.coupled)
+    summary = final_evaluation(module, data, logger, args.checkpoint.parent, coupled=args.coupled,
+                               splits=tuple(args.splits))
     for split, s in summary.items():
         print(split, {k: round(v, 4) for k, v in s.items()})
 

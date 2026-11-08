@@ -5,6 +5,10 @@ comparison.npz, where it exists). Writes <out>/comparison_table.md and .csv.
 
     python scripts/comparison_table.py --runs d10 --out outputs/report
     python scripts/comparison_table.py --runs sinh --out outputs/report_sinh
+    python scripts/comparison_table.py --runs fixed_gain --out outputs/report_sinh_fg
+
+The fixed_gain set adds the CMA-ES draws (final/<split>_cma/*, base + CMA-ES pooled in
+final/<split>_pooled/*; generation.md §9) as extra sections.
 """
 
 import argparse
@@ -14,7 +18,7 @@ from pathlib import Path
 import mlflow
 import numpy as np
 
-# run set -> (MLflow experiment, {run: (description, reference-model comparison file)})
+# runs: {run: (description, reference-model comparison file)}
 D10 = {
     "stage1_v1": ("100k models × ~80 draws, bilinear head", "outputs/report/stage1_v1/comparison.npz"),
     "d10_n300k_natural": ("300k models × 10 draws, bilinear head",
@@ -58,8 +62,18 @@ SINH = {   # 100k models x all draws (~40 usable each) of the sinh corpus, mlp_c
     "sinh_ptok_raw_m300k_s400k": ("+ cost, parameter tokens θ raw, 300k models, 400k steps",
                                   "outputs/report_sinh/sinh_ptok_raw_m300k_s400k/comparison.npz"),
 }
-RUN_SETS = {"d10": ("stage1", D10), "sinh": ("stage1_sinh", SINH)}
+FIXED_GAIN = {   # corpus_sinh_fixed_gain (per-model gains), 100k models, parameter tokens θ raw
+    "sinh_fg_ptok_raw_cost": ("+ cost, parameter tokens θ raw",
+                              "outputs/report_sinh/sinh_fg_ptok_raw_cost/comparison.npz"),
+    "sinh_fg_ptok_raw_cost_cma": ("+ cost, parameter tokens θ raw, + CMA-ES draws",
+                                  "outputs/report_sinh/sinh_fg_ptok_raw_cost_cma/comparison.npz"),
+}
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]
+CMA_SPLITS = [("val_cma", "val, CMA-ES draws"), ("test_cma", "test, CMA-ES draws"),
+              ("test_pooled", "test, base + CMA-ES draws")]
+# run set -> (MLflow experiment, runs, the final/<split> sections of the table)
+RUN_SETS = {"d10": ("stage1", D10, SPLITS), "sinh": ("stage1_sinh", SINH, SPLITS),
+            "fixed_gain": ("stage1_sinh", FIXED_GAIN, SPLITS + CMA_SPLITS)}
 COUPLED = [("final_coupled/train", "trained rows, coupled draws"),
            ("final_coupled/test", "test, coupled draws")]
 TEST = [("total", "MSE total"), ("r2_pairwise", "R² FC"),
@@ -77,7 +91,7 @@ def main() -> None:
                    "outputs/mlflow/mlflow.db")
     args = p.parse_args()
 
-    experiment, runs_spec = RUN_SETS[args.runs]
+    experiment, runs_spec, splits = RUN_SETS[args.runs]
     client = mlflow.MlflowClient(tracking_uri=args.mlflow)
     runs = {r.info.run_name: r for r in
             client.search_runs([client.get_experiment_by_name(experiment).experiment_id])}
@@ -88,7 +102,7 @@ def main() -> None:
             continue
         m = runs[name].data.metrics
         row = {"run": name, "model": desc}
-        for split, _ in SPLITS:
+        for split, _ in splits:
             row.update({f"{split} {label}": m.get(f"final/{split}/{k}", np.nan)
                         for k, label in TEST})
         for prefix, _ in COUPLED:
@@ -120,7 +134,7 @@ def main() -> None:
     fmt = lambda v: v if isinstance(v, str) else ("—" if np.isnan(v) else f"{v:.3f}")  # noqa: E731
     ref_keys = ["model"] + [k for k in keys if k.split(" ")[0] in ("MFM", "FIC", "Hopf")]
     lines = []
-    for split, title in SPLITS:
+    for split, title in splits:
         split_keys = ["model"] + [f"{split} {label}" for _, label in TEST]
         lines += [f"## Synthetic models, {title} (medians of cost terms over draws)", "",
                   "| " + " | ".join(["model"] + [label for _, label in TEST]) + " |",

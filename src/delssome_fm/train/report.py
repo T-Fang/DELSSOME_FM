@@ -65,13 +65,19 @@ def predict_fc_fcd(module: Stage1Module, store: TrainingStore, rows: np.ndarray,
 
 
 def cost_terms(fc_a: np.ndarray, fc_b: np.ndarray, cdf_a: np.ndarray,
-               cdf_b: np.ndarray) -> dict[str, np.ndarray]:
+               cdf_b: np.ndarray, chunk: int = 20_000) -> dict[str, np.ndarray]:
     """Row-wise DELSSOME cost terms between two sets of statistics: fc (R, E) raw FC upper
     triangles, cdf (R, L) CDFs, as numpy. Returns corr (1 - r), mean (|mean difference|), ks
-    (train/costs.py)."""
-    t = [torch.as_tensor(np.ascontiguousarray(x), dtype=torch.float64)
-         for x in (fc_a, fc_b, cdf_a, cdf_b)]
-    return {k: v.numpy() for k, v in costs.cost_terms(*t).items()}
+    (train/costs.py). In float64, `chunk` rows at a time (the terms are row-wise, so the result
+    is the same; all 410k test rows at once would take ~45 GB)."""
+    if len(fc_a) == 0:
+        raise ValueError("cost_terms needs at least one row")
+    parts = []
+    for i in range(0, len(fc_a), chunk):
+        t = [torch.as_tensor(np.ascontiguousarray(x[i:i + chunk]), dtype=torch.float64)
+             for x in (fc_a, fc_b, cdf_a, cdf_b)]
+        parts.append({k: v.numpy() for k, v in costs.cost_terms(*t).items()})
+    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
 
 
 # ---------------------------------------------------------------- the report's data
