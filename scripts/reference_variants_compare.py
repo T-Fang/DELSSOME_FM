@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from delssome_fm.config import ReferenceEvalConfig, load_config
+from delssome_fm.config import ReferenceEvalConfig, load_config, override
 from delssome_fm.train.data import TrainingStore
 from delssome_fm.train.evaluate import evaluation_rows, load_stage1
 from delssome_fm.train.report import regime_rows, regime_summary
@@ -35,10 +35,15 @@ def main() -> None:
     p.add_argument("--variants", nargs="+", default=["r0", "scrambled", "random"],
                    help="store splits <model>_<variant> (r0: the fitted sets)")
     p.add_argument("--name", default="reference_variants")
+    p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
+                   help="evaluate under other settings than the run's, e.g. final_eval_rows=null: "
+                        "the synthetic rows then come from all test rows, the same for every "
+                        "run with the same seed (2026-11-08)")
     args = p.parse_args()
 
     cfg = load_config(args.config, ReferenceEvalConfig)
     module = load_stage1(args.checkpoint).to("cuda" if torch.cuda.is_available() else "cpu")
+    module.cfg = override(module.cfg, args.set)
     threshold = module.cfg.coupled_threshold
     stores = {"synthetic_test": TrainingStore(module.cfg.store_dir, "test")} if args.test_rows else {}
     stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}")
