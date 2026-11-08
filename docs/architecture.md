@@ -433,7 +433,7 @@ Logged so they are not relitigated.
 
 ### 7.6 The sinh corpus: scaling, targets, heads, size and coupled-only training (2026-10-25 to 2026-10-27)
 
-The corpus of generation.md §4 (`sinh` policy; `corpus_sinh`, `training_store_sinh`: 100,000 train models, 4.04 M usable rows, 40% of draws; val and test 10,000 models, 0.41 M rows each). Every run: 200,000 steps, batch 256, the concatenation pair-MLP FC head (the "original" model from here on), parameters encoded as asinh(x / 1e-4) / 19.1. Metrics are each run's final evaluation (`final/<split>/*`, 200,000 rows per split; train = the rows it trained on). Tables and figures: `outputs/report_sinh/` (`comparison_table.md`, `figures/scaling_grid.png`, one folder per run). Decided along the way: the original model uses the MLP FC head; GPU jobs go to L40S; new variants train with the cost loss (2026-10-26).
+The corpus of generation.md §4 (`sinh` policy; `corpus_sinh`, `training_store_sinh`: 100,000 train models, 4.04 M usable rows, 40% of draws; val and test 10,000 models, 0.41 M rows each). Every run: 200,000 steps, batch 256, the concatenation pair-MLP FC head (the "original" model from here on), parameters encoded as asinh(x / 1e-4) / 19.1. Metrics are each run's final evaluation (`final/<split>/*`; train = a seeded 200,000 of the rows it trained on). The numbers quoted in §7.6–7.8 come from 200,000 val and test rows. On 2026-11-08 every run's val and test were re-evaluated on every row (0.41 M each; §7.9). Test totals moved by at most 0.004 and median cost terms by at most 0.003, so no comparison changed. `comparison_table.md` and the figures now use every row; `comparison_table_200k.md` keeps the old table. Tables and figures: `outputs/report_sinh/` (`comparison_table.md`, `figures/scaling_grid.png`, one folder per run). Decided along the way: the original model uses the MLP FC head; GPU jobs go to L40S; new variants train with the cost loss (2026-10-26).
 
 **The new corpus is much harder to fit.** The original model reaches val total 1.79 and trained-rows total 1.48 (old corpus, same head: 1.0 and 0.49). Trained rows and test differ little in the cost terms (coupled 1 − r 0.62 against 0.64, KS 0.41 against 0.43): the network does not fit the dynamics even of the models it trained on. Every draw now has its own parameter scale, and regions within a draw differ.
 
@@ -481,7 +481,7 @@ Training only on coupled draws improves every term on coupled draws, by more tha
 
 ### 7.7 Parameter tokens (2026-10-29 to 2026-11-01)
 
-The parameter-token backbone (§3.4) against the baseline `sinh_m100k_d100_cost`, with the same data (100k models × all draws), heads (pair MLP), losses (cost loss on), optimiser and 200k steps. Test is the same 200,000 rows for every run (medians of cost terms over draws).
+The parameter-token backbone (§3.4) against the baseline `sinh_m100k_d100_cost`, with the same data (100k models × all draws), heads (pair MLP), losses (cost loss on), optimiser and 200k steps. Test is the same 200,000 rows for every run (medians of cost terms over draws; on every row, the numbers move by at most 0.004, §7.6).
 
 | run | train / val / test MSE total | test R² FC | test 1 − r coupled | test d coupled | test KS coupled | test d / KS uncoupled |
 |---|---|---|---|---|---|---|
@@ -510,7 +510,7 @@ With region tokens, predicting network FC directly beat downsampling the region 
 
 ### 7.8 Parameter tokens: coupled-only training, scaling, and a coupling classifier (2026-11-01)
 
-All runs: parameter tokens with raw θ (`embed_theta: false`), pair-MLP head, cost loss, 200k steps, unless stated. Test is the same 200,000 rows for every run; "coupled" rows are the draws with simulated mean FC > 0.05 (21% of draws in every split).
+All runs: parameter tokens with raw θ (`embed_theta: false`), pair-MLP head, cost loss, 200k steps, unless stated. Test is the same 200,000 rows for every run (on every row, the numbers move by at most 0.004, §7.6); "coupled" rows are the draws with simulated mean FC > 0.05 (21% of draws in every split).
 
 **Coupled-only training** (`sinh_ptok_raw_coupled_only`: 100k models, coupled draws only, 833k rows), on the same coupled test rows:
 
@@ -583,4 +583,41 @@ With `cma_draws: true`, stage 1 also uses the CMA-ES draws of generation.md §9.
 - **Validation on every val row** (`val_rows: null` in `configs/stage1_sinh.yaml`; before, a fixed random 50,000). With CMA-ES draws that is about 640,000 rows, about a minute per validation, or about 18% more run time when validating every 5,000 steps (kept, project lead). `val/total` and `val/selection` pool both parts. `val/base_total` and `val/cma_total` give each part's total.
 - **Final evaluation on every row** (`final_eval_rows: null`). `final/<split>/*` still covers base draws only, so runs with and without CMA-ES draws compare directly. `final/<split>_cma/*` covers the CMA-ES draws, and `final/<split>_pooled/*` covers both.
 - **Test size.** Test keeps all 10,000 models. With 1,000, a test-total difference of about 0.05 between runs (for example raw vs embedded θ, §7.7) would be within noise: the paired standard error is about 0.035, against 0.013 with 10,000 models.
-- **Re-evaluating older runs.** A run evaluated before this change can be evaluated the same way with `scripts/evaluate_final.py --set final_eval_rows=null cma_draws=true`.
+- **Re-evaluating older runs.** A run evaluated before this change can be evaluated the same way with `scripts/evaluate_final.py --set final_eval_rows=null cma_draws=true`. Done on 2026-11-08 for every `stage1_sinh` statistics run, with `--splits val test` so that `final/train/*` keeps its 200,000 rows. Report data uses `scripts/model_report_data.py --set final_eval_rows=null --reference-config configs/reference_eval_sinh.yaml`. The old files are kept as `final_eval_200k.npz` and `report_data_200k.npz`.
+
+### 7.10 CMA-ES draws: first result (2026-11-08)
+
+`sinh_fg_ptok_raw_cost_cma` is the fixed-gain baseline `sinh_fg_ptok_raw_cost` (parameter tokens, raw θ, cost loss, 100k models, 200k steps) with `cma_draws: true`. Its best checkpoint is step 165,000; the run took 4.7 h on an H100. The baseline was re-evaluated on the same rows (`evaluate_final.py --set final_eval_rows=null cma_draws=true`). Tables: `outputs/report_sinh_fg/comparison_table.md`; figures: `outputs/report_sinh/sinh_fg_ptok_raw_cost{,_cma}/figures/`.
+
+| test rows | baseline | + CMA-ES draws |
+|---|---|---|
+| base draws (421k): total MSE / R² FC | 0.957 / 0.752 | 0.995 / 0.740 |
+| base, coupled draws: 1 − r / d / KS (medians) | 0.347 / 0.030 / 0.171 | 0.333 / 0.031 / 0.186 |
+| CMA-ES draws (220k): total MSE | 2.83 | 2.55 |
+| CMA-ES, coupled draws: 1 − r / d / KS | 0.596 / 0.107 / 0.277 | 0.510 / 0.079 / 0.228 |
+| base + CMA-ES: total MSE | 1.601 | 1.530 |
+
+- **CMA-ES draws are predicted better.** Per model, every model weighted equally, the test-CMA total falls by 0.28 ± 0.07 (95% interval).
+- **Base draws are slightly worse.** The total is 0.04 higher when every draw counts equally. With every model weighted equally the change is +0.023 ± 0.025, within noise.
+- **The targeted models gain nothing on their base draws.** For models with 0 < coupled share ≤ 15%, the change is +0.003 ± 0.023.
+- **CMA-ES draws of unseen equations stay hard.** The total is 1.51 on the CMA-ES draws of training models and 2.55 on those of test models.
+
+**Reference models.** At the published test fits (50 sets each; medians; noise floor in brackets):
+
+| | MFM 1 − r / d / KS | FIC 1 − r / d / KS | Hopf 1 − r / d / KS |
+|---|---|---|---|
+| baseline | 0.40 / 0.25 / 0.89 | 0.24 / 0.49 / 0.89 | 0.13 / 0.11 / 0.70 |
+| + CMA-ES draws | 0.51 / 0.24 / 0.89 | 0.55 / 0.49 / 0.90 | 0.53 / 0.30 / 0.89 |
+| noise floor | (0.07 / 0.01 / 0.11) | (0.06 / 0.03 / 0.14) | (0.05 / 0.03 / 0.16) |
+
+The regime call (`scripts/reference_variants_compare.py`; the share of simulated-coupled sets called coupled) gives the same picture:
+
+| | MFM fitted / random | FIC fitted / random | Hopf fitted / random |
+|---|---|---|---|
+| baseline | 0 / 0.27 | 0 / 0 | 1.00 / 0.90 |
+| + CMA-ES draws | 0 / 0.21 | 0 / 0 | 0 / 0.50 |
+| old corpus, 300k models, 400k steps (§7.8) | 0 / 0.36 | 0 / 0 | 0 / 0.53 |
+
+- **MFM and FIC are not helped.** Both models still predict a mean FC near 0 for the fitted sets, against a simulated 0.28 (MFM) and 0.49 (FIC). With CMA-ES draws, the FC pattern (1 − r) is worse than the training-average prediction: MFM 0.51 vs 0.48, FIC 0.55 vs 0.43.
+- **Hopf: the fixed-gain baseline gets it right, and CMA-ES draws undo this.** The baseline predicts a mean FC of 0.39 for the fitted sets (simulated 0.30), with 1 − r 0.13, d 0.11 and KS 0.70. The old-corpus models never managed this (§7.8). With CMA-ES draws the prediction falls back to 0.002.
+- **Caveat.** Each is a single training run, so the size of the training-seed effect on the Hopf call is not known.
