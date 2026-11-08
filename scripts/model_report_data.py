@@ -22,7 +22,8 @@ import numpy as np
 import torch
 
 from delssome_fm.config import ReferenceEvalConfig, load_config, override
-from delssome_fm.train.evaluate import load_stage1
+from delssome_fm.train.data import TrainingStore
+from delssome_fm.train.evaluate import check_parameter_policy, load_stage1
 from delssome_fm.train.report import (catch24_fit, prediction_vs_simulation,
                                       reference_comparison, training_average)
 
@@ -45,6 +46,12 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     module = load_stage1(args.checkpoint).to(device)
     module.cfg = override(module.cfg, args.set)
+    ref_cfg = load_config(args.reference_config, ReferenceEvalConfig)
+    if args.split == "test" and module.cfg.stat_loss:
+        # the reference stores must encode parameters as the module's store does (sinh runs:
+        # configs/reference_eval_sinh.yaml): check now, not after the pass over the test rows
+        for m in ref_cfg.models:
+            check_parameter_policy(module, TrainingStore(ref_cfg.output_dir / "store", f"{m}_r0"))
     name = "report_data.npz" if args.split == "test" else "report_data_train.npz"
     result = {}
     if module.cfg.stat_loss:                    # FC and FCD predictions are trained
@@ -55,7 +62,6 @@ def main() -> None:
     if args.split == "train" or not module.cfg.stat_loss:
         print(f"wrote {args.out / name}")
         return
-    ref_cfg = load_config(args.reference_config, ReferenceEvalConfig)
     fc_avg, cdf_avg = training_average(module, args.rows)
     arrays = {}
     for name in ref_cfg.models:
