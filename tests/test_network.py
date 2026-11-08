@@ -900,3 +900,26 @@ def test_report_cost_terms_in_chunks_equal_one_pass():
                                   whole["corr"])
     with pytest.raises(ValueError, match="at least one row"):
         cost_terms(fc_a[:0], fc_b[:0], cdf_a[:0], cdf_b[:0])
+
+
+def test_report_reads_the_cma_rows_a_run_trained_on(tiny_cma_store, tmp_path):
+    """training_rows of a run with cma_draws index the train store WITH its CMA-ES rows, so
+    the report opens that store (split_store); without it, row >= n_base raised (2026-11-08)."""
+    from delssome_fm.train.evaluate import load_stage1
+    from delssome_fm.train.report import (scaling_metrics, split_store, training_average,
+                                          training_rows)
+    store_dir = tiny_cma_store[0]
+    stage1 = dataclasses.replace(tiny_config(store_dir, tmp_path), cma_draws=True,
+                                 val_rows=None, final_eval_rows=None, batch_size=4)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(stage1, config_file, run_name="cma_report")
+    module = load_stage1(next(checkpoints.glob("step*.ckpt")))
+    rows = training_rows(module)
+    train = split_store(module, "train")
+    assert rows.max() >= train.n_base and len(train) > train.n_base
+    assert split_store(module, "test").cma_rows is None       # the report's test: base rows
+    fc, cdf = training_average(module, 10_000)
+    assert np.isfinite(fc).all() and np.isfinite(cdf).all()
+    metrics = scaling_metrics(module, max_rows=10_000)
+    assert np.isfinite(metrics["train"]["total"])

@@ -32,11 +32,19 @@ def training_composition(module: Stage1Module) -> Composition:
                        c.coupled_draws_only)
 
 
+def split_store(module: Stage1Module, split: str) -> TrainingStore:
+    """The store of `split` in module.cfg.store_dir that the report's row indices refer to:
+    for "train", with the CMA-ES rows after the base rows if the module trained on them (the
+    rows of training_rows); for other splits, the base rows only (as final/<split>/*)."""
+    return TrainingStore(module.cfg.store_dir, split,
+                         cma=module.cfg.cma_draws and split == "train")
+
+
 def training_rows(module: Stage1Module) -> np.ndarray:
     """Row indices of the train split of module.cfg.store_dir that `module` trained on
-    (with its CMA-ES rows, after the base rows, if it trained on them)."""
-    return subset_rows(TrainingStore(module.cfg.store_dir, "train", cma=module.cfg.cma_draws),
-                       training_composition(module))
+    (with its CMA-ES rows, after the base rows, if it trained on them): rows of
+    split_store(module, "train")."""
+    return subset_rows(split_store(module, "train"), training_composition(module))
 
 
 @torch.no_grad()
@@ -88,7 +96,7 @@ def scaling_metrics(module: Stage1Module, max_rows: int, seed: int = 0) -> dict[
     from delssome_fm.train.evaluate import evaluate
     store = module.cfg.store_dir
     return {"train": evaluate(module, store, "train", max_rows=max_rows, seed=seed,
-                              candidates=training_rows(module)),
+                              candidates=training_rows(module), cma=module.cfg.cma_draws),
             "val": evaluate(module, store, "val", max_rows=max_rows, seed=seed),
             "test": evaluate(module, store, "test", max_rows=max_rows, seed=seed)}
 
@@ -100,7 +108,7 @@ def training_average(module: Stage1Module, max_rows: int, seed: int = 0,
     rows = training_rows(module)
     rows = np.sort(np.random.default_rng(seed).choice(rows, min(max_rows, len(rows)),
                                                       replace=False))
-    ref = predict_fc_fcd(module, TrainingStore(module.cfg.store_dir, "train"), rows)
+    ref = predict_fc_fcd(module, split_store(module, "train"), rows)
     return ref["fc_true"].mean(0), ref["cdf_true"].mean(0)
 
 
@@ -142,7 +150,7 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
     FC < 0.9; above it FC is near-uniform synchronisation) at the 10th, 50th and 90th
     percentile of the model's 1 - r, and the median uncoupled draw (when there is one: a
     coupled-draws-only model's training rows have none)."""
-    store = TrainingStore(module.cfg.store_dir, split)
+    store = split_store(module, split)
     pool = training_rows(module) if split == "train" else np.arange(len(store))
     rows = evaluation_rows(pool, module.cfg)
     p = predict_fc_fcd(module, store, rows)
@@ -176,7 +184,7 @@ def catch24_fit(module: Stage1Module, split: str, max_rows: int = 50_000, n_poin
     plots. Returns r2 (24,), true and pred (n_points, 24)."""
     if module.heads.catch24 is None:
         raise ValueError("the module has no catch24 head (catch24_loss was off)")
-    store = TrainingStore(module.cfg.store_dir, split)
+    store = split_store(module, split)
     check_parameter_policy(module, store)
     pool = training_rows(module) if split == "train" else np.arange(len(store))
     rows = evaluation_rows(pool, module.cfg)
@@ -221,7 +229,7 @@ def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, see
     mean FC > coupled_threshold). A downsampled prediction is NaN where the predicted region
     FC makes a network's variance <= 0 (data/networks.py); summaries skip those rows."""
     from delssome_fm.data.networks import network_fc, stable_arctanh, yeo7_assignment
-    store = TrainingStore(module.cfg.store_dir, split)
+    store = split_store(module, split)
     check_parameter_policy(module, store)
     if "fc_net" not in store.targets:
         raise ValueError(f"{module.cfg.store_dir}/{split} has no fc_net target "
