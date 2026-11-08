@@ -621,3 +621,49 @@ The regime call (`scripts/reference_variants_compare.py`; the share of simulated
 - **MFM and FIC are not helped.** Both models still predict a mean FC near 0 for the fitted sets, against a simulated 0.28 (MFM) and 0.49 (FIC). With CMA-ES draws, the FC pattern (1 − r) is worse than the training-average prediction: MFM 0.51 vs 0.48, FIC 0.55 vs 0.43.
 - **Hopf: the fixed-gain baseline gets it right, and CMA-ES draws undo this.** The baseline predicts a mean FC of 0.39 for the fitted sets (simulated 0.30), with 1 − r 0.13, d 0.11 and KS 0.70. The old-corpus models never managed this (§7.8). With CMA-ES draws the prediction falls back to 0.002.
 - **Caveat.** Each is a single training run, so the size of the training-seed effect on the Hopf call is not known.
+
+### 7.11 Why CMA-ES draws did not help (2026-11-09)
+
+Diagnostics of §7.10's two runs. They use the best checkpoints and the fixed-gain test split unless stated otherwise. Scratch analyses, not scripts:
+- 560 test rows re-simulated twice with fresh initial state and noise, at the same parameters (48 CMA-ES-targeted models, 5 CMA-ES and 5 base draws each; 16 other models, 5 base draws each);
+- regime calls on 4,000 CMA-ES and 10,000 base test rows;
+- every saved checkpoint on the reference fits.
+
+**What CMA-ES draws do on synthetic data.** They shift the regime call towards coupling where coupling is rare, a little:
+
+| test rows | called coupled: baseline | + CMA-ES draws |
+|---|---|---|
+| CMA-ES draws (75% coupled) | 0.56 | 0.66 |
+| coupled base draws of the targeted models (0 < share ≤ 15%) | 0.64 | 0.73 |
+| uncoupled base draws of the targeted models (false coupled) | 0.027 | 0.044 |
+| coupled / uncoupled base draws of other models | 0.86 / 0.036 | 0.87 / 0.042 |
+
+The total MSE of the targeted models' base draws does not move (per model +0.003 ± 0.023). Their coupled draws are the hardest rows in the test set (total about 3.4 in the re-simulated sample, both runs).
+
+**Why the reference models are not reached.**
+- **FIC lies outside what CMA-ES can draw.** CMA-ES searches only the 2P levels and spreads. Regional values remain i.i.d. across regions, as in base draws. FIC's regime needs $w_{IE}$ tuned per region to that region's other parameters and SC input (§7.8).
+- **MFM fails on its equation, not on the parameter family.** Its scrambled maps are i.i.d. draws at the fitted mean and SD: 24 of 50 are coupled, and both runs call none of them (predicted mean FC 0.009–0.012 vs 0.14 simulated). CMA-ES draws of other equations do not change this.
+- **Hopf's baseline success is a lean, not understanding.** On random Hopf draws the baseline calls 90% of the coupled ones coupled, but also 21% of the uncoupled ones. With CMA-ES draws it calls 50% and 2.4%.
+  - Within each run the call is stable: every saved checkpoint of the baseline (155k–200k) calls all 50 fitted sets coupled, and every one of the CMA-ES run (115k–200k) none.
+  - It is still one run each. Hopf's equation is outside the grammar, so the extrapolation is fragile.
+
+**What the CMA-ES draws cost.**
+- **Near-duplicates.** A model's 100 kept candidates span about 1/7 of the prior's SD in each level and 1/5 in each spread (median SD 0.041 and 0.053 vs 0.29, in CMA-ES coordinates). They are 34% of the training rows but come from 20% of the models.
+- **Hard to fit, but not mostly noise.** The re-simulation noise floor of coupled CMA-ES draws is 0.64, against about 0.1 for other draws. Regime flips between repeats are rare: 1% for coupled CMA-ES draws, at most 9% for uncoupled ones. Yet the CMA-ES run fits them to only 1.51 on its training models (base training rows 0.55), and 2.45 on test models. So most of their error is reducible.
+- **They reweight the loss for every row.** The learned scales follow each group's mean loss over the pooled rows ($s_g^2 \approx L_g$). Relative to the baseline, the weight $1/2s_g^2$ falls to:
+  - 0.40× for pairwise FC
+  - 0.52× for d
+  - 0.60× for regional
+  - 0.64× for FCD
+  - 0.70× for KS
+  - 0.76× for FC moments
+
+  It rises to 1.13× for 1 − r.
+
+  This matches the change on base draws: pairwise, regional and FC moments a little worse, 1 − r of coupled draws a little better.
+- **Where the base change sits.** Per model by coupled share (test; val in brackets), all within noise except val's never-coupled band:
+  - never coupled: +0.007 ± 0.033 (+0.039 ± 0.029)
+  - 0–15%: +0.003 ± 0.023 (−0.003 ± 0.025)
+  - 15–50%: +0.013 ± 0.041 (−0.015 ± 0.040)
+  - over 50%: +0.11 ± 0.12 (+0.12 ± 0.16)
+- **Training curves.** Base val tracks the baseline until about step 120k. The gap (0.925 vs 0.94) opens only in the low-learning-rate phase.
