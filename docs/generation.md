@@ -560,7 +560,7 @@ Asked after CMA-ES draws failed to help the reference models (architecture.md §
 | `gain_prior: relative` | The 2026-10-05 rule (§4) on the actual values: $G_c = \text{ratio}_c \cdot \text{reference} / 0.36$, $\log_{10}\text{ratio} \sim \mathcal{U}(-2, 1)$. The reference is $\lvert L_{vv}\rvert$ of the target (channel at the derivative) or the largest $\lvert w_{vu}\rvert$, $\lvert I_v\rvert$ of $u^v$ (channel into the input; 1 if it has neither). |
 
 **Choices made for the pilot.**
-- **The floor is 0.1 s⁻¹.** In the zero-gain control of §12, 33% of moderate draws stay coupled at a slowest rate of 0.05–0.1 s⁻¹, 1 of 30 at 0.1–0.3 s⁻¹ and none of 37 above. At 0.1 s⁻¹ the 144-s burn-in is 14 time constants.
+- **The floor is 0.1 s⁻¹.** In the zero-gain control of §12, 33% of moderate draws stay coupled at a slowest rate of 0.05–0.1 s⁻¹, 1 of 30 at 0.1–0.3 s⁻¹ and none of 38 above. At 0.1 s⁻¹ the 144-s burn-in is 14 time constants.
 - **The floor is on a free diagonal's level, not on each region.** A region's rate $\lvert\mu + \kappa\lvert\mu\rvert\varepsilon\rvert$ can still fall below the floor (about 5% of regions at $\kappa = 1$ with the level at the floor).
 - **Off-diagonal $L$ and rule R1 are unchanged.** An eigenvalue of $L$ can still be slower than the floor.
 - **A model fixes its coupling ratio, not its gain** (`gain_scope: model`). A constant slot gives the reference its value; a regional one gives the draw's level $\lvert\mu_p\rvert$, which every draw draws anew. So a model's gain is the same in all its draws unless its reference is a regional parameter. This changes the 2026-11-04 definition of a model (equations, constants and gains) to equations, constants and coupling ratios.
@@ -568,5 +568,47 @@ Asked after CMA-ES draws failed to help the reference models (architecture.md §
 
 **What the floor does to the cards.** $L$ changes, so R1 rejects differently and later slots see other random numbers: 1,923 of train candidates 0–1,999 keep the structure of the same candidate in `corpus_sinh_fixed_gain`.
 
-**Known before running.** The fitted Hopf sets have $a$ = 0.005–0.097 s⁻¹ (median 0.024), below the floor, and a coupling ratio of about 40, above the ratio range.
+**Where the fitted sets sit under this prior.** Hopf is outside it twice: $a$ = 0.005–0.097 s⁻¹ (median 0.024) is below the floor, and its coupling ratio (median 38, range 9–229) is above the ratio range. MFM's ratio is 2.5 (0.9–6.5), inside. FIC's is 0.07 (0.004–0.1), at the low end, because its reference is the feedback weight $w_{IE}$ ≈ 90.
+
+### Result (train candidates 0–1,999, 100 draws; against the same candidates of `corpus_sinh_fixed_gain`)
+
+Cost 37.2 CPU-h (baseline 36.4). Scratch analyses. "Coupled", "moderate", "synchronised" and "slowest rate" as in §12.
+
+| | baseline | pilot |
+|---|---|---|
+| valid models | 686 (34.3%) | 705 (35.2%) |
+| usable draws per valid model | 40.7 | 45.3 |
+| of usable draws: moderate / synchronised | 13.6% / 9.2% | 8.6% / 0.2% |
+| models with no coupled draw | 38% | 69% |
+| median mean FC of coupled draws | 0.71 | 0.12 |
+
+**The floor removes coupling without coupling.** In the zero-gain control (one coupled draw per model, re-simulated with its gains and with every gain 0), 1 of 153 pilot draws stays coupled (§12: about half). Synchronised draws almost disappear.
+
+**Coupling no longer depends on the rate.**
+
+| slowest rate (1/s) | baseline: share of usable draws | baseline: coupled share | pilot: share of usable draws | pilot: coupled share |
+|---|---|---|---|---|
+| below 0.1 | 45% | 42% | 0.1% | — |
+| 0.1–1 | 13% | 16% | 26% | 10% |
+| 1–10 | 15% | 11% | 29% | 9% |
+| 10–100 | 13% | 2.1% | 24% | 11% |
+| above 100 | 14% | 0.3% | 21% | 6% |
+
+Models with a slowest rate of at least 10 s⁻¹ give 42% of the pilot's coupled draws (baseline 1.4%).
+
+**The relative gain works at the derivative and not through the input** (one-channel models):
+
+| channel | baseline: coupled share of usable draws | pilot | pilot: models with no coupled draw | pilot, slowest rate ≥ 10 s⁻¹ |
+|---|---|---|---|---|
+| derivative, diffusive | 35% | 17.5% | 61% | 18.7% (baseline 1.5%) |
+| derivative, direct | 17% | 7.4% | 57% | 4.0% (baseline 1.8%) |
+| input, diffusive | 14% | 1.5% | 82% | 0.9% |
+| input, direct | 11% | 0.4% | 93% | 0.0% |
+
+- **At the derivative the ratio decides.** A diffusive channel couples 16% of all draws at a ratio of 1–3 and 31% at 3–10, against under 1% below 0.3. A direct channel couples 4–8% from a ratio of 0.3 up, with more than half of the draws diverging.
+- **Through the input the rule does nothing.** At every ratio at most 1.6% of draws are coupled. The channels into the input are 4% of the pilot's coupled draws; this is the mechanism of MFM, FIC and Wilson–Cowan. The baseline's 11–14% there was mostly the drift the floor removed.
+- **Why.** A channel into $u^v$ acts on $dx^v/dt$ through the term's gain, at a rate of about $\lvert\gamma_v\rvert \cdot G \cdot 0.36$, which competes with $\lvert L_{vv}\rvert$. The rule sizes $G$ against $w$ and $I$ and ignores $\gamma_v$, which is drawn over 8 decades independently of $L$: this loop ratio is below 0.01 in 60% of the pilot's input-channel draws and between 1 and 100 in 12%. The fitted MFM and FIC sets have loop ratios of 7.6 (2.2–15.5) and 2.5 (0.1–3.1).
+- **The loop ratio alone would not be enough.** Among pilot draws with a loop ratio of 0.1–100, 10% of usable draws are coupled with the identity transfer, 5% with Wong–Wang and 0.9% with the logistic. The transfer also has to work in its responsive range (in the audit corpus the input of a logistic or Wong–Wang transfer sat in its curved range in about 30% of the usable draws of one-variable models), which three independent 8-decade draws ($w$, $I$, $\gamma$) rarely give.
+
+**Status.** The floor does what it was meant to. The relative gain does so for channels at the derivative. Coupling through the transfer input is rare under both priors and needs its own rule; none is decided.
 
