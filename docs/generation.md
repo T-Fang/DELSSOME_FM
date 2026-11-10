@@ -500,3 +500,50 @@ Recorded so these read as decisions rather than oversights, and so they are easy
 - The state-variable identifier, deferred with no forcing trigger yet
 - Per-slot or tiered constant ranges, and any timescale screen. One flat log-uniform prior, one fixed $dt$
 - *(No longer deferred: the log-magnitude constant encoding, reinstated because the eight-decade prior triggered it)*
+
+---
+
+## 12. Audit of what the sampler produces (2026-11-10)
+
+Asked after CMA-ES draws failed to help the reference models (architecture.md §7.11): is something wrong with the template itself? The audit covers `corpus_sinh_fixed_gain`: the 100,000 train cards and every base draw of the 10,000 test models (1,000,000 draws, diverged ones included). Scratch analyses, not scripts. "Coupled" means mean off-diagonal FC > 0.05, "moderate" 0.05–0.9, "synchronised" ≥ 0.9. A model's **slowest rate** is its smallest $\lvert L_{vv}\rvert$ (per draw when that slot is free).
+
+**The equations are not the problem.**
+- **The sampler implements §2, §4 and §5.** Read against the code, no rule or probability differs.
+- **Structures are evenly covered.** Every transfer × gate × channel combination holds 2–4% of models, close to its sampled share. No combination is missing or removed by the screen.
+- **The reference structures are inside the grammar and read the same way.** 35 train models have MFM's structure (1 with MFM's free set), and its card compiles to a DAG identical to the reference card's. FIC's structure does not occur among 100,000 models, but each of its parts does. Hopf is outside through coefficient tying (§11).
+
+**The values are the problem: time scales and gains.** Two parts of the value prior interact so that the corpus couples almost only in slow models.
+
+| slowest rate (1/s) | share of usable draws | of its usable draws: moderate / synchronised | share of all coupled draws |
+|---|---|---|---|
+| below 0.01 | 30% | 23% / 25% | 64% |
+| 0.01–0.1 | 14% | 21% / 11% | 20% |
+| 0.1–1 | 13% | 14% / 1.5% | 9% |
+| 1–10 | 14% | 8% / 0.2% | 5% |
+| 10–100 | 14% | 2.0% / 0% | 1.3% |
+| above 100 | 15% | 0.5% / 0% | 0.4% |
+
+- **Rates reach far below what a scan can resolve.** Rates are log-uniform from $10^{-4}$ to $10^{4}$ s⁻¹. A scan is 864 s after 144 s of burn-in, so a model slower than about 0.01 s⁻¹ is still relaxing from its initial state throughout.
+- **Half of the coupled draws are coupled without coupling.** 480 coupled test draws (one per model) were re-simulated with every gain set to 0, same noise and initial state. Of the synchronised draws, 81% stayed coupled (median mean FC 0.99); of the moderate ones, 32%. Weighted by their shares, that is about half of all coupled draws. With zero gain the regions share only their equations, so this FC is a common slow time course, not connectivity. It occurs only in slow models: 49% and 84% (moderate, synchronised) below 0.01 s⁻¹, 1 of 69 draws above 0.1 s⁻¹. §4 named this failure and left it unscreened.
+- **Fast models cannot couple, because the gain range stops short.** The gain is absolute, $\log_{10} G \sim \mathcal{U}(-2, 2)$, and the SC row sum is 0.36, so coupling acts at a rate of at most 36 s⁻¹. For a channel at the derivative, the outcome follows the ratio $G \cdot 0.36 / \lvert L_{vv}\rvert$: below 0.3 a draw is coupled in 1–4% of cases, above 1 a diffusive channel couples in 45–85%. A model with rates of 10–100 s⁻¹ reaches a ratio of 3 in none of its draws, and one above 100 s⁻¹ never reaches 0.3. At equal ratio, fast and slow models couple alike (ratio 3–10: 0.78 at 1–10 s⁻¹, 0.76 at 0.1–1 s⁻¹). The relative gain of 2026-10-05 did not have this limit; the `sinh` policy dropped it.
+- **So the corpus teaches "slow means coupled, fast means uncoupled".** Models with a slowest rate of at least 10 s⁻¹ are 29% of usable draws and 1.7% of coupled ones. With a channel into the transfer input as well, the mechanism of MFM, FIC and Wilson–Cowan, 638 of 96,576 coupled test draws remain (0.7%).
+
+**The network has learned that rule** (fixed-gain baseline, test base draws by slowest rate):
+
+| slowest rate (1/s) | coupled draws called coupled | uncoupled draws called coupled | coupled 1 − r |
+|---|---|---|---|
+| below 0.01 | 0.86 | 0.100 | 0.45 |
+| 0.01–0.1 | 0.85 | 0.051 | 0.22 |
+| 0.1–1 | 0.87 | 0.023 | 0.13 |
+| 1–10 | 0.81 | 0.005 | 0.17 |
+| 10–100 | 0.75 | 0.001 | 0.32 |
+| above 100 | 0.31 | 0.002 | 0.78 |
+
+- **The reference models sit on the wrong side of it.** MFM's rate is 10 s⁻¹, FIC's are 10 and 100 s⁻¹. Hopf's is 0.024 s⁻¹ with a ratio of about 40, inside the part of the prior that couples most.
+- **The reported coupled metrics are mostly about drift.** 64% of coupled test draws come from models slower than 0.01 s⁻¹, where the FC pattern is predicted worst (1 − r 0.45). Where FC comes from coupling (0.1–10 s⁻¹), 1 − r is 0.13–0.17.
+- **This does not explain everything.** At 10–100 s⁻¹ the network still finds 75% of coupled draws, yet it misses every MFM and FIC fit. FIC's per-region balance (architecture.md §7.8) is a separate cause.
+
+**Checked and not the cause.**
+- **Regional spread.** The share of moderate draws is 5–6% of all draws at every level of the largest SD/|mean| from 0 to above 1.
+- **Noise level.** 12–14% of usable draws are moderate in every decade of σ from $10^{-4}$ to $10^{3}$. Divergence rises with σ, from 38% to 77%.
+- **Unbalanced coefficients.** The largest and smallest coefficient of a draw differ by a median of 5.7 decades (MFM 1.1, FIC 2.0, Hopf 2.7). Balanced draws couple more often (moderate 9–11% of draws below 2 decades, 4–5% above 6), a much weaker effect than the rate.
