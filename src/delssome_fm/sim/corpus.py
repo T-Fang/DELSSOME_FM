@@ -20,6 +20,13 @@ constants and gains, so the gains are drawn once from [seed, split, index, _GAIN
 only in the regional parameters. Each draw still draws its own gains and discards them, so
 its theta, initial state and noise equal those of the same draw under "draw".
 
+Relative gains (`gain_prior: relative`, sinh policy, pilot 2026-11-10; spec/sampler.py). What
+is drawn, per draw or once per model as above, is each channel's coupling ratio; a draw's
+gain is ratio x reference / SC row sum, the reference being the term the gain competes with
+in that draw. So under "model" the model fixes the ratio (`model_ratios`), and its gain is
+the same in every draw unless the reference is a regional parameter, whose level each draw
+draws. `rate_floor` is the sampler's floor on L diagonals.
+
 Every candidate gets one log row (`CandidateLog`): the acceptance rate and mean
 off-diagonal FC per model that brief §8 asks to log, and its validity.
 
@@ -68,8 +75,8 @@ from delssome_fm.sim.integrate import make_batch_simulate, rescale_sc
 from delssome_fm.sim.summary import catch24, fcd_levels, summarize
 from delssome_fm.spec.card import ModelCard, card_to_dict
 from delssome_fm.spec.compile import CompiledModel, compile_card
-from delssome_fm.spec.sampler import (draw_gains, draw_level_spread, draw_parameters,
-                                     regional_values, sample_card)
+from delssome_fm.spec.sampler import (draw_coupling_ratios, draw_gains, draw_level_spread,
+                                     draw_parameters, regional_values, sample_card)
 
 P_MAX = 5   # regional parameters: 1 + up to 4 (generation.md §4)
 K_MAX = 2   # global parameters: one per channel, at most 2
@@ -118,7 +125,8 @@ def _key(cfg: CorpusConfig, split: str, index: int, *more: int) -> list[int]:
 
 
 def card_for(cfg: CorpusConfig, split: str, index: int) -> ModelCard:
-    return sample_card(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy)
+    return sample_card(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy,
+                       cfg.rate_floor)
 
 
 def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
@@ -126,9 +134,23 @@ def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
 
 
 def model_gains(cfg: CorpusConfig, card: ModelCard, split: str, index: int) -> np.ndarray:
-    """(K,) the model's coupling gains under gain_scope "model" (module docstring)."""
+    """(K,) the model's coupling gains under gain_scope "model" (module docstring). Absolute
+    gains only: under relative gains a model fixes its ratios (`model_ratios`)."""
+    if cfg.gain_prior != "absolute":
+        raise ValueError(f"a model has fixed gains under absolute gains only, the corpus has "
+                         f"gain_prior {cfg.gain_prior!r} (see model_ratios)")
     rng = np.random.default_rng(_key(cfg, split, index, _GAIN))
     return draw_gains(card, rng, 1, cfg.parameter_policy)[0]
+
+
+def model_ratios(cfg: CorpusConfig, card: ModelCard, split: str, index: int) -> np.ndarray:
+    """(K,) the model's coupling ratios under gain_scope "model" and relative gains (module
+    docstring), from the same stream as `model_gains`."""
+    if cfg.gain_prior != "relative":
+        raise ValueError(f"coupling ratios exist under relative gains only, the corpus has "
+                         f"gain_prior {cfg.gain_prior!r}")
+    rng = np.random.default_rng(_key(cfg, split, index, _GAIN))
+    return draw_coupling_ratios(card, rng, 1)[0]
 
 
 def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, first: int,
@@ -136,13 +158,20 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
     """theta (n, N, P), psi (n, K), x0 (n, N, V), keys (n,) for draws first..first+n-1."""
     if cfg.gain_scope not in GAIN_SCOPES:
         raise ValueError(f"gain_scope must be one of {GAIN_SCOPES}, found {cfg.gain_scope!r}")
-    fixed = model_gains(cfg, card, split, index) if cfg.gain_scope == "model" else None
+    relative = cfg.gain_prior == "relative"
+    gains = ratio = None
+    if cfg.gain_scope == "model":
+        if relative:
+            ratio = model_ratios(cfg, card, split, index)
+        else:
+            gains = model_gains(cfg, card, split, index)
     thetas, psis, x0s = [], [], []
     for j in range(first, first + n):
         rng = np.random.default_rng(_key(cfg, split, index, tag, j))
-        theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy)
+        theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy,
+                                     cfg.rate_floor, cfg.gain_prior, ratio)
         thetas.append(theta[0])
-        psis.append(psi[0] if fixed is None else fixed)
+        psis.append(psi[0] if gains is None else gains)
         x0s.append(rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
                                (N_REGIONS, card.n_states)))
     base = jax_key(cfg, split, index, tag)
@@ -158,7 +187,7 @@ def base_level_spread(cfg: CorpusConfig, card: ModelCard, split: str, index: int
         raise ValueError(f"levels and spreads exist under the sinh policy only, found "
                          f"{cfg.parameter_policy!r}")
     rng = np.random.default_rng(_key(cfg, split, index, _DRAW, j))
-    z, kappa = draw_level_spread(card, rng, 1)
+    z, kappa = draw_level_spread(card, rng, 1, cfg.rate_floor)
     return z[0], kappa[0], regional_values(card, z, kappa, rng, N_REGIONS)[0]
 
 

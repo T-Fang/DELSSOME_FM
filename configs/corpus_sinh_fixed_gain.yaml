@@ -22,4 +22,6 @@ fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00
 
 parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
 gain_scope: model             # gains drawn once per model; draws differ only in regional parameters
+rate_floor: 0.0               # 1/s; no floor on L diagonals (sinh-policy option, 2026-11-10)
+gain_prior: absolute          # gains not relative to the competing term (sinh-policy option)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh_fixed_gain

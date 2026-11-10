@@ -1,0 +1,26 @@
+# Pilot of two changes to the value prior (2026-11-10, user; generation.md §12 and §13):
+# a floor of 0.1 /s on every L diagonal, and coupling gains drawn relative to the term they
+# compete with (spec/sampler.py). Otherwise as corpus_sinh_fixed_gain.yaml, with the same
+# seed: the SC group of candidate i and the regional parameters (except floored L diagonals),
+# initial state and noise of draw j are the same. The floor changes L, so a card can differ
+# in structure from the same candidate there (R1 rejects differently). Compared against
+# train candidates 0-1999 of corpus_sinh_fixed_gain. Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # x0 ~ U(-0.1, 0.1) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+gain_scope: model             # the coupling ratio is drawn once per model
+rate_floor: 0.1               # 1/s: time constants <= 10 s, 14 of them in the 144-s burn-in
+gain_prior: relative          # G = ratio x competing term / SC row sum, log10 ratio ~ U(-2, 1)
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_floor_relgain_pilot

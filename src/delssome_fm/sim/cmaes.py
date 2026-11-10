@@ -280,6 +280,11 @@ def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
     if corpus_cfg.gain_scope != "model" or corpus_cfg.parameter_policy != "sinh":
         raise ValueError("CMA-ES needs a corpus with gain_scope model and the sinh policy, "
                          f"found {corpus_cfg.gain_scope!r}, {corpus_cfg.parameter_policy!r}")
+    if corpus_cfg.rate_floor != 0.0 or corpus_cfg.gain_prior != "absolute":
+        raise ValueError("CMA-ES is not implemented for a rate floor or relative gains (its "
+                         "search box is the unfloored levels and it holds the gains fixed), "
+                         f"found rate_floor {corpus_cfg.rate_floor}, gain_prior "
+                         f"{corpus_cfg.gain_prior!r}")
     card = card_for(corpus_cfg, split, index)
     model = compile_card(card)
     g = sc_group(corpus_cfg, split, index, len(scs))

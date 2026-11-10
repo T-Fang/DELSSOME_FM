@@ -547,3 +547,26 @@ Asked after CMA-ES draws failed to help the reference models (architecture.md §
 - **Regional spread.** The share of moderate draws is 5–6% of all draws at every level of the largest SD/|mean| from 0 to above 1.
 - **Noise level.** 12–14% of usable draws are moderate in every decade of σ from $10^{-4}$ to $10^{3}$. Divergence rises with σ, from 38% to 77%.
 - **Unbalanced coefficients.** The largest and smallest coefficient of a draw differ by a median of 5.7 decades (MFM 1.1, FIC 2.0, Hopf 2.7). Balanced draws couple more often (moderate 9–11% of draws below 2 decades, 4–5% above 6), a much weaker effect than the rate.
+
+---
+
+## 13. Pilot: a rate floor and relative gains (2026-11-10)
+
+§12 traced the corpus's coupling to two parts of the value prior. The project lead approved a pilot of two general changes, both options of the `sinh` policy (`spec/sampler.py`; `configs/corpus_floor_relgain_pilot.yaml`). Neither refers to a model family. Existing corpora are reproduced unchanged with the options off.
+
+| option | rule |
+|---|---|
+| `rate_floor: 0.1` | Every $L$ diagonal has magnitude at least 0.1 s⁻¹. A constant one is $S\sinh(z)$ with $z \sim \mathcal{U}(z_0, Z)$, $S\sinh(z_0) = 0.1$; a free one draws its level $\mu_p$ the same way. |
+| `gain_prior: relative` | The 2026-10-05 rule (§4) on the actual values: $G_c = \text{ratio}_c \cdot \text{reference} / 0.36$, $\log_{10}\text{ratio} \sim \mathcal{U}(-2, 1)$. The reference is $\lvert L_{vv}\rvert$ of the target (channel at the derivative) or the largest $\lvert w_{vu}\rvert$, $\lvert I_v\rvert$ of $u^v$ (channel into the input; 1 if it has neither). |
+
+**Choices made for the pilot.**
+- **The floor is 0.1 s⁻¹.** In the zero-gain control of §12, 33% of moderate draws stay coupled at a slowest rate of 0.05–0.1 s⁻¹, 1 of 30 at 0.1–0.3 s⁻¹ and none of 37 above. At 0.1 s⁻¹ the 144-s burn-in is 14 time constants.
+- **The floor is on a free diagonal's level, not on each region.** A region's rate $\lvert\mu + \kappa\lvert\mu\rvert\varepsilon\rvert$ can still fall below the floor (about 5% of regions at $\kappa = 1$ with the level at the floor).
+- **Off-diagonal $L$ and rule R1 are unchanged.** An eigenvalue of $L$ can still be slower than the floor.
+- **A model fixes its coupling ratio, not its gain** (`gain_scope: model`). A constant slot gives the reference its value; a regional one gives the draw's level $\lvert\mu_p\rvert$, which every draw draws anew. So a model's gain is the same in all its draws unless its reference is a regional parameter. This changes the 2026-11-04 definition of a model (equations, constants and gains) to equations, constants and coupling ratios.
+- **CMA-ES is not implemented for either option** (`sim/cmaes.py` raises).
+
+**What the floor does to the cards.** $L$ changes, so R1 rejects differently and later slots see other random numbers: 1,923 of train candidates 0–1,999 keep the structure of the same candidate in `corpus_sinh_fixed_gain`.
+
+**Known before running.** The fitted Hopf sets have $a$ = 0.005–0.097 s⁻¹ (median 0.024), below the floor, and a coupling ratio of about 40, above the ratio range.
+

@@ -9,7 +9,8 @@ import pytest
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.sampler import (COUPLING_RATIO_LOG10, GAIN_LOG10, MULTIPLIER_LOG10,
                                       N_FREE, SC_ROW_SUM, SINH_SCALE, SINH_Z, V_PROBS,
-                                      draw_parameters, sample_card)
+                                      draw_level_spread, draw_parameters, gain_references,
+                                      rate_params, sample_card)
 
 CARDS = [sample_card(123, 0, i) for i in range(400)]
 
@@ -255,3 +256,93 @@ def test_n1_n2_change_only_the_cards_that_fail_them():
     failing = [a for a in CARDS if not _passes_n1_n2(a)]
     assert 0 < len(failing) < 0.1 * len(CARDS)
     assert len(_same_structure()) == len(CARDS) - len(failing)    # the rest: checked above
+
+
+# ------------------------------------------- rate floor and relative gains (pilot, 2026-11-10)
+
+FLOOR = 0.1
+FLOORED = [sample_card(123, 0, i, "sinh", FLOOR) for i in range(400)]
+
+
+def test_rate_floor_bounds_every_constant_l_diagonal_only():
+    diagonal = np.abs([c.linear[v][v].value for c in FLOORED for v in range(c.n_states)
+                       if c.linear[v][v].param is None])
+    z0 = np.arcsinh(FLOOR / SINH_SCALE)
+    u = (np.arcsinh(diagonal / SINH_SCALE) - z0) / (SINH_Z - z0)     # U(0, 1) above the floor
+    assert diagonal.min() >= FLOOR and diagonal.max() <= 1e4 * (1 + 1e-9)
+    assert np.histogram(u, bins=4, range=(0, 1))[0].min() > 0.15 * len(u)
+    off = np.abs([c.value for card in FLOORED for v, row in enumerate(card.linear)
+                  for w, c in enumerate(row) if c is not None and c.param is None and w != v])
+    assert (off < FLOOR).mean() > 0.2                               # not floored
+    for card in FLOORED[:50]:
+        compile_card(card)
+
+
+def test_rate_floor_bounds_the_level_of_a_free_l_diagonal():
+    card = next(c for c in FLOORED if rate_params(c).any() and not rate_params(c).all())
+    rate = rate_params(card)
+    z, kappa = draw_level_spread(card, np.random.default_rng(0), 500, FLOOR)
+    z_free, kappa_free = draw_level_spread(card, np.random.default_rng(0), 500)
+    level = SINH_SCALE * np.sinh(z[:, rate])
+    assert level.min() >= FLOOR * (1 - 1e-9) and level.max() <= 1e4 * (1 + 1e-9)
+    assert (level < 10 * FLOOR).mean() > 0.1                        # log-uniform from the floor
+    np.testing.assert_array_equal(z[:, ~rate], z_free[:, ~rate])    # other parameters untouched
+    np.testing.assert_array_equal(kappa, kappa_free)
+
+
+def test_relative_gains_are_ratio_times_the_competing_term():
+    cards = [c for c in FLOORED[:120] if c.global_params]
+    seen = set()
+    for card in cards:
+        rng = np.random.default_rng(1)
+        theta, psi = draw_parameters(card, rng, 30, 68, "sinh", FLOOR, "relative")
+        z, _ = draw_level_spread(card, np.random.default_rng(1), 30, FLOOR)
+        reference = gain_references(card, z)
+        ratio = psi * SC_ROW_SUM / reference
+        assert (np.log10(ratio) >= COUPLING_RATIO_LOG10[0] - 1e-9).all()
+        assert (np.log10(ratio) <= COUPLING_RATIO_LOG10[1] + 1e-9).all()
+        # the same regional parameters as under absolute gains, and a given ratio is used
+        absolute, _ = draw_parameters(card, np.random.default_rng(1), 30, 68, "sinh", FLOOR)
+        np.testing.assert_array_equal(theta, absolute)
+        given = np.full(len(card.global_params), 0.5)
+        _, fixed = draw_parameters(card, np.random.default_rng(1), 30, 68, "sinh", FLOOR,
+                                   "relative", given)
+        np.testing.assert_allclose(fixed, 0.5 * reference / SC_ROW_SUM, rtol=1e-12)
+        # the reference is what the rule names
+        column = {p: j for j, p in enumerate(card.regional_params)}
+        level = SINH_SCALE * np.sinh(np.abs(z))
+        size = lambda c: (np.full(30, abs(c.value)) if c.param is None
+                          else level[:, column[c.param]])
+        for k, ch in enumerate(card.channels):
+            if ch.into_derivative:
+                v = ch.into_derivative[0]
+                expected = size(card.linear[v][v])
+                seen.add("derivative_free" if card.linear[v][v].param else "derivative_constant")
+            else:
+                t = card.nonlinear[ch.into_input[0]]
+                inputs = [size(c) for c in (*t.weights, t.drive) if c is not None]
+                expected = np.max(inputs, axis=0) if inputs else np.ones(30)
+                seen.add("input" if inputs else "input_bare")
+            np.testing.assert_allclose(reference[:, k], expected, rtol=1e-12)
+    assert {"derivative_free", "derivative_constant", "input"} <= seen
+
+
+def test_floor_and_relative_gains_are_sinh_options_and_need_sampled_cards():
+    from pathlib import Path
+    import delssome_fm.spec.reference as reference
+    from delssome_fm.spec.card import load_card
+    with pytest.raises(ValueError, match="need the sinh policy"):
+        sample_card(123, 0, 0, "multiplier", FLOOR)
+    with pytest.raises(ValueError, match="need the sinh policy"):
+        draw_parameters(CARDS[0], np.random.default_rng(0), 1, 68, "multiplier", 0.0, "relative")
+    with pytest.raises(ValueError, match="gain prior"):
+        draw_parameters(SINH[0], np.random.default_rng(0), 1, 68, "sinh", 0.0, "scaled")
+    with pytest.raises(ValueError, match="rate floor"):
+        sample_card(123, 0, 0, "sinh", -1.0)
+    with pytest.raises(ValueError, match="relative gains only"):
+        draw_parameters(SINH[0], np.random.default_rng(0), 1, 68, "sinh", 0.0, "absolute",
+                        np.ones(len(SINH[0].global_params)))
+    hopf = load_card(Path(reference.__file__).parent / "hopf.yaml")   # one gain, two channels
+    with pytest.raises(ValueError, match="one channel with one injection target"):
+        gain_references(hopf, np.zeros((1, len(hopf.regional_params))))
+    assert [sample_card(123, 0, i, "sinh", 0.0) for i in range(40)] == SINH[:40]

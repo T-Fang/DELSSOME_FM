@@ -25,7 +25,8 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
     return CorpusConfig(seed=11, n_param_sets=n_param_sets, first_draw=first_draw, batch_size=2,
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
-                        parameter_policy="multiplier", gain_scope="draw",
+                        parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
+                        gain_prior="absolute",
                         output_dir=tmp_path)
 
 
@@ -221,3 +222,45 @@ def test_per_draw_gains_still_reproduce_the_stored_sinh_corpus():
     P, K = theta.shape[2], psi.shape[1]
     np.testing.assert_allclose(arrays["theta"][rows][..., :P], theta, rtol=1e-6)
     np.testing.assert_allclose(arrays["psi"][rows][:, :K], psi, rtol=1e-6)
+
+
+def test_relative_gains_fix_the_ratio_per_model(tmp_path):
+    """gain_prior relative, gain_scope model: every draw of a model has the model's coupling
+    ratio; its gain follows the draw's reference. Theta, x0 and noise are those of absolute
+    gains with the same floor."""
+    from dataclasses import replace
+    from delssome_fm.sim.corpus import _SCREEN, base_level_spread, model_gains, model_ratios
+    from delssome_fm.spec.sampler import SC_ROW_SUM, gain_references
+    absolute = replace(_cfg(tmp_path), parameter_policy="sinh", gain_scope="model",
+                       rate_floor=0.1)
+    relative = replace(absolute, gain_prior="relative")
+    constant = varying = False
+    for index in range(60):
+        card = card_for(relative, "train", index)
+        if not card.global_params:
+            continue
+        assert card == card_for(absolute, "train", index)
+        ratio = model_ratios(relative, card, "train", index)
+        assert ratio.shape == (len(card.global_params),)
+        assert ((ratio >= 1e-2) & (ratio <= 10)).all()
+        a = draws(absolute, card, "train", index, _DRAW, 0, 5)
+        b = draws(relative, card, "train", index, _DRAW, 0, 5)
+        for k in (0, 2):                                                         # theta, x0
+            np.testing.assert_array_equal(a[k], b[k])
+        np.testing.assert_array_equal(jax.random.key_data(a[3]), jax.random.key_data(b[3]))
+        z = np.stack([base_level_spread(relative, card, "train", index, j)[0] for j in range(5)])
+        reference = gain_references(card, z)
+        np.testing.assert_allclose(b[1], ratio * reference / SC_ROW_SUM, rtol=1e-12)
+        screen = draws(relative, card, "train", index, _SCREEN, 0, 2)
+        assert screen[1].shape == (2, len(card.global_params))
+        if np.ptp(reference[:, 0]) == 0:
+            constant = True
+            assert np.ptp(b[1][:, 0]) == 0                    # a constant reference: one gain
+        else:
+            varying = True
+    assert constant and varying
+    card = card_for(relative, "train", index)
+    with pytest.raises(ValueError, match="absolute gains only"):
+        model_gains(relative, card, "train", index)
+    with pytest.raises(ValueError, match="relative gains only"):
+        model_ratios(absolute, card, "train", index)

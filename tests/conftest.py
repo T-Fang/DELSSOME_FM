@@ -52,7 +52,8 @@ def _tiny_store(tmp_path_factory, policy: str):
     corpus_cfg = CorpusConfig(seed=11, n_param_sets=3, first_draw=0, batch_size=2, screen_draws=2,
                               screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
                               initial_state_scale=0.1, fcd_store_stride=10,
-                              parameter_policy=policy, gain_scope="draw",
+                              parameter_policy=policy, gain_scope="draw", rate_floor=0.0,
+                              gain_prior="absolute",
                               output_dir=root / "corpus")
     sim_cfg = SimConfig(**TINY_SIM)
     scs = np.random.default_rng(0).uniform(0, 0.02, (64, 68, 68))
