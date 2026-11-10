@@ -25,7 +25,9 @@ is drawn, per draw or once per model as above, is each channel's coupling ratio;
 gain is ratio x reference / SC row sum, the reference being the term the gain competes with
 in that draw. So under "model" the model fixes the ratio (`model_ratios`), and its gain is
 the same in every draw unless the reference is a regional parameter, whose level each draw
-draws. `rate_floor` is the sampler's floor on L diagonals.
+draws. `gain_prior: loop` works the same way with another reference for channels into the
+input. `rate_floor` is the sampler's floor on L diagonals and `term_prior` its prior of the
+nonlinear terms.
 
 Every candidate gets one log row (`CandidateLog`): the acceptance rate and mean
 off-diagonal FC per model that brief §8 asks to log, and its validity.
@@ -126,7 +128,7 @@ def _key(cfg: CorpusConfig, split: str, index: int, *more: int) -> list[int]:
 
 def card_for(cfg: CorpusConfig, split: str, index: int) -> ModelCard:
     return sample_card(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy,
-                       cfg.rate_floor)
+                       cfg.rate_floor, cfg.term_prior)
 
 
 def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
@@ -144,13 +146,13 @@ def model_gains(cfg: CorpusConfig, card: ModelCard, split: str, index: int) -> n
 
 
 def model_ratios(cfg: CorpusConfig, card: ModelCard, split: str, index: int) -> np.ndarray:
-    """(K,) the model's coupling ratios under gain_scope "model" and relative gains (module
-    docstring), from the same stream as `model_gains`."""
-    if cfg.gain_prior != "relative":
-        raise ValueError(f"coupling ratios exist under relative gains only, the corpus has "
-                         f"gain_prior {cfg.gain_prior!r}")
+    """(K,) the model's coupling ratios under gain_scope "model" and relative or loop gains
+    (module docstring), from the same stream as `model_gains`."""
+    if cfg.gain_prior == "absolute":
+        raise ValueError(f"coupling ratios exist under relative or loop gains only, the "
+                         f"corpus has gain_prior {cfg.gain_prior!r}")
     rng = np.random.default_rng(_key(cfg, split, index, _GAIN))
-    return draw_coupling_ratios(card, rng, 1)[0]
+    return draw_coupling_ratios(card, rng, 1, cfg.gain_prior)[0]
 
 
 def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, first: int,
@@ -158,7 +160,7 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
     """theta (n, N, P), psi (n, K), x0 (n, N, V), keys (n,) for draws first..first+n-1."""
     if cfg.gain_scope not in GAIN_SCOPES:
         raise ValueError(f"gain_scope must be one of {GAIN_SCOPES}, found {cfg.gain_scope!r}")
-    relative = cfg.gain_prior == "relative"
+    relative = cfg.gain_prior != "absolute"
     gains = ratio = None
     if cfg.gain_scope == "model":
         if relative:
@@ -169,7 +171,7 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
     for j in range(first, first + n):
         rng = np.random.default_rng(_key(cfg, split, index, tag, j))
         theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy,
-                                     cfg.rate_floor, cfg.gain_prior, ratio)
+                                     cfg.rate_floor, cfg.gain_prior, ratio, cfg.term_prior)
         thetas.append(theta[0])
         psis.append(psi[0] if gains is None else gains)
         x0s.append(rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
@@ -187,7 +189,7 @@ def base_level_spread(cfg: CorpusConfig, card: ModelCard, split: str, index: int
         raise ValueError(f"levels and spreads exist under the sinh policy only, found "
                          f"{cfg.parameter_policy!r}")
     rng = np.random.default_rng(_key(cfg, split, index, _DRAW, j))
-    z, kappa = draw_level_spread(card, rng, 1, cfg.rate_floor)
+    z, kappa = draw_level_spread(card, rng, 1, cfg.rate_floor, cfg.term_prior)
     return z[0], kappa[0], regional_values(card, z, kappa, rng, N_REGIONS)[0]
 
 

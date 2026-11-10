@@ -78,8 +78,9 @@ class CorpusConfig:
     gain_scope: str               # coupling gains drawn per "draw" (corpora up to corpus_sinh) or
                                   # once per "model", shared by all its draws (2026-11-04)
     rate_floor: float             # 1/s, sinh policy: smallest |L diagonal| (0 = none; sampler.py)
-    gain_prior: str               # sinh policy: "absolute" (log10 G ~ U(-2, 2)) or "relative"
-                                  # to the term the gain competes with (sampler.py, 2026-11-10)
+    gain_prior: str               # sinh policy: "absolute" (log10 G ~ U(-2, 2)), "relative" to
+                                  # the term the gain competes with, or "loop" (sampler.py)
+    term_prior: str               # sinh policy: "flat", or "scaled" nonlinear terms (sampler.py)
     output_dir: Path
 
 

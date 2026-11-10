@@ -612,3 +612,21 @@ Models with a slowest rate of at least 10 s⁻¹ give 42% of the pilot's coupled
 
 **Status.** The floor does what it was meant to. The relative gain does so for channels at the derivative. Coupling through the transfer input is rare under both priors and needs its own rule; none is decided.
 
+### Second pilot: a loop-ratio gain and scaled terms (2026-11-10)
+
+Approved by the project lead as two arms, both with the 0.1 s⁻¹ floor and the same 2,000 candidates. Both are further `sinh`-policy options (`gain_prior: loop`, `term_prior: scaled`); the cards keep the structure of the first pilot's, and a channel at the derivative keeps its gain.
+
+**What decides coupling through the input.** In the audit corpus (test, slowest rate ≥ 0.1 s⁻¹, one-variable models observed directly, loop ratio 1–100), take the effective loop ratio: the loop ratio times the transfer's slope at its mean input and the gate's value at the mean state, with the sign of $\gamma$. Below 0.1 in magnitude, 0.8% of 2,353 usable draws are coupled; at 1–3, 20%; at 3–10, 57%; above 10, 64%. Only 2.7% of all usable draws of such models reach 0.3–10. So the loop must be closed (the gain), the transfer must respond where it operates (its input), and the sign must be positive.
+
+| arm | config | rule |
+|---|---|---|
+| A, loop gain | `corpus_loop_gain_pilot.yaml` | A channel into $u^v$: $G = \text{ratio}\cdot\lvert L_{vv}\rvert / (\lvert\gamma_v\rvert \cdot 0.36)$, $\log_{10}\text{ratio} \sim \mathcal{U}(-1, 2)$. A channel at the derivative: as in the first pilot. |
+| B, loop gain and scaled terms | `corpus_scaled_terms_pilot.yaml` | A, and $\lvert\gamma_v\rvert = 10^{\mathcal{U}(-1,1)}\lvert L_{vv}\rvert$, $\lvert w_{vu}\rvert = 10^{\mathcal{U}(-1,2)}$, $\lvert I_v\rvert = 10^{\mathcal{U}(-1,1)}$, for constants and for the per-draw levels of regional $w$ and $I$. |
+
+**Choices.**
+- **The loop ratio is drawn one decade higher than the derivative's ratio**, because the transfer's slope (at most 1/4 for the logistic) and the gate scale the loop down. The fitted MFM sets have loop ratios of 2.2–15.5 and FIC's 0.12–3.1, both inside.
+- **$\gamma$ relative to the leak** makes the term's output comparable to the leak for a state of order 1 (MFM 0.42, FIC 0.40). When $L_{vv}$ is a regional parameter, $\gamma$ is relative to its nominal value, and the ratio then varies between draws.
+- **Weights up to 100, drives up to 10.** A weight multiplies a state that can be well below 1 (FIC's weights are 25–90 on gating variables of 0.1–0.5); a drive enters at full size (MFM −5.7, FIC about −1). The logistic responds for $\lvert u\rvert$ up to about 4, the Wong–Wang transfer from about −3 upward.
+- **Unchanged:** $\beta$, $\sigma$, off-diagonal $L$, gate weights, signs. Each value keeps the uniform number it was drawn from, so no structure changes.
+- **A negative $\gamma$ makes the channel inhibitory.** Mean FC cannot show that (it is bounded below by −1/67), so such draws count as uncoupled here although their FC depends on the SC.
+

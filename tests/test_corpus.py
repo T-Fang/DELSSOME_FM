@@ -26,7 +26,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
                         parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
-                        gain_prior="absolute",
+                        gain_prior="absolute", term_prior="flat",
                         output_dir=tmp_path)
 
 
@@ -262,5 +262,29 @@ def test_relative_gains_fix_the_ratio_per_model(tmp_path):
     card = card_for(relative, "train", index)
     with pytest.raises(ValueError, match="absolute gains only"):
         model_gains(relative, card, "train", index)
-    with pytest.raises(ValueError, match="relative gains only"):
+    with pytest.raises(ValueError, match="relative or loop gains only"):
         model_ratios(absolute, card, "train", index)
+
+
+def test_loop_gains_and_scaled_terms_reach_the_corpus_draws(tmp_path):
+    from dataclasses import replace
+    from delssome_fm.sim.corpus import base_level_spread, model_ratios
+    from delssome_fm.spec.sampler import SC_ROW_SUM, gain_references, sample_card
+    cfg = replace(_cfg(tmp_path), parameter_policy="sinh", gain_scope="model", rate_floor=0.1,
+                  gain_prior="loop", term_prior="scaled")
+    checked = 0
+    for index in range(40):
+        card = card_for(cfg, "train", index)
+        assert card == sample_card(cfg.seed, 0, index, "sinh", 0.1, "scaled")
+        if not card.global_params:
+            continue
+        theta, psi, _, _ = draws(cfg, card, "train", index, _DRAW, 0, 4)
+        z = np.stack([base_level_spread(cfg, card, "train", index, j)[0] for j in range(4)])
+        ratio = model_ratios(cfg, card, "train", index)
+        np.testing.assert_allclose(psi, ratio * gain_references(card, z, "loop") / SC_ROW_SUM,
+                                   rtol=1e-12)
+        np.testing.assert_array_equal(
+            theta, np.stack([base_level_spread(cfg, card, "train", index, j)[2]
+                             for j in range(4)]))
+        checked += 1
+    assert checked > 10

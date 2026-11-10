@@ -9,8 +9,10 @@ import pytest
 from delssome_fm.spec.compile import compile_card
 from delssome_fm.spec.sampler import (COUPLING_RATIO_LOG10, GAIN_LOG10, MULTIPLIER_LOG10,
                                       N_FREE, SC_ROW_SUM, SINH_SCALE, SINH_Z, V_PROBS,
-                                      draw_level_spread, draw_parameters, gain_references,
-                                      rate_params, sample_card)
+                                      DRIVE_LOG10, LOOP_RATIO_LOG10, TERM_GAIN_LOG10,
+                                      WEIGHT_LOG10, draw_coupling_ratios, draw_level_spread,
+                                      draw_parameters, gain_references, gain_site, rate_params,
+                                      sample_card, term_params)
 
 CARDS = [sample_card(123, 0, i) for i in range(400)]
 
@@ -339,10 +341,105 @@ def test_floor_and_relative_gains_are_sinh_options_and_need_sampled_cards():
         draw_parameters(SINH[0], np.random.default_rng(0), 1, 68, "sinh", 0.0, "scaled")
     with pytest.raises(ValueError, match="rate floor"):
         sample_card(123, 0, 0, "sinh", -1.0)
-    with pytest.raises(ValueError, match="relative gains only"):
+    with pytest.raises(ValueError, match="relative or loop gains only"):
         draw_parameters(SINH[0], np.random.default_rng(0), 1, 68, "sinh", 0.0, "absolute",
                         np.ones(len(SINH[0].global_params)))
     hopf = load_card(Path(reference.__file__).parent / "hopf.yaml")   # one gain, two channels
     with pytest.raises(ValueError, match="one channel with one injection target"):
         gain_references(hopf, np.zeros((1, len(hopf.regional_params))))
     assert [sample_card(123, 0, i, "sinh", 0.0) for i in range(40)] == SINH[:40]
+
+
+# ------------------------------------- loop-ratio gains and scaled terms (second pilot)
+
+SCALED = [sample_card(123, 0, i, "sinh", FLOOR, "scaled") for i in range(400)]
+
+
+def test_loop_gains_size_an_input_channel_by_the_loop_it_closes():
+    sites = set()
+    for card in [c for c in FLOORED[:150] if c.global_params]:
+        z, _ = draw_level_spread(card, np.random.default_rng(2), 20, FLOOR)
+        relative = gain_references(card, z)
+        loop = gain_references(card, z, "loop")
+        r_rel = draw_coupling_ratios(card, np.random.default_rng(3), 500)
+        r_loop = draw_coupling_ratios(card, np.random.default_rng(3), 500, "loop")
+        level = SINH_SCALE * np.sinh(np.abs(z))
+        for k, g in enumerate(card.global_params):
+            site, v = gain_site(card, g)
+            sites.add(site)
+            if site == "derivative":                       # unchanged from the relative prior
+                np.testing.assert_array_equal(loop[:, k], relative[:, k])
+                np.testing.assert_array_equal(r_loop[:, k], r_rel[:, k])
+                continue
+            c = card.linear[v][v]
+            rate = (np.full(20, abs(c.value)) if c.param is None
+                    else level[:, card.regional_params.index(c.param)])
+            np.testing.assert_allclose(loop[:, k], rate / abs(card.nonlinear[v].gain), rtol=1e-12)
+            lr = np.log10(r_loop[:, k])
+            assert LOOP_RATIO_LOG10[0] <= lr.min() and lr.max() <= LOOP_RATIO_LOG10[1]
+            assert lr.max() > 1.5 and lr.min() < -0.5
+        _, psi = draw_parameters(card, np.random.default_rng(4), 20, 68, "sinh", FLOOR, "loop",
+                                 np.full(len(card.global_params), 2.0))
+        z4, _ = draw_level_spread(card, np.random.default_rng(4), 20, FLOOR)
+        np.testing.assert_allclose(psi, 2.0 * gain_references(card, z4, "loop") / SC_ROW_SUM,
+                                   rtol=1e-12)
+    assert sites == {"input", "derivative"}
+    with pytest.raises(ValueError, match="relative or loop"):
+        gain_references(FLOORED[0], np.zeros((1, len(FLOORED[0].regional_params))), "absolute")
+
+
+def test_scaled_terms_keep_the_structure_and_move_gamma_w_and_i():
+    in_range = lambda x, r: 10.0 ** r[0] * (1 - 1e-9) <= abs(x) <= 10.0 ** r[1] * (1 + 1e-9)
+    n_gain = n_w = n_i = 0
+    for a, b in zip(FLOORED, SCALED):
+        assert _slots(a) == _slots(b) and a.parameters == b.parameters      # slots and signs
+        assert a.linear == b.linear and a.bias == b.bias and a.noise == b.noise
+        assert a.channels == b.channels and a.observable == b.observable
+        for v, (ta, tb) in enumerate(zip(a.nonlinear, b.nonlinear)):
+            if tb is None:
+                continue
+            assert tb.gate == ta.gate and tb.transfer == ta.transfer
+            if b.linear[v][v].param is None:                                # a constant rate
+                assert in_range(tb.gain / b.linear[v][v].value, TERM_GAIN_LOG10)
+                n_gain += 1
+            for wa, wb in zip(ta.weights, tb.weights):
+                if wb is not None and wb.param is None:
+                    assert wb.value == 1.0 == wa.value or in_range(wb.value, WEIGHT_LOG10)
+                    n_w += 1
+            if tb.drive is not None and tb.drive.param is None:
+                assert in_range(tb.drive.value, DRIVE_LOG10)
+                n_i += 1
+    assert min(n_gain, n_w, n_i) > 100
+    ratios = np.log10([abs(t.gain / c.linear[v][v].value) for c in SCALED
+                       for v, t in enumerate(c.nonlinear)
+                       if t is not None and c.linear[v][v].param is None])
+    assert np.histogram(ratios, bins=4, range=TERM_GAIN_LOG10)[0].min() > 0.15 * len(ratios)
+    for card in SCALED[:50]:
+        compile_card(card)
+
+
+def test_scaled_terms_bound_the_levels_of_regional_w_and_i():
+    seen = set()
+    for card in SCALED[:150]:
+        weight, drive = term_params(card, "weight"), term_params(card, "drive")
+        if not (weight | drive).any():
+            continue
+        z, kappa = draw_level_spread(card, np.random.default_rng(0), 300, FLOOR, "scaled")
+        z_flat, kappa_flat = draw_level_spread(card, np.random.default_rng(0), 300, FLOOR)
+        other = ~(weight | drive)
+        np.testing.assert_array_equal(z[:, other], z_flat[:, other])
+        np.testing.assert_array_equal(kappa, kappa_flat)
+        np.testing.assert_array_equal(np.sign(z), np.sign(z_flat))        # the draw's sign
+        level = SINH_SCALE * np.sinh(np.abs(z))
+        for mask, r, name in ((weight, WEIGHT_LOG10, "weight"), (drive, DRIVE_LOG10, "drive")):
+            if mask.any():
+                seen.add(name)
+                x = np.log10(level[:, mask])
+                assert r[0] - 1e-6 <= x.min() and x.max() <= r[1] + 1e-6
+                assert x.min() < r[0] + 0.3 and x.max() > r[1] - 0.3
+                assert 0.3 < (z[:, mask] < 0).mean() < 0.7
+    assert seen == {"weight", "drive"}
+    with pytest.raises(ValueError, match="term prior"):
+        sample_card(123, 0, 0, "sinh", FLOOR, "narrow")
+    with pytest.raises(ValueError, match="need the sinh"):
+        sample_card(123, 0, 0, "multiplier", 0.0, "scaled")

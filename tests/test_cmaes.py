@@ -26,7 +26,7 @@ def _corpus(tmp_path: Path) -> CorpusConfig:
     return CorpusConfig(seed=11, n_param_sets=4, first_draw=0, batch_size=2, screen_draws=2,
                         screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
                         initial_state_scale=0.1, fcd_store_stride=10, parameter_policy="sinh",
-                        gain_scope="model", rate_floor=0.0, gain_prior="absolute",
+                        gain_scope="model", rate_floor=0.0, gain_prior="absolute", term_prior="flat",
                         output_dir=tmp_path / "corpus")
 
 
@@ -192,7 +192,7 @@ def test_tiny_end_to_end(tmp_path, monkeypatch):
     assert len(paths["log"].read_text().splitlines()) == 1
     with pytest.raises(ValueError, match="outside"):
         cmaes.run_chunk(cfg, corpus, SIM, None, "train", 0, len(plan) + 1, scs)
-    for change in ({"rate_floor": 0.1}, {"gain_prior": "relative"}):
+    for change in ({"rate_floor": 0.1}, {"gain_prior": "relative"}, {"term_prior": "scaled"}):
         with pytest.raises(ValueError, match="not implemented for a rate floor or relative"):
             cmaes.run_model(cfg, dataclasses.replace(corpus, **change), SIM, None, "train", 0,
                             None)

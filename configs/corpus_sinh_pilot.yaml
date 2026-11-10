@@ -23,4 +23,5 @@ parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficie
 gain_scope: draw              # coupling gains drawn per draw (2026-11-04: corpora since use "model")
 rate_floor: 0.0               # 1/s; no floor on L diagonals (sinh-policy option, 2026-11-10)
 gain_prior: absolute          # gains not relative to the competing term (sinh-policy option)
+term_prior: flat              # nonlinear terms: gamma, w, I from the flat prior (sinh-policy option)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh_pilot

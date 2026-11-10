@@ -74,8 +74,26 @@ behaviour above, so existing corpora are reproduced unchanged:
                               gain differs between draws exactly when its reference is a
                               regional parameter.
 
+    gain_prior "loop"         as "relative" for a channel at the derivative. A channel into
+                              u^v reaches dx^v/dt through the term's gain, at a rate of about
+                              |gamma_v| G SC_ROW_SUM that competes with |L_vv|, so its
+                              reference is |L_vv| / |gamma_v| and log10 ratio ~ U(-1, 2)
+                              (second pilot: under "relative" such channels almost never
+                              coupled, generation.md §13).
+    term_prior "scaled"       the nonlinear term in units where its state and its transfer's
+                              input are of order 1 (second pilot):
+                                  |gamma_v| = 10^U(-1, 1) |L_vv|   (the nominal L_vv when that
+                                                                    slot is a regional parameter)
+                                  |w_vu|    = 10^U(-1, 2)
+                                  |I_v|     = 10^U(-1, 1)
+                              for constants and for the per-draw levels of regional w and I.
+                              Signs, and the uniform number behind each value, are those of
+                              the flat prior (`_in_range`), so the cards keep their structure
+                              and no extra random number is drawn.
+
 Changing the floor changes L, hence R1's rejections, hence the random numbers later slots
-see: card i can differ in structure from card i without the floor.
+see: card i can differ in structure from card i without the floor. gain_prior and term_prior
+do not change the structure.
 
 Probabilities the design documents leave open are module constants below, marked "choice".
 This module does not simulate or screen (sim/corpus.py does).
@@ -111,7 +129,12 @@ N_FREE = (1, 2, 3, 4)            # §4 step 3
 LOG10_RANGE = (-4.0, 4.0)        # §4 constants
 MULTIPLIER_LOG10 = (-1.0, 1.0)   # Theta, Psi ~ 10^U(-1, 1)
 POLICIES = ("multiplier", "sinh")
-GAIN_PRIORS = ("absolute", "relative")
+GAIN_PRIORS = ("absolute", "relative", "loop")
+TERM_PRIORS = ("flat", "scaled")
+LOOP_RATIO_LOG10 = (-1.0, 2.0)   # gain_prior "loop": |gamma_v| G SC_ROW_SUM / |L_vv|, channel into u^v
+TERM_GAIN_LOG10 = (-1.0, 1.0)    # term_prior "scaled": |gamma_v| / |L_vv|
+WEIGHT_LOG10 = (-1.0, 2.0)       # term_prior "scaled": |w_vu|
+DRIVE_LOG10 = (-1.0, 1.0)        # term_prior "scaled": |I_v|
 SINH_SCALE = 1e-4                # sinh policy: x = S sinh(y), linear below ~S, log-like above
 SINH_Z = float(np.arcsinh(1e4 / SINH_SCALE))   # |x| <= 1e4, the constants' 8 decades
 SPREAD_RANGE = (0.0, 1.0)        # kappa: regional SD / |mean|
@@ -162,12 +185,33 @@ def _floor_level(rate_floor: float) -> float:
     return float(np.arcsinh(rate_floor / SINH_SCALE))
 
 
+def _in_range(c: float, log10_range: tuple[float, float]) -> float:
+    """A sinh-policy constant c = +-S sinh(u Z) moved to magnitude 10^(lo + (hi - lo) u):
+    the same sign and the same uniform number u, another range."""
+    lo, hi = log10_range
+    u = float(np.arcsinh(abs(c) / SINH_SCALE) / SINH_Z)
+    return float(np.sign(c) * 10.0 ** (lo + (hi - lo) * u))
+
+
+def _scale_terms(d: _Draft) -> None:
+    """term_prior "scaled" (module docstring), applied to the nominal constants once L is
+    drawn. The self weight that `_ensure_inputs` sets to exactly 1 stays 1."""
+    for v, t in enumerate(d.nonlinear):
+        if t is None:
+            continue
+        t["gain"] = _in_range(t["gain"], TERM_GAIN_LOG10) * abs(float(d.L[v, v]))
+        t["weights"] = [w if w is None or w == 1.0 else _in_range(w, WEIGHT_LOG10)
+                        for w in t["weights"]]
+        if t["drive"] is not None:
+            t["drive"] = _in_range(t["drive"], DRIVE_LOG10)
+
+
 def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
-                rate_floor: float = 0.0) -> ModelCard:
+                rate_floor: float = 0.0, term_prior: str = "flat") -> ModelCard:
     """The `index`-th synthetic card of population `stream` under `seed`; `policy` sets how
-    free slots are stored (module docstring), not the equations. rate_floor (1/s, sinh
-    policy): the smallest magnitude of an L diagonal."""
-    _check_prior(policy, rate_floor)
+    free slots are stored (module docstring), not the equations. rate_floor (1/s) and
+    term_prior: the sinh policy's options for L diagonals and nonlinear terms."""
+    _check_prior(policy, rate_floor, term_prior=term_prior)
     rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
     d = _Draft(V=V, L=np.full((V, V), np.nan), policy=policy, rate_floor=rate_floor)
@@ -179,6 +223,8 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
     _sample_channels(rng, d)
     _ensure_inputs(d)
     _sample_L(rng, d)
+    if term_prior == "scaled":
+        _scale_terms(d)
     _set_gains(rng, d)
     observable = _sample_observable(rng, d)
     if policy == "sinh":
@@ -191,16 +237,21 @@ def _check_policy(policy: str) -> None:
         raise ValueError(f"parameter policy must be one of {POLICIES}, found {policy!r}")
 
 
-def _check_prior(policy: str, rate_floor: float = 0.0, gain_prior: str = "absolute") -> None:
+def _check_prior(policy: str, rate_floor: float = 0.0, gain_prior: str = "absolute",
+                 term_prior: str = "flat") -> None:
     """The options of the sinh policy (module docstring) exist under that policy only."""
     _check_policy(policy)
     if gain_prior not in GAIN_PRIORS:
         raise ValueError(f"gain prior must be one of {GAIN_PRIORS}, found {gain_prior!r}")
+    if term_prior not in TERM_PRIORS:
+        raise ValueError(f"term prior must be one of {TERM_PRIORS}, found {term_prior!r}")
     if not 0.0 <= rate_floor < SINH_SCALE * np.sinh(SINH_Z):
         raise ValueError(f"rate floor must be in [0, 1e4) 1/s, found {rate_floor}")
-    if policy != "sinh" and (rate_floor != 0.0 or gain_prior != "absolute"):
-        raise ValueError(f"a rate floor and relative gains need the sinh policy, found policy "
-                         f"{policy!r}, rate floor {rate_floor}, gain prior {gain_prior!r}")
+    if policy != "sinh" and (rate_floor != 0.0 or gain_prior != "absolute"
+                             or term_prior != "flat"):
+        raise ValueError(f"a rate floor, relative or loop gains and scaled terms need the sinh "
+                         f"policy, found policy {policy!r}, rate floor {rate_floor}, gain "
+                         f"prior {gain_prior!r}, term prior {term_prior!r}")
 
 
 def _sample_nonlinear(rng: np.random.Generator, v: int, V: int, policy: str) -> dict:
@@ -424,41 +475,48 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
 def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
                     n_regions: int, policy: str = "multiplier", rate_floor: float = 0.0,
                     gain_prior: str = "absolute", ratio: np.ndarray | None = None,
-                    ) -> tuple[np.ndarray, np.ndarray]:
+                    term_prior: str = "flat") -> tuple[np.ndarray, np.ndarray]:
     """returns: theta (n_draws, N, P), psi (n_draws, K). multiplier: 10^U(-1, 1) each.
     sinh: theta the regions' coefficients, psi the gains (module docstring).
 
-    rate_floor, gain_prior: the sinh policy's options. ratio (K,): relative gains only, the
-    coupling ratios to use (a model's own, sim/corpus.py) instead of the ones drawn here.
-    The random numbers consumed do not depend on gain_prior or ratio.
+    rate_floor, gain_prior, term_prior: the sinh policy's options. ratio (K,): relative or
+    loop gains only, the coupling ratios to use (a model's own, sim/corpus.py) instead of the
+    ones drawn here. The random numbers consumed do not depend on any of the four.
     """
-    _check_prior(policy, rate_floor, gain_prior)
-    if ratio is not None and gain_prior != "relative":
-        raise ValueError("ratio is given for relative gains only")
+    _check_prior(policy, rate_floor, gain_prior, term_prior)
+    if ratio is not None and gain_prior == "absolute":
+        raise ValueError("a ratio is given for relative or loop gains only")
     if policy == "multiplier":
         P = len(card.regional_params)
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
         return theta, draw_gains(card, rng, n_draws, policy)
-    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor)
+    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor, term_prior)
     theta = regional_values(card, z, kappa, rng, n_regions)
     if gain_prior == "absolute":
         return theta, draw_gains(card, rng, n_draws, policy)
-    drawn = draw_coupling_ratios(card, rng, n_draws)
-    return theta, relative_gains(card, drawn if ratio is None else ratio, z)
+    drawn = draw_coupling_ratios(card, rng, n_draws, gain_prior)
+    return theta, relative_gains(card, drawn if ratio is None else ratio, z, gain_prior)
 
 
 def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int,
-                      rate_floor: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+                      rate_floor: float = 0.0, term_prior: str = "flat",
+                      ) -> tuple[np.ndarray, np.ndarray]:
     """sinh policy: z (n_draws, P) the regional parameters' levels, mu_p = S sinh(z_p) (only
     |z_p| matters for a fixed sign), and kappa (n_draws, P) their spreads (module docstring).
-    rate_floor > 0: a free L diagonal's level is z ~ U(z0, Z), S sinh(z0) = rate_floor."""
-    _check_prior("sinh", rate_floor)
+    rate_floor > 0: a free L diagonal's level is z ~ U(z0, Z), S sinh(z0) = rate_floor.
+    term_prior "scaled": a regional w or I has |mu_p| in its range, with the draw's sign."""
+    _check_prior("sinh", rate_floor, term_prior=term_prior)
     P = len(card.regional_params)
     z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
     kappa = rng.uniform(*SPREAD_RANGE, size=(n_draws, P))
     if rate_floor > 0.0:
         z0 = _floor_level(rate_floor)
         z = np.where(rate_params(card), z0 + np.abs(z) * (1.0 - z0 / SINH_Z), z)
+    if term_prior == "scaled":
+        for kind, log10_range in (("weight", WEIGHT_LOG10), ("drive", DRIVE_LOG10)):
+            lo, hi = (float(np.arcsinh(10.0 ** b / SINH_SCALE)) for b in log10_range)
+            z = np.where(term_params(card, kind),
+                         np.sign(z) * (lo + np.abs(z) / SINH_Z * (hi - lo)), z)
     return z, kappa
 
 
@@ -492,28 +550,55 @@ def draw_gains(card: ModelCard, rng: np.random.Generator, n_draws: int,
     return SINH_SCALE * np.sinh(rng.uniform(lo, hi, size=(n_draws, K)))
 
 
-def draw_coupling_ratios(card: ModelCard, rng: np.random.Generator, n_draws: int) -> np.ndarray:
-    """(n_draws, K): relative gains' coupling ratios, log10 ratio ~ U(-2, 1) (module
-    docstring). Consumes as many random numbers as draw_gains."""
-    return 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10, size=(n_draws, len(card.global_params)))
+def draw_coupling_ratios(card: ModelCard, rng: np.random.Generator, n_draws: int,
+                         gain_prior: str = "relative") -> np.ndarray:
+    """(n_draws, K): the coupling ratios of relative or loop gains (module docstring):
+    log10 ratio ~ U(-2, 1), or U(-1, 2) for a channel into the input under "loop". Consumes
+    as many random numbers as draw_gains; a channel at the derivative gets the same ratio
+    under both priors."""
+    K = len(card.global_params)
+    if gain_prior == "relative":
+        return 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10, size=(n_draws, K))
+    if gain_prior != "loop":
+        raise ValueError(f"coupling ratios exist for relative or loop gains, found "
+                         f"{gain_prior!r}")
+    ranges = np.array([LOOP_RATIO_LOG10 if gain_site(card, g)[0] == "input"
+                       else COUPLING_RATIO_LOG10 for g in card.global_params]).reshape(K, 2)
+    return 10.0 ** (ranges[:, 0] + (ranges[:, 1] - ranges[:, 0])
+                    * rng.uniform(size=(n_draws, K)))
 
 
-def relative_gains(card: ModelCard, ratio: np.ndarray, z: np.ndarray) -> np.ndarray:
+def relative_gains(card: ModelCard, ratio: np.ndarray, z: np.ndarray,
+                   gain_prior: str = "relative") -> np.ndarray:
     """psi (n, K) = ratio * reference / SC_ROW_SUM. ratio (K,) or (n, K); z (n, P) the draws'
     levels (draw_level_spread)."""
-    return np.asarray(ratio) * gain_references(card, z) / SC_ROW_SUM
+    return np.asarray(ratio) * gain_references(card, z, gain_prior) / SC_ROW_SUM
 
 
-def gain_references(card: ModelCard, z: np.ndarray) -> np.ndarray:
-    """sinh policy: (n, K) the size, in each draw, of the term a channel's gain competes with
-    at its injection site (the 2026-10-05 rule): |L_vv| of the target v (injected at the
-    derivative), or the largest |w_vu|, |I_v| of u^v (injected into u^v; 1 if it has
-    neither). A constant slot gives |c|, a regional one the draw's level |mu_p| =
-    S sinh(|z_p|). z: (n, P).
+def gain_site(card: ModelCard, g: str) -> tuple[str, int]:
+    """("input" | "derivative", v): where the channel whose gain is the global parameter g is
+    injected. Defined for cards as the sampler builds them: every global parameter is the
+    gain of exactly one channel, which has exactly one injection target. Raises otherwise."""
+    channels = [ch for ch in card.channels if ch.gain.param == g]
+    targets = [(site, v) for ch in channels
+               for site, vs in (("input", ch.into_input), ("derivative", ch.into_derivative))
+               for v in vs]
+    if len(channels) != 1 or len(targets) != 1:
+        raise ValueError(f"{card.name}: relative gains need each global parameter to be "
+                         f"the gain of one channel with one injection target; {g!r} has "
+                         f"{len(channels)} channels and targets {targets}")
+    return targets[0]
 
-    Defined for cards as the sampler builds them: every global parameter is the gain of
-    exactly one channel, which has exactly one injection target. Raises otherwise.
+
+def gain_references(card: ModelCard, z: np.ndarray, gain_prior: str = "relative") -> np.ndarray:
+    """sinh policy: (n, K) the size, in each draw, of what a channel's gain competes with at
+    its injection site. Injected at the derivative of v: |L_vv|. Injected into u^v:
+    "relative" (the 2026-10-05 rule) the largest |w_vu|, |I_v| of u^v (1 if it has
+    neither); "loop" |L_vv| / |gamma_v|. A constant slot gives |c|, a regional one the draw's
+    level |mu_p| = S sinh(|z_p|). z: (n, P). Cards as `gain_site` needs them.
     """
+    if gain_prior not in ("relative", "loop"):
+        raise ValueError(f"references exist for relative or loop gains, found {gain_prior!r}")
     level = SINH_SCALE * np.sinh(np.abs(z))
     column = {p: j for j, p in enumerate(card.regional_params)}
 
@@ -524,24 +609,18 @@ def gain_references(card: ModelCard, z: np.ndarray) -> np.ndarray:
 
     out = []
     for g in card.global_params:
-        channels = [ch for ch in card.channels if ch.gain.param == g]
-        targets = [(site, v) for ch in channels
-                   for site, vs in (("input", ch.into_input), ("derivative", ch.into_derivative))
-                   for v in vs]
-        if len(channels) != 1 or len(targets) != 1:
-            raise ValueError(f"{card.name}: relative gains need each global parameter to be "
-                             f"the gain of one channel with one injection target; {g!r} has "
-                             f"{len(channels)} channels and targets {targets}")
-        site, v = targets[0]
-        if site == "derivative":
-            if card.linear[v][v] is None:
-                raise ValueError(f"{card.name}: variable {v} has no L diagonal for {g!r} to "
-                                 f"be relative to")
-            out.append(size(card.linear[v][v]))
-            continue
+        site, v = gain_site(card, g)
+        if card.linear[v][v] is None and (site == "derivative" or gain_prior == "loop"):
+            raise ValueError(f"{card.name}: variable {v} has no L diagonal for {g!r} to "
+                             f"be relative to")
         term = card.nonlinear[v]
-        inputs = [size(c) for c in (*term.weights, term.drive) if c is not None]
-        out.append(np.max(inputs, axis=0) if inputs else np.ones(len(z)))
+        if site == "derivative":
+            out.append(size(card.linear[v][v]))
+        elif gain_prior == "loop":
+            out.append(size(card.linear[v][v]) / abs(term.gain))
+        else:
+            inputs = [size(c) for c in (*term.weights, term.drive) if c is not None]
+            out.append(np.max(inputs, axis=0) if inputs else np.ones(len(z)))
     return np.stack(out, axis=1) if out else np.empty((len(z), 0))
 
 
@@ -553,6 +632,17 @@ def positive_params(card: ModelCard) -> set[str]:
 def rate_params(card: ModelCard) -> np.ndarray:
     """(P,) bool: the regional parameters that are L diagonals (the rate floor's slots)."""
     return np.array([p in _free_diagonals(card) for p in card.regional_params], dtype=bool)
+
+
+def term_params(card: ModelCard, kind: str) -> np.ndarray:
+    """(P,) bool: the regional parameters that are a nonlinear term's weights w_vu
+    (kind "weight") or drive I_v (kind "drive")."""
+    if kind not in ("weight", "drive"):
+        raise ValueError(f"kind must be weight or drive, found {kind!r}")
+    coefs = [c for t in card.nonlinear if t is not None
+             for c in (t.weights if kind == "weight" else (t.drive,))]
+    names = {c.param for c in coefs if c is not None and c.param is not None}
+    return np.array([p in names for p in card.regional_params], dtype=bool)
 
 
 def _free_diagonals(card: ModelCard) -> set[str | None]:
