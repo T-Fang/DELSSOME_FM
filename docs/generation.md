@@ -630,3 +630,21 @@ Approved by the project lead as two arms, both with the 0.1 s⁻¹ floor and the
 - **Unchanged:** $\beta$, $\sigma$, off-diagonal $L$, gate weights, signs. Each value keeps the uniform number it was drawn from, so no structure changes.
 - **A negative $\gamma$ makes the channel inhibitory.** Mean FC cannot show that (it is bounded below by −1/67), so such draws count as uncoupled here although their FC depends on the SC.
 
+**Result** (same 2,000 candidates; arm A 36.2 CPU-h, arm B 29.3):
+
+| | baseline | first pilot | arm A | arm B |
+|---|---|---|---|---|
+| valid models | 686 (34.3%) | 705 (35.2%) | 670 (33.5%) | 572 (28.6%) |
+| usable draws per valid model | 40.7 | 45.3 | 43.3 | 39.3 |
+| coupled share of usable draws | 22.8% | 8.8% | 10.6% | 10.6% |
+| models with no coupled draw | 38% | 69% | 66% | 65% |
+| input channels (one-channel models): coupled share of usable draws | 12.1% | 1.0% | 3.9% | 3.5% |
+| the same, slowest rate ≥ 10 s⁻¹: coupled draws / usable draws | 4 / 2,603 | 28 / 5,713 | 228 / 4,314 | 126 / 3,200 |
+
+- **The loop gain helps, by about the factor predicted.** Coupling through the input rises from 1.0% to 3.9% of usable draws, and in fast models, where MFM and FIC sit, from 0.5% to 5.3% (the baseline has 4 such draws in 2,000 candidates). Models at the derivative are simulated identically to the first pilot.
+- **Scaling the terms adds nothing and costs validity** (28.6% valid). Arm B is not worth adopting.
+- **What blocks the loop is the operating point, not the size of the coefficients.** Among usable draws of one-variable models observed directly whose loop ratio is at least 1 (arm A; arm B in brackets): $\gamma < 0$ in 55% (61%); otherwise the gate is below 0.1 at the mean state in 26% (16%), a state-dependent gate at a state near zero; otherwise the transfer's slope is below 0.05 in 12% (16%), saturated, often by the coupling input itself. 8% (6%) remain, and 12% (10%) of those are coupled.
+- **Where the loop can act, it couples.** Diffusive input channels with $\gamma > 0$, a loop ratio of at least 3 and a gate of 1 or $1 - x$: 31% of usable draws coupled in arm A (27% in arm B). With an effective loop of at least 3 (as defined above): 40% (45%), which 1.8% (1.6%) of the draws reach.
+
+**Status.** The floor with the loop gain (arm A) is the best prior tested: no coupling without coupling, coupling at every rate, and 57 times more coupled draws through the input in fast models than the baseline. Coupling through the input stays rare (3.9%). It needs the sign, the gate and the transfer to line up at the state the model settles in, which no prior on independent coefficients gives. A rule that fixes the operating point first (draw the resting state and the transfer's input, solve $\beta$ and $I$ for them, as FIC's feedback inhibition does for one parameter) is proposed, not decided.
+
