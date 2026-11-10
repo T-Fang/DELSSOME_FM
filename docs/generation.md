@@ -650,9 +650,9 @@ Approved by the project lead as two arms, both with the 0.1 s⁻¹ floor and the
 
 ---
 
-## 14. The anchored prior (proposed 2026-11-11; implemented as an option, cluster pilot not run)
+## 14. The anchored prior (2026-11-11; implemented as an option, cluster pilot run)
 
-§13 ended with coupling through the transfer input depending on where a model rests, which no prior on independent coefficients controls. The anchored prior draws the resting point first and solves the coefficients that put the model there (`spec/anchor.py`; `term_prior: anchored`, `gain_prior: anchored`). It is off in every existing corpus config. The project lead approved going ahead with the proposal; the rule below is for sign-off before a cluster pilot.
+§13 ended with coupling through the transfer input depending on where a model rests, which no prior on independent coefficients controls. The anchored prior draws the resting point first and solves the coefficients that put the model there (`spec/anchor.py`; `term_prior: anchored`, `gain_prior: anchored`). It is off in every existing corpus config. The project lead approved going ahead with the proposal, and then the rule below and its cluster pilot (2026-11-11).
 
 ### The rule
 
@@ -706,7 +706,45 @@ Of 2,000 candidates, 1,242 are anchored at a stable point, 719 are solved withou
 - **Coupling is weak:** the median mean FC of coupled simulations is 0.09–0.12.
 - **For scale:** under the loop gain of §13 the best subgroup of input channels was coupled in 31% of usable draws, and all input channels in 3.9%. The models above are the ones designed to couple: 13% of direct and 23% of diffusive input-channel models. The rest have a ratio below that or a negative loop and are meant to be uncoupled.
 
-### Proposed pilot (not submitted)
+### Cluster pilot (2026-11-11)
 
-Two arms on train candidates 0–1,999, 100 draws, as the earlier pilots: `corpus_anchored_pilot.yaml` (levels over the full range, the 2026-10-23 rule) and `corpus_anchored_nominal_pilot.yaml` (levels around nominal). About 70 CPU-h together.
+Two arms on train candidates 0–1,999, 100 draws, as the earlier pilots: `corpus_anchored_pilot.yaml` (levels over the full range, the 2026-10-23 rule) and `corpus_anchored_nominal_pilot.yaml` (levels around nominal). 100 jobs each; 33.9 and 33.7 CPU-h; 542 and 605 MB.
 
+| | first pilot | arm A (loop gain) | anchored, full-range levels | anchored, levels around nominal |
+|---|---|---|---|---|
+| valid models | 705 (35.2%) | 670 (33.5%) | 627 (31.4%) | 594 (29.7%) |
+| usable draws per valid model | 45.3 | 43.3 | 38.1 | 47.1 |
+| coupled share of usable draws | 8.8% | 10.6% | 14.1% | 14.4% |
+| synchronised share of usable draws | 0.2% | 0.2% | 1.5% | 0.3% |
+| models with no coupled draw | 69% | 66% | 55% | 62% |
+| input channels (one-channel models): coupled share of usable draws | 1.0% | 3.9% | 7.7% | 11.9% |
+| the same, slowest rate ≥ 10 s⁻¹: coupled draws / usable draws | 28 / 5,713 | 228 / 4,314 | 222 / 3,327 | 620 / 3,442 |
+| median mean FC of coupled draws | 0.12 | 0.13 | 0.27 | 0.14 |
+| usable draws with mean FC above 0.2 / above 0.5 | 2.6% / 0.7% | 3.5% / 1.1% | 8.4% / 4.4% | 5.5% / 1.7% |
+
+**Coupling is coupling.** One coupled draw per model was simulated again with every gain set to 0 (same noise and start): 5 of 267 stay coupled with full-range levels, 3 of 211 with levels around nominal, all in models whose slowest rate is below 1 s⁻¹.
+
+**With levels around nominal, the designed ratio decides coupling at both injection sites.** Models anchored at a stable point with one channel; coupled share of usable draws (models):
+
+| signed ratio | input, direct | input, diffusive | derivative, direct | derivative, diffusive | share of these models |
+|---|---|---|---|---|---|
+| negative | 2.0% (34) | 1.9% (26) | – | – | 13% |
+| 0–0.1 | 3.6% (27) | 2.9% (25) | 1.4% (57) | 0.8% (43) | 33% |
+| 0.1–0.3 | 15.3% (8) | 5.3% (14) | 2.8% (30) | 8.6% (25) | 17% |
+| 0.3–1 | 22.9% (17) | 13.6% (18) | 19.6% (33) | 5.1% (28) | 21% |
+| 1–3 | – | 42.8% (12) | – | 34.9% (18) | 6% |
+| ≥ 3 | – | 46.4% (18) | – | 56.4% (33) | 11% |
+
+- **Designed to couple** (positive ratio, at least 1 for a diffusive channel and 0.3 for a direct one): 131 of 466 such models, 38.6% of their usable draws coupled, 59% of all coupled draws in the arm. The other 335: 4.1%. With full-range levels: 29.8% against 6.4%, and a direct channel's ratio no longer predicts coupling (5.9% at 0.3–1).
+- **Input channels designed to couple, by term** (levels around nominal, 47 models): gate 1 48% of usable draws coupled, gate $1 - x$ 48%, quadratic 19%, a state gate 7% (78% of its draws diverge); Wong–Wang 56%, identity 40%, logistic 17%.
+- **Full-range levels give stronger but less controlled coupling**: median mean FC of coupled draws 0.27 against 0.14, 4.4% of usable draws above 0.5 against 1.7%, fewer usable draws (38.1 against 47.1 per model).
+
+**What still holds the prior back.**
+
+- **Noise is drawn without regard to the resting state.** $\sigma$ keeps the full range, so the noise's stationary SD ($\sigma s/\sqrt{2L_{vv}}$) exceeds $\lvert x^*\rvert$ in 45% of draws. With levels around nominal, 24% of draws of anchored models diverge when that SD is below 10% of $\lvert x^*\rvert$, 56% at 1–10 times, 80% above 1,000 times; among models designed to couple the coupled share falls from 41% to 27%.
+- **Balloon–Windkessel does not accept every resting observable.** Its resting flow is $1 + o^*/0.41$, negative for $o^* < -0.41$: 137 of 635 anchored candidates observed through it, of which 3–4% pass the screen (levels around nominal). Overall 35% of anchored candidates observed through Balloon–Windkessel pass the screen against 54% observed directly, and 58% against 40% of their draws diverge.
+- **The simulation rarely stays at the designed point.** One-variable models observed directly: the regional mean is within 20% of $x^*$ in 21% of usable draws with levels around nominal and 7% with full-range levels (74% at nominal values in the local check).
+- **Most models are not meant to couple.** 28% of anchored one-channel models are designed to couple; 13% have a negative loop and 33% a ratio below 0.1.
+- **Coupling stays weak** where levels are held near nominal (median mean FC 0.14; 16% of usable draws above 0.2 even at a ratio of 3 or more).
+
+**Status.** The anchored prior with levels around nominal is the best prior tested for coupling through the transfer input: 11.9% of usable draws (first pilot 1.0%, loop gain 3.9%), 18% in fast models (0.5%, 5.3%), and the share is set by a design variable, the ratio. Not decided: which arm to adopt, whether to draw the noise relative to the resting state, and whether to restrict the resting observable under Balloon–Windkessel.
