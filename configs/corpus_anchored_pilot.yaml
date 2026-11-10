@@ -1,0 +1,27 @@
+# Third pilot of the value prior (generation.md §14), arm "anchored": the anchored prior
+# (spec/anchor.py): each model's resting point is drawn first, and gamma, w, I and the gains
+# are solved for it; simulations start at the resting state.
+# A draw's regional levels are drawn over the full range, as in every corpus so far.
+# Otherwise as corpus_floor_relgain_pilot.yaml, with the same seed and floor: candidate i has
+# the same SC group and noise. Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # anchored: x0 = x* (1 + U(-0.1, 0.1)) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+gain_scope: model             # the gains are the model's
+rate_floor: 0.1               # 1/s: time constants <= 10 s, 14 of them in the 144-s burn-in
+gain_prior: anchored          # solved with the resting point: the coupling ratio is the effective loop there
+term_prior: anchored          # resting point drawn first; gamma, w, I solved (spec/anchor.py)
+level_prior: flat             # a draw's regional levels over the full range
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_anchored_pilot

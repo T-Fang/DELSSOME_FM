@@ -80,7 +80,10 @@ class CorpusConfig:
     rate_floor: float             # 1/s, sinh policy: smallest |L diagonal| (0 = none; sampler.py)
     gain_prior: str               # sinh policy: "absolute" (log10 G ~ U(-2, 2)), "relative" to
                                   # the term the gain competes with, or "loop" (sampler.py)
-    term_prior: str               # sinh policy: "flat", or "scaled" nonlinear terms (sampler.py)
+    term_prior: str               # sinh policy: "flat", "scaled" or "anchored" nonlinear terms
+                                  # (sampler.py, anchor.py)
+    level_prior: str              # sinh policy, a draw's regional levels: "flat" (the full
+                                  # range) or "nominal" (around the model's nominal values)
     output_dir: Path
 
 

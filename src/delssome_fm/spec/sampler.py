@@ -91,9 +91,21 @@ behaviour above, so existing corpora are reproduced unchanged:
                               the flat prior (`_in_range`), so the cards keep their structure
                               and no extra random number is drawn.
 
+    term_prior "anchored"     the model's resting point is drawn first and gamma, w, I, the
+                              bias of a variable with no term and every gain are solved for
+                              it (spec/anchor.py; third pilot, generation.md §14). The gains
+                              are then the model's (`sample_model`), which `gain_prior`
+                              "anchored" says. A transfer input fed only by a channel also
+                              gets the self weight, so that it can be placed.
+    nominal levels            `draw_level_spread(nominal=...)`: a regional parameter's level
+                              is its slot's nominal value times 10^U(-0.5, 0.5), with the
+                              nominal sign, instead of the full range (sigma keeps the full
+                              range; a rate stays above the floor).
+
 Changing the floor changes L, hence R1's rejections, hence the random numbers later slots
-see: card i can differ in structure from card i without the floor. gain_prior and term_prior
-do not change the structure.
+see: card i can differ in structure from card i without the floor. gain_prior and the term
+priors "flat" and "scaled" do not change the structure; "anchored" does where it adds a self
+weight (the free slots are then chosen among one more candidate).
 
 Probabilities the design documents leave open are module constants below, marked "choice".
 This module does not simulate or screen (sim/corpus.py does).
@@ -105,6 +117,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from delssome_fm.spec.anchor import CONTRIBUTION_LOG10, anchor_draft, channel_ratio, gate
 from delssome_fm.spec.card import (GATES, TRANSFERS, Channel, Coef, Gate, ModelCard, Nonlinear,
                                    Observable, Parameter)
 
@@ -129,8 +142,10 @@ N_FREE = (1, 2, 3, 4)            # §4 step 3
 LOG10_RANGE = (-4.0, 4.0)        # §4 constants
 MULTIPLIER_LOG10 = (-1.0, 1.0)   # Theta, Psi ~ 10^U(-1, 1)
 POLICIES = ("multiplier", "sinh")
-GAIN_PRIORS = ("absolute", "relative", "loop")
-TERM_PRIORS = ("flat", "scaled")
+GAIN_PRIORS = ("absolute", "relative", "loop", "anchored")
+TERM_PRIORS = ("flat", "scaled", "anchored")
+LEVEL_WINDOW_LOG10 = (-0.5, 0.5)  # nominal levels: a draw's level / the slot's nominal value
+ANCHOR_TAG = 7                   # rng stream [seed, stream, index, ANCHOR_TAG] of the resting point
 LOOP_RATIO_LOG10 = (-1.0, 2.0)   # gain_prior "loop": |gamma_v| G SC_ROW_SUM / |L_vv|, channel into u^v
 TERM_GAIN_LOG10 = (-1.0, 1.0)    # term_prior "scaled": |gamma_v| / |L_vv|
 WEIGHT_LOG10 = (-1.0, 2.0)       # term_prior "scaled": |w_vu|
@@ -206,11 +221,32 @@ def _scale_terms(d: _Draft) -> None:
             t["drive"] = _in_range(t["drive"], DRIVE_LOG10)
 
 
+@dataclass(frozen=True)
+class ModelSample:
+    """A sampled card and what the sampler knows about the model besides it."""
+
+    card: ModelCard
+    nominal: np.ndarray           # (P,) the nominal value of each regional parameter's slot (a
+                                  # rate for a free L diagonal; NaN for sigma)
+    anchor: str                   # spec/anchor.py STATUSES; "none" unless term_prior "anchored"
+    rest: np.ndarray | None       # (V,) the resting state x*, when anchored and solved
+    gains: np.ndarray | None      # (K,) the model's coupling gains, when term_prior "anchored"
+    ratios: np.ndarray | None     # (K,) each channel's effective loop at rest, signed (negative:
+                                  # the channel inhibits its target), when anchored and solved
+
+
 def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
                 rate_floor: float = 0.0, term_prior: str = "flat") -> ModelCard:
     """The `index`-th synthetic card of population `stream` under `seed`; `policy` sets how
     free slots are stored (module docstring), not the equations. rate_floor (1/s) and
     term_prior: the sinh policy's options for L diagonals and nonlinear terms."""
+    return sample_model(seed, stream, index, policy, rate_floor, term_prior).card
+
+
+def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
+                 rate_floor: float = 0.0, term_prior: str = "flat") -> ModelSample:
+    """`sample_card` with the model's nominal levels and, under the anchored prior, its
+    resting state and gains."""
     _check_prior(policy, rate_floor, term_prior=term_prior)
     rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
@@ -221,7 +257,7 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
     d.noise = [None if rng.random() < P_NOISELESS else _constant(rng, policy, 1.0)
                for _ in range(V)]
     _sample_channels(rng, d)
-    _ensure_inputs(d)
+    _ensure_inputs(d, always=term_prior == "anchored")
     _sample_L(rng, d)
     if term_prior == "scaled":
         _scale_terms(d)
@@ -229,7 +265,25 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
     observable = _sample_observable(rng, d)
     if policy == "sinh":
         _ensure_observed_noise(rng, d, observable)
-    return _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}", policy=policy)
+    status, rest, gains, ratios = "none", None, None, None
+    if term_prior == "anchored":
+        rest, status = anchor_draft(d, np.random.default_rng([seed, stream, index, ANCHOR_TAG]),
+                                    SC_ROW_SUM, lambda w: _in_range(w, CONTRIBUTION_LOG10))
+        gains = np.array([ch["gain"] for ch in d.channels])
+        if rest is not None:
+            ratios = np.array([channel_ratio(ch) * _loop_sign(d, ch, rest) for ch in d.channels])
+    card, nominal = _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}",
+                              policy=policy)
+    return ModelSample(card, nominal, status, rest, gains, ratios)
+
+
+def _loop_sign(d: _Draft, ch: dict, rest: np.ndarray) -> float:
+    """+1 if the channel excites its target at rest, -1 if it inhibits it: a channel into u^v
+    acts through gamma_v g_v(x*) (the transfers increase); one at the derivative directly."""
+    if not ch["into_input"]:
+        return 1.0
+    v = ch["into_input"][0]
+    return float(np.sign(d.nonlinear[v]["gain"] * gate(d.nonlinear[v]["gate"], rest, v)))
 
 
 def _check_policy(policy: str) -> None:
@@ -316,13 +370,14 @@ def _one_channel(rng: np.random.Generator, d: _Draft, c: int) -> dict:
             "into_derivative": [] if into_input else [target]}
 
 
-def _ensure_inputs(d: _Draft) -> None:
+def _ensure_inputs(d: _Draft, always: bool = False) -> None:
     """A nonlinear term whose u^v has no weight, drive or channel would be the constant
-    Phi(0), which for the identity transfer erases the term: give it the self weight."""
+    Phi(0), which for the identity transfer erases the term: give it the self weight.
+    always (anchored prior): also when a channel feeds u^v, so that u^v can be placed."""
     for v, term in enumerate(d.nonlinear):
         if term is None:
             continue
-        has_channel = any(v in ch["into_input"] for ch in d.channels)
+        has_channel = not always and any(v in ch["into_input"] for ch in d.channels)
         if all(w is None for w in term["weights"]) and term["drive"] is None and not has_channel:
             term["weights"][v] = 1.0
 
@@ -355,6 +410,7 @@ def _set_gains(rng: np.random.Generator, d: _Draft) -> None:
             inputs += [abs(t["drive"])] if t["drive"] is not None else []
             reference = max(inputs, default=1.0)
         ratio = 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10)
+        ch["ratio"] = float(ratio)
         ch["gain"] = float(ratio * reference / SC_ROW_SUM)
 
 
@@ -413,7 +469,8 @@ def _distinguishable(d: _Draft, a: int, b: int) -> bool:
 
 
 def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | None],
-              name: str, policy: str) -> ModelCard:
+              name: str, policy: str) -> tuple[ModelCard, np.ndarray]:
+    """The card of the draft, and the nominal value (P,) of each regional parameter's slot."""
     actual = policy == "sinh"      # free slots hold actual values, not multipliers
     V = d.V
     candidates = [("L", v, u) for v in range(V) for u in range(V) if not np.isnan(d.L[v, u])]
@@ -452,7 +509,15 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
               for k, v, u in sorted(free, key=str)]
     params += [Parameter("sigma", "regional")] if noisy else []
     params += [Parameter(f"G_{ch['name']}", "global") for ch in d.channels]
-    return ModelCard(
+    values = {}
+    for kind, v, u in free:
+        value = {"L": lambda: d.L[v, u], "beta": lambda: d.bias[v],
+                 "w": lambda: d.nonlinear[v]["weights"][u],
+                 "I": lambda: d.nonlinear[v]["drive"]}[kind]()
+        values[f"{kind}_{v}" + ("" if u is None else f"_{u}")] = (
+            abs(float(value)) if kind == "L" and u == v else float(value))
+    nominal = np.array([values.get(p.name, np.nan) for p in params if p.scope == "regional"])
+    card = ModelCard(
         name=name, states=tuple(f"x{v}" for v in range(V)),
         linear=tuple(tuple(coef(None if np.isnan(d.L[v, u]) else float(d.L[v, u]),
                                 ("L", v, u)) for u in range(V)) for v in range(V)),
@@ -470,27 +535,34 @@ def _assemble(rng: np.random.Generator, d: _Draft, observable: tuple[int, int | 
                               "balloon_windkessel" if rng.random() < P_BALLOON_WINDKESSEL
                               else "direct"),
         parameters=tuple(params))
+    return card, nominal
 
 
 def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
                     n_regions: int, policy: str = "multiplier", rate_floor: float = 0.0,
                     gain_prior: str = "absolute", ratio: np.ndarray | None = None,
-                    term_prior: str = "flat") -> tuple[np.ndarray, np.ndarray]:
+                    term_prior: str = "flat", nominal: np.ndarray | None = None,
+                    ) -> tuple[np.ndarray, np.ndarray]:
     """returns: theta (n_draws, N, P), psi (n_draws, K). multiplier: 10^U(-1, 1) each.
     sinh: theta the regions' coefficients, psi the gains (module docstring).
 
     rate_floor, gain_prior, term_prior: the sinh policy's options. ratio (K,): relative or
     loop gains only, the coupling ratios to use (a model's own, sim/corpus.py) instead of the
-    ones drawn here. The random numbers consumed do not depend on any of the four.
+    ones drawn here. nominal (P,): draw the levels around these (draw_level_spread). The
+    random numbers consumed do not depend on any of the five. Anchored gains are the model's
+    (`sample_model`), not drawn here: the caller draws with "absolute" and replaces psi.
     """
     _check_prior(policy, rate_floor, gain_prior, term_prior)
+    if gain_prior == "anchored":
+        raise ValueError("anchored gains are the model's own (sample_model): draw with "
+                         "gain_prior absolute and replace psi")
     if ratio is not None and gain_prior == "absolute":
         raise ValueError("a ratio is given for relative or loop gains only")
     if policy == "multiplier":
         P = len(card.regional_params)
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
         return theta, draw_gains(card, rng, n_draws, policy)
-    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor, term_prior)
+    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor, term_prior, nominal)
     theta = regional_values(card, z, kappa, rng, n_regions)
     if gain_prior == "absolute":
         return theta, draw_gains(card, rng, n_draws, policy)
@@ -500,11 +572,13 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
 
 def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int,
                       rate_floor: float = 0.0, term_prior: str = "flat",
-                      ) -> tuple[np.ndarray, np.ndarray]:
+                      nominal: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """sinh policy: z (n_draws, P) the regional parameters' levels, mu_p = S sinh(z_p) (only
     |z_p| matters for a fixed sign), and kappa (n_draws, P) their spreads (module docstring).
     rate_floor > 0: a free L diagonal's level is z ~ U(z0, Z), S sinh(z0) = rate_floor.
-    term_prior "scaled": a regional w or I has |mu_p| in its range, with the draw's sign."""
+    term_prior "scaled": a regional w or I has |mu_p| in its range, with the draw's sign.
+    nominal (P,; `ModelSample.nominal`): mu_p = nominal_p 10^U(-0.5, 0.5) where nominal_p is
+    finite (the nominal sign; a rate not below the floor); the others as without it."""
     _check_prior("sinh", rate_floor, term_prior=term_prior)
     P = len(card.regional_params)
     z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
@@ -517,6 +591,16 @@ def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int,
             lo, hi = (float(np.arcsinh(10.0 ** b / SINH_SCALE)) for b in log10_range)
             z = np.where(term_params(card, kind),
                          np.sign(z) * (lo + np.abs(z) / SINH_Z * (hi - lo)), z)
+    if nominal is not None:
+        nominal = np.asarray(nominal, dtype=np.float64)
+        if nominal.shape != (P,):
+            raise ValueError(f"nominal must have shape ({P},), found {nominal.shape}")
+        lo, hi = LEVEL_WINDOW_LOG10
+        with np.errstate(invalid="ignore"):
+            level = np.abs(nominal) * 10.0 ** (lo + (hi - lo) * np.abs(z) / SINH_Z)
+            level = np.where(rate_params(card), np.maximum(level, rate_floor), level)
+            z = np.where(np.isfinite(nominal),
+                         np.where(nominal < 0, -1.0, 1.0) * np.arcsinh(level / SINH_SCALE), z)
     return z, kappa
 
 

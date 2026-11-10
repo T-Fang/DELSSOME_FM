@@ -26,7 +26,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
                         parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
-                        gain_prior="absolute", term_prior="flat",
+                        gain_prior="absolute", term_prior="flat", level_prior="flat",
                         output_dir=tmp_path)
 
 
@@ -288,3 +288,41 @@ def test_loop_gains_and_scaled_terms_reach_the_corpus_draws(tmp_path):
                              for j in range(4)]))
         checked += 1
     assert checked > 10
+
+
+def test_the_anchored_prior_reaches_the_corpus_draws(tmp_path):
+    from dataclasses import replace
+    from delssome_fm.sim.corpus import base_level_spread, model_gains, model_sample
+    from delssome_fm.spec.sampler import LEVEL_WINDOW_LOG10, SINH_SCALE
+    flat = replace(_cfg(tmp_path), parameter_policy="sinh", gain_scope="model", rate_floor=0.1,
+                   gain_prior="anchored", term_prior="anchored")
+    nominal = replace(flat, level_prior="nominal")
+    checked = 0
+    for index in range(40):
+        sample = model_sample(flat, "train", index)
+        card = sample.card
+        assert card == card_for(nominal, "train", index)
+        a = draws(flat, card, "train", index, _DRAW, 0, 4)
+        b = draws(nominal, card, "train", index, _DRAW, 0, 4)
+        np.testing.assert_array_equal(a[1], np.broadcast_to(sample.gains, a[1].shape))
+        np.testing.assert_array_equal(a[1], b[1])                        # the model's gains
+        np.testing.assert_array_equal(model_gains(flat, card, "train", index), sample.gains)
+        if sample.rest is not None and (sample.rest != 0).all():         # starts at rest
+            assert (np.abs(a[2] / sample.rest - 1) <= 0.1 + 1e-9).all()
+            np.testing.assert_array_equal(a[2], b[2])
+        for j in range(4):                                               # levels near nominal
+            z = base_level_spread(nominal, card, "train", index, j)[0]
+            for k, p in enumerate(card.regional_params):
+                if p != "sigma":
+                    r = np.log10(SINH_SCALE * np.sinh(z[k]) / sample.nominal[k])
+                    assert r <= LEVEL_WINDOW_LOG10[1] + 1e-6
+                    checked += 1
+    assert checked > 100
+    with pytest.raises(ValueError, match="anchored prior needs"):
+        card_for(replace(flat, gain_prior="loop"), "train", 0)
+    with pytest.raises(ValueError, match="anchored prior needs"):
+        card_for(replace(flat, gain_scope="draw"), "train", 0)
+    with pytest.raises(ValueError, match="level_prior must be one of"):
+        card_for(replace(flat, level_prior="window"), "train", 0)
+    with pytest.raises(ValueError, match="not the model's card"):
+        draws(flat, card_for(flat, "train", 1), "train", 0, _DRAW, 0, 1)

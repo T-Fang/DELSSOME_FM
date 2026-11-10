@@ -22,4 +22,5 @@ gain_scope: model             # the coupling ratio is drawn once per model
 rate_floor: 0.1               # 1/s: time constants <= 10 s, 14 of them in the 144-s burn-in
 gain_prior: loop              # derivative: ratio x |L_vv|; input: ratio x |L_vv| / |gamma_v|, log10 ratio ~ U(-1, 2)
 term_prior: flat              # gamma, w, I from the flat prior
+level_prior: flat             # a draw's regional levels over the full range (sinh-policy option)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_loop_gain_pilot

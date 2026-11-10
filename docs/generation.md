@@ -648,3 +648,65 @@ Approved by the project lead as two arms, both with the 0.1 s⁻¹ floor and the
 
 **Status.** The floor with the loop gain (arm A) is the best prior tested: no coupling without coupling, coupling at every rate, and 57 times more coupled draws through the input in fast models than the baseline. Coupling through the input stays rare (3.9%). It needs the sign, the gate and the transfer to line up at the state the model settles in, which no prior on independent coefficients gives. A rule that fixes the operating point first (draw the resting state and the transfer's input, solve $\beta$ and $I$ for them, as FIC's feedback inhibition does for one parameter) is proposed, not decided.
 
+---
+
+## 14. The anchored prior (proposed 2026-11-11; implemented as an option, cluster pilot not run)
+
+§13 ended with coupling through the transfer input depending on where a model rests, which no prior on independent coefficients controls. The anchored prior draws the resting point first and solves the coefficients that put the model there (`spec/anchor.py`; `term_prior: anchored`, `gain_prior: anchored`). It is off in every existing corpus config. The project lead approved going ahead with the proposal; the rule below is for sign-off before a cluster pilot.
+
+### The rule
+
+The resting point is that of one region whose neighbours rest at the same state, with the mean connectome row sum (0.36), at the model's nominal values and without noise.
+
+| step | rule |
+|---|---|
+| resting state | $x^*_v = \pm 10^{\mathcal{U}(-2, 1)}$; $\mathcal{U}(0.05, 0.95)$ under the gate $1 - x^v$ |
+| transfer input | $u^*_v$: logistic $\mathcal{U}(-3, 3)$, Wong–Wang $\mathcal{U}(-3, 5)$, identity $\pm 10^{\mathcal{U}(-1, 1)}$ |
+| weights | $w_{vu} = c_{vu} / x^{*u}$, with $c_{vu}$ the weight's contribution to $u^*_v$, $\lvert c\rvert = 10^{\mathcal{U}(-2, 1)}$ |
+| $\gamma_v$ | solved from the balance $0 = -\sum_u L_{vu} x^{*u} + \beta_v + \gamma_v g_v \Phi_v + D_v$ |
+| $I_v$ | solved from $u^*_v = \sum_u w_{vu} x^{*u} + I_v + U_v$; without a drive the weights are rescaled together |
+| a variable with no term | its $\beta_v$ is solved; without a bias its $x^*_v$ is solved from its linear equation |
+| gains | $G = \text{ratio} \cdot r_v / (0.36 \cdot \text{through} \cdot f_c'(p^*))$, with through = 1 at the derivative and $\lvert\gamma_v g_v \Phi_v'\rvert$ into $u^v$ |
+| stability | the resting point must be stable for a region whose neighbours are clamped at $x^*$, with every rate below 1,000 s⁻¹; otherwise a new $x^*$, $u^*$ is drawn (up to 200 times) |
+
+- **$r_v$ is the rate at which $x^v$ returns to rest**, $\lvert L_{vv} - \gamma_v(\partial g_v/\partial x^v\,\Phi_v + g_v \Phi_v' w_{vv})\rvert$: the leak with the term's own feedback. The ratio is then the effective loop of §13 with this rate in the denominator, for both injection sites.
+- **The ratio** is the one the card stream already draws, $\log_{10} \sim \mathcal{U}(-2, 1)$. A direct channel's is mapped to $\mathcal{U}(-2, 0)$: at a ratio of 1 the resting network loses stability.
+- **$D_v$, $U_v$** are the resting inputs of direct channels (a diffusive channel gives none at rest).
+- **Unchanged:** the equations, $L$, $\beta$ of a variable with a term, gate weights, noise, signs, the free-slot assignment.
+
+### What it changes besides values
+
+- **A transfer input fed only by a channel also gets the self weight** (it could not be placed otherwise). The free slots are then chosen among one more candidate: 1,877 of train candidates 0–1,999 keep the first pilot's parameter list.
+- **A model's gains are constants again** (the 2026-11-04 definition), solved with its resting point.
+- **A simulation starts at the resting state**, $x_0 = x^*(1 + \mathcal{U}(-0.1, 0.1))$, not around zero.
+- **Optional, `level_prior: nominal`:** a draw's level of a regional parameter is its slot's nominal value times $10^{\mathcal{U}(-0.5, 0.5)}$, with the nominal sign, instead of the full range ($\sigma$ keeps the full range). The resting point is a property of the nominal values, so it holds only for draws that stay near them.
+
+Of 2,000 candidates, 1,242 are anchored at a stable point, 719 are solved without one (mostly a drawn rate above 1,000 s⁻¹, which no resting point changes) and 39 cannot be solved (they keep their drawn coefficients and the loop gain of §13).
+
+### Local checks (this node, no cluster jobs; scratch scripts)
+
+**The construction holds.** The compiled card's drift vanishes at $x^*$ for every anchored model tested (`tests/test_anchor.py`), and at nominal values 74% of usable simulations of one-variable models observed directly rest within 20% of $x^*$.
+
+**The first version did not work, and why.** It sized gains against $\lvert L_{vv}\rvert$ and gave direct channels ratios up to 10. Of 80 models with an input channel and a ratio of at least 1, 80% of simulations diverged at nominal values, and among the usable ones no model with the gate $1 - x$ was coupled. The term's own feedback is often several times the leak, and a direct loop of 1 or more is unstable. Hence $r_v$, the direct range, and the rate limit.
+
+**The revised rule**, 80 models with an input channel, a stable resting point and a positive loop (diffusive: ratio ≥ 1; direct: 0.3–1), 4 simulations per condition:
+
+| condition | diverged | coupled share of usable | rests within 20% of $x^*$ |
+|---|---|---|---|
+| nominal values, no regional spread, small noise | 46% | 36% | 74% |
+| regional spread $\kappa \le 0.3$ | 50% | 48% | 70% |
+| regional spread $\kappa \le 1$ | 58% | 59% | 66% |
+| levels ×$10^{\pm 0.15}$ | 43% | 26% | 58% |
+| levels ×$10^{\pm 0.5}$ | 45% | 22% | 30% |
+| $\sigma$ from the full prior | 61% | 26% | 51% |
+| levels ×$10^{\pm 0.5}$, $\kappa \le 1$, $\sigma$ from the prior | 72% | 40% | 21% |
+
+- **By channel at nominal values:** diffusive 49% of usable coupled, direct 18%. With the gate $1 - x$ (MFM's): 62%, and 88% with regional spread up to 1. One-variable models 47%, several variables 24%.
+- **Regional spread does not hurt; moving the levels does.** The resting point survives 100% regional spread and is lost in most draws once levels move by half a decade.
+- **Coupling is weak:** the median mean FC of coupled simulations is 0.09–0.12.
+- **For scale:** under the loop gain of §13 the best subgroup of input channels was coupled in 31% of usable draws, and all input channels in 3.9%. The models above are the ones designed to couple: 13% of direct and 23% of diffusive input-channel models. The rest have a ratio below that or a negative loop and are meant to be uncoupled.
+
+### Proposed pilot (not submitted)
+
+Two arms on train candidates 0–1,999, 100 draws, as the earlier pilots: `corpus_anchored_pilot.yaml` (levels over the full range, the 2026-10-23 rule) and `corpus_anchored_nominal_pilot.yaml` (levels around nominal). About 70 CPU-h together.
+
