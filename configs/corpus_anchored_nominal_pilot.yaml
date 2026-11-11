@@ -24,4 +24,6 @@ rate_floor: 0.1               # 1/s: time constants <= 10 s, 14 of them in the 1
 gain_prior: anchored          # solved with the resting point: the coupling ratio is the effective loop there
 term_prior: anchored          # resting point drawn first; gamma, w, I solved (spec/anchor.py)
 level_prior: nominal          # a draw's regional levels around the model's nominal values
+noise_prior: flat             # sigma's level over the full range (rest: relative to the resting state)
+observable_rest: free         # no condition on the resting observable (bold: inside Balloon-Windkessel's range)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_anchored_nominal_pilot

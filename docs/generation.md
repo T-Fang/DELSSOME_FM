@@ -748,3 +748,35 @@ Two arms on train candidates 0–1,999, 100 draws, as the earlier pilots: `corpu
 - **Coupling stays weak** where levels are held near nominal (median mean FC 0.14; 16% of usable draws above 0.2 even at a ratio of 3 or more).
 
 **Status.** The anchored prior with levels around nominal is the best prior tested for coupling through the transfer input: 11.9% of usable draws (first pilot 1.0%, loop gain 3.9%), 18% in fast models (0.5%, 5.3%), and the share is set by a design variable, the ratio. Not decided: which arm to adopt, whether to draw the noise relative to the resting state, and whether to restrict the resting observable under Balloon–Windkessel.
+
+### Two further options (2026-11-11; implemented, local check only)
+
+The project lead agreed to implement the answers to the first two problems as options. Both exist under the anchored prior only and are off in every existing config.
+
+| option | rule |
+|---|---|
+| `noise_prior: rest` | A draw's $\sigma$ level is $\sigma_0 \cdot 10^{\mathcal{U}(-3, 0)}$, with $\sigma_0 = \min_v \lvert x^*_v\rvert\sqrt{2 r_v}$ over the noisy variables: the level at which the stationary SD of the most sensitive variable equals its resting magnitude. The noise SD is then 0.1% to 100% of the resting state in every draw. Regional spread as before. A model without a resting state or with $\sigma_0 = 0$ keeps the full range (83 of 2,000 candidates). |
+| `observable_rest: bold` | Under Balloon–Windkessel the resting observable must leave the resting flow $1 + o^*/0.41$ at 0.5 or more ($o^* \ge -0.205$); otherwise a new resting point is drawn, as after an unstable one. Models observed directly are untouched. |
+
+**Choices.**
+- **The range of the noise fraction.** Below 0.1% the third pilot's draws were flat in 27% of cases; above 100% most diverged. The fraction is drawn per draw, so each model is simulated over three decades of noise.
+- **$r_v$ is the single-variable rate of the ratio's definition**, not the full linearisation: noise that reaches a variable through another one is not counted.
+- **A margin of one half on the flow**, so that fluctuations of the size of the resting observable do not reach a negative flow at once. No upper limit: the third pilot showed little effect of a large resting observable on the screen (35–47% pass at $o^* > 0.1$), although the resting flow then leaves the range the hemodynamic model was made for (median 1.5, 90th percentile 9.9 among anchored Balloon–Windkessel models).
+
+**Effect on the candidates (no simulation).** Of the 155 anchored Balloon–Windkessel models with a resting flow below 0.5, 138 get another stable resting point and 17 find none in 200 attempts (status unstable). 153 cards change; no directly observed model does.
+
+**Local simulation, candidates 0–199** (levels around nominal; the same candidates of the third pilot in the first column):
+
+| | third pilot | with both options |
+|---|---|---|
+| valid models | 56 (28.0%) | 66 (33.0%) |
+| draws diverged | 48.4% | 32.3% |
+| the same, Balloon–Windkessel / direct | 60% / 39% | 35% / 30% |
+| usable draws per valid model | 46.6 | 64.1 |
+| coupled share of usable draws | 14.4% | 16.4% |
+| coupled draws | 377 | 695 |
+| input channels (one-channel models): coupled share of usable | 11.2% | 12.8% |
+| median mean FC of coupled draws | 0.13 | 0.12 |
+
+Divergence falls by a third and the number of coupled draws nearly doubles; the strength of coupling does not change. A cluster pilot on the 2,000 candidates (`corpus_anchored_noise_pilot.yaml`) is proposed, not submitted.
+

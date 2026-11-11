@@ -34,7 +34,10 @@ anchored` and `gain_scope: model`: the gains are the model's, solved with its re
 (`model_gains`). A simulation then starts at the resting state, x0 = x* (1 + U(-s, s)), s =
 initial_state_scale, instead of U(-s, s) around zero (the same random numbers). `level_prior:
 nominal` draws each regional parameter's level around its slot's nominal value
-(sampler.draw_level_spread) instead of over the full range.
+(sampler.draw_level_spread) instead of over the full range. `noise_prior: rest` draws sigma's
+level relative to the model's resting state (`ModelSample.noise_level`; a model without one
+keeps the full range), and `observable_rest: bold` keeps the resting observable in
+Balloon-Windkessel's range (sampler.sample_model). Both exist under the anchored prior only.
 
 Every candidate gets one log row (`CandidateLog`): the acceptance rate and mean
 off-diagonal FC per model that brief §8 asks to log, and its validity.
@@ -100,6 +103,7 @@ CMA_TAG = 5
 CMA_SELECT_TAG = 6
 GAIN_SCOPES = ("draw", "model")
 LEVEL_PRIORS = ("flat", "nominal")
+NOISE_PRIORS = ("flat", "rest")
 
 
 @dataclass(frozen=True)
@@ -151,8 +155,13 @@ def model_sample(cfg: CorpusConfig, split: str, index: int) -> ModelSample:
         raise ValueError("the anchored prior needs term_prior anchored, gain_prior anchored and "
                          f"gain_scope model together, found {cfg.term_prior!r}, "
                          f"{cfg.gain_prior!r}, {cfg.gain_scope!r}")
+    if cfg.noise_prior not in NOISE_PRIORS:
+        raise ValueError(f"noise_prior must be one of {NOISE_PRIORS}, found {cfg.noise_prior!r}")
+    if cfg.noise_prior == "rest" and not anchored[0]:
+        raise ValueError(f"noise_prior rest needs the anchored prior, found term_prior "
+                         f"{cfg.term_prior!r}")
     return sample_model(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy,
-                        cfg.rate_floor, cfg.term_prior)
+                        cfg.rate_floor, cfg.term_prior, cfg.observable_rest)
 
 
 def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:
@@ -188,13 +197,14 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
         raise ValueError(f"gain_scope must be one of {GAIN_SCOPES}, found {cfg.gain_scope!r}")
     # the model's own sample is needed (and the card must be its card) only where the prior
     # uses more than the card: its resting state, gains or nominal levels
-    nominal = rest = None
+    nominal = rest = sigma = None
     if cfg.term_prior == "anchored" or cfg.level_prior != "flat":
         sample = model_sample(cfg, split, index)
         if sample.card != card:
             raise ValueError(f"{split} {index}: the card given is not the model's card")
         nominal = sample.nominal if cfg.level_prior == "nominal" else None
         rest = sample.rest
+        sigma = sample.noise_level if cfg.noise_prior == "rest" else None
     relative = cfg.gain_prior in ("relative", "loop")
     gains = ratio = None
     if cfg.gain_scope == "model":
@@ -209,7 +219,7 @@ def draws(cfg: CorpusConfig, card: ModelCard, split: str, index: int, tag: int, 
         theta, psi = draw_parameters(card, rng, 1, N_REGIONS, cfg.parameter_policy,
                                      cfg.rate_floor,
                                      "absolute" if cfg.gain_prior == "anchored" else cfg.gain_prior,
-                                     ratio, cfg.term_prior, nominal)
+                                     ratio, cfg.term_prior, nominal, sigma)
         thetas.append(theta[0])
         psis.append(psi[0] if gains is None else gains)
         x0 = rng.uniform(-cfg.initial_state_scale, cfg.initial_state_scale,
@@ -228,9 +238,12 @@ def base_level_spread(cfg: CorpusConfig, card: ModelCard, split: str, index: int
         raise ValueError(f"levels and spreads exist under the sinh policy only, found "
                          f"{cfg.parameter_policy!r}")
     rng = np.random.default_rng(_key(cfg, split, index, _DRAW, j))
-    nominal = (model_sample(cfg, split, index).nominal if cfg.level_prior == "nominal"
-               else None)
-    z, kappa = draw_level_spread(card, rng, 1, cfg.rate_floor, cfg.term_prior, nominal)
+    nominal = sigma = None
+    if cfg.level_prior == "nominal" or cfg.noise_prior == "rest":
+        sample = model_sample(cfg, split, index)
+        nominal = sample.nominal if cfg.level_prior == "nominal" else None
+        sigma = sample.noise_level if cfg.noise_prior == "rest" else None
+    z, kappa = draw_level_spread(card, rng, 1, cfg.rate_floor, cfg.term_prior, nominal, sigma)
     return z[0], kappa[0], regional_values(card, z, kappa, rng, N_REGIONS)[0]
 
 

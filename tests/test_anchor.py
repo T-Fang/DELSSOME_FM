@@ -187,3 +187,87 @@ def test_nominal_levels_stay_in_their_window():
     with pytest.raises(ValueError, match="nominal must have shape"):
         draw_level_spread(MODELS[0].card, np.random.default_rng(0), 2, FLOOR, "anchored",
                           np.ones(9))
+
+
+def test_bold_rest_keeps_the_resting_flow_positive():
+    """observable_rest bold: a Balloon-Windkessel model anchored at a stable point has a
+    resting flow of at least BW_MIN_REST_FLOW; a model observed directly, or one whose free
+    resting point already satisfied it, is the same model as without the option."""
+    from delssome_fm.sim.observe import GAMMA
+    from delssome_fm.spec.sampler import BW_ELIMINATION, BW_MIN_REST_FLOW
+    assert BW_ELIMINATION == GAMMA
+
+    def flow(m):
+        o = m.card.observable
+        return 1.0 + (m.rest[o.plus] - (0.0 if o.minus is None else m.rest[o.minus])) / GAMMA
+
+    changed = bw = 0
+    for i, free in enumerate(MODELS[:150]):
+        bold = sample_model(123, 0, i, "sinh", FLOOR, "anchored", "bold")
+        assert bold.card.observable == free.card.observable
+        assert bold.card.parameters == free.card.parameters
+        direct = free.card.observable.observation == "direct"
+        if direct or (free.anchor == "stable" and flow(free) >= BW_MIN_REST_FLOW):
+            assert bold.card == free.card and bold.anchor == free.anchor
+            np.testing.assert_array_equal(bold.rest, free.rest)
+            continue
+        changed += 1
+        if bold.anchor == "stable":
+            bw += 1
+            assert flow(bold) >= BW_MIN_REST_FLOW
+    assert changed > 10 and bw > 5
+    with pytest.raises(ValueError, match="needs term_prior anchored"):
+        sample_model(123, 0, 0, "sinh", FLOOR, "flat", "bold")
+    with pytest.raises(ValueError, match="observable_rest must be one of"):
+        sample_model(123, 0, 0, "sinh", FLOOR, "anchored", "range")
+
+
+def test_noise_level_puts_sigma_relative_to_the_resting_state():
+    """ModelSample.noise_level is min over noisy variables of |x*_v| sqrt(2 r_v), and a
+    draw's sigma level is that times 10^U(-3, 0), from the same uniform number; every other
+    level and every spread is unchanged."""
+    from delssome_fm.spec.sampler import NOISE_LOG10
+    seen = 0
+    for m in MODELS[:120]:
+        card = m.card
+        if m.rest is None:
+            assert m.noise_level is None
+            continue
+        if "sigma" not in card.regional_params or m.noise_level is None:
+            continue
+        assert np.isfinite(m.noise_level) and m.noise_level > 0
+        # one variable: r_v by hand from the card (a regional slot at its nominal value)
+        t = card.nonlinear[0]
+        if (card.n_states == 1 and t is not None and card.noise[0] is not None
+                and not any(ch.into_input and not ch.diffusive for ch in card.channels)):
+            def val(c):
+                if c is None:
+                    return 0.0
+                return c.value if c.param is None else (
+                    c.scale * m.nominal[card.regional_params.index(c.param)])
+            x, w = m.rest[0], val(t.weights[0])
+            phi, slope = transfer(t.transfer, w * x + val(t.drive))
+            g, dg = {"one": (1.0, 0.0), "one_minus_self": (1.0 - x, -1.0), "state": (x, 1.0),
+                     "quadratic": (None, None)}[t.gate.kind]
+            if t.gate.kind == "quadratic":
+                g, dg = t.gate.weights[0] * x ** 2, 2.0 * t.gate.weights[0] * x
+            rate = abs(val(card.linear[0][0]) - t.gain * (dg * phi + g * slope * w))
+            np.testing.assert_allclose(m.noise_level, abs(x) * np.sqrt(2 * rate), rtol=1e-6)
+            seen += 1
+        z, kappa = draw_level_spread(card, np.random.default_rng(0), 300, FLOOR, "anchored",
+                                     None, m.noise_level)
+        z_flat, kappa_flat = draw_level_spread(card, np.random.default_rng(0), 300, FLOOR,
+                                               "anchored")
+        np.testing.assert_array_equal(kappa, kappa_flat)
+        j = card.regional_params.index("sigma")
+        others = [k for k in range(len(card.regional_params)) if k != j]
+        np.testing.assert_array_equal(z[:, others], z_flat[:, others])
+        rel = np.log10(SINH_SCALE * np.sinh(z[:, j]) / m.noise_level)
+        assert NOISE_LOG10[0] - 1e-6 <= rel.min() and rel.max() <= NOISE_LOG10[1] + 1e-6
+        assert rel.max() - rel.min() > 2.5
+        # the same uniform number: the order of the draws' noise levels is the flat prior's
+        np.testing.assert_array_equal(np.argsort(rel), np.argsort(np.abs(z_flat[:, j])))
+    assert seen >= 3
+    with pytest.raises(ValueError, match="noise_level must be positive"):
+        draw_level_spread(MODELS[0].card, np.random.default_rng(0), 2, FLOOR, "anchored",
+                          None, 0.0)

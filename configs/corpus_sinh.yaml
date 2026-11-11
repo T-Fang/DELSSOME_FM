@@ -25,4 +25,6 @@ rate_floor: 0.0               # 1/s; no floor on L diagonals (sinh-policy option
 gain_prior: absolute          # gains not relative to the competing term (sinh-policy option)
 term_prior: flat              # nonlinear terms: gamma, w, I from the flat prior (sinh-policy option)
 level_prior: flat             # a draw's regional levels over the full range (sinh-policy option)
+noise_prior: flat             # sigma's level over the full range (rest: relative to the resting state)
+observable_rest: free         # no condition on the resting observable (bold: inside Balloon-Windkessel's range)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_sinh

@@ -84,6 +84,10 @@ class CorpusConfig:
                                   # (sampler.py, anchor.py)
     level_prior: str              # sinh policy, a draw's regional levels: "flat" (the full
                                   # range) or "nominal" (around the model's nominal values)
+    noise_prior: str              # anchored only, a draw's sigma level: "flat" (the full range)
+                                  # or "rest" (relative to the model's resting state)
+    observable_rest: str          # anchored only: "free", or "bold" (the resting observable
+                                  # stays in Balloon-Windkessel's range; sampler.py)
     output_dir: Path
 
 

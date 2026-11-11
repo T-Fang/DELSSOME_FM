@@ -26,7 +26,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
                         parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
-                        gain_prior="absolute", term_prior="flat", level_prior="flat",
+                        gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free",
                         output_dir=tmp_path)
 
 
@@ -326,3 +326,40 @@ def test_the_anchored_prior_reaches_the_corpus_draws(tmp_path):
         card_for(replace(flat, level_prior="window"), "train", 0)
     with pytest.raises(ValueError, match="not the model's card"):
         draws(flat, card_for(flat, "train", 1), "train", 0, _DRAW, 0, 1)
+
+
+def test_rest_noise_and_bold_rest_need_the_anchored_prior(tmp_path):
+    """noise_prior rest: a draw's sigma follows the model's resting state and nothing else of
+    the draw changes; both options raise without the anchored prior."""
+    from dataclasses import replace
+    from delssome_fm.sim.corpus import _DRAW, base_level_spread, draws, model_sample
+    flat = replace(_cfg(tmp_path), parameter_policy="sinh", gain_scope="model",
+                   rate_floor=0.1, gain_prior="anchored", term_prior="anchored",
+                   level_prior="nominal")
+    rest = replace(flat, noise_prior="rest")
+    seen = 0
+    for index in range(40):
+        m = model_sample(rest, "train", index)
+        assert m.card == model_sample(flat, "train", index).card
+        if m.noise_level is None or "sigma" not in m.card.regional_params:
+            continue
+        j = m.card.regional_params.index("sigma")
+        a = draws(flat, m.card, "train", index, _DRAW, 0, 6)
+        b = draws(rest, m.card, "train", index, _DRAW, 0, 6)
+        others = [k for k in range(a[0].shape[-1]) if k != j]
+        np.testing.assert_array_equal(a[0][..., others], b[0][..., others])
+        np.testing.assert_array_equal(a[1], b[1])
+        np.testing.assert_array_equal(a[2], b[2])
+        level = np.stack([np.sinh(base_level_spread(rest, m.card, "train", index, k)[0][j])
+                          for k in range(6)]) * 1e-4
+        assert (level <= m.noise_level * (1 + 1e-9)).all()
+        assert (level >= m.noise_level * 1e-3 * (1 - 1e-9)).all()
+        seen += 1
+    assert seen > 10
+    with pytest.raises(ValueError, match="noise_prior rest needs the anchored prior"):
+        model_sample(replace(_cfg(tmp_path), noise_prior="rest"), "train", 0)
+    with pytest.raises(ValueError, match="noise_prior must be one of"):
+        model_sample(replace(flat, noise_prior="state"), "train", 0)
+    with pytest.raises(ValueError, match="needs term_prior anchored"):
+        model_sample(replace(_cfg(tmp_path), parameter_policy="sinh",
+                             observable_rest="bold"), "train", 0)

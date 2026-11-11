@@ -102,6 +102,17 @@ behaviour above, so existing corpora are reproduced unchanged:
                               nominal sign, instead of the full range (sigma keeps the full
                               range; a rate stays above the floor).
 
+    observable_rest "bold"    anchored only (fourth pilot): under Balloon-Windkessel the
+                              resting observable o* must leave the resting flow
+                              1 + o* / BW_ELIMINATION at BW_MIN_REST_FLOW or more; otherwise
+                              a new resting point is drawn (anchor.py `accept`). The flow is
+                              negative for o* < -0.41, where the hemodynamic state is
+                              undefined and the simulation diverges.
+    noise level               `draw_level_spread(noise_level=...)`: sigma's level is
+                              `ModelSample.noise_level` times 10^U(-3, 0) (NOISE_LOG10), so
+                              the noise's stationary SD is 0.1% to 100% of the resting state,
+                              instead of the full range.
+
 Changing the floor changes L, hence R1's rejections, hence the random numbers later slots
 see: card i can differ in structure from card i without the floor. gain_prior and the term
 priors "flat" and "scaled" do not change the structure; "anchored" does where it adds a self
@@ -113,11 +124,13 @@ This module does not simulate or screen (sim/corpus.py does).
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from delssome_fm.spec.anchor import CONTRIBUTION_LOG10, anchor_draft, channel_ratio, gate
+from delssome_fm.spec.anchor import (CONTRIBUTION_LOG10, anchor_draft, channel_ratio, gate,
+                                      noise_level)
 from delssome_fm.spec.card import (GATES, TRANSFERS, Channel, Coef, Gate, ModelCard, Nonlinear,
                                    Observable, Parameter)
 
@@ -145,6 +158,10 @@ POLICIES = ("multiplier", "sinh")
 GAIN_PRIORS = ("absolute", "relative", "loop", "anchored")
 TERM_PRIORS = ("flat", "scaled", "anchored")
 LEVEL_WINDOW_LOG10 = (-0.5, 0.5)  # nominal levels: a draw's level / the slot's nominal value
+OBSERVABLE_RESTS = ("free", "bold")
+BW_ELIMINATION = 0.41            # 1/s, sim/observe.py GAMMA: resting flow = 1 + o* / 0.41
+BW_MIN_REST_FLOW = 0.5           # observable_rest "bold": smallest resting flow (o* >= -0.205)
+NOISE_LOG10 = (-3.0, 0.0)        # sigma / ModelSample.noise_level, a draw's noise level
 ANCHOR_TAG = 7                   # rng stream [seed, stream, index, ANCHOR_TAG] of the resting point
 LOOP_RATIO_LOG10 = (-1.0, 2.0)   # gain_prior "loop": |gamma_v| G SC_ROW_SUM / |L_vv|, channel into u^v
 TERM_GAIN_LOG10 = (-1.0, 1.0)    # term_prior "scaled": |gamma_v| / |L_vv|
@@ -233,6 +250,9 @@ class ModelSample:
     gains: np.ndarray | None      # (K,) the model's coupling gains, when term_prior "anchored"
     ratios: np.ndarray | None     # (K,) each channel's effective loop at rest, signed (negative:
                                   # the channel inhibits its target), when anchored and solved
+    noise_level: float | None = None   # the sigma at which the noise's stationary SD equals
+                                  # the resting state (anchor.noise_level), when anchored,
+                                  # solved and defined
 
 
 def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
@@ -244,10 +264,18 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
 
 
 def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
-                 rate_floor: float = 0.0, term_prior: str = "flat") -> ModelSample:
+                 rate_floor: float = 0.0, term_prior: str = "flat",
+                 observable_rest: str = "free") -> ModelSample:
     """`sample_card` with the model's nominal levels and, under the anchored prior, its
-    resting state and gains."""
+    resting state, gains and noise level. observable_rest "bold" (anchored only): the
+    resting observable stays in Balloon-Windkessel's range (module docstring)."""
     _check_prior(policy, rate_floor, term_prior=term_prior)
+    if observable_rest not in OBSERVABLE_RESTS:
+        raise ValueError(f"observable_rest must be one of {OBSERVABLE_RESTS}, found "
+                         f"{observable_rest!r}")
+    if observable_rest != "free" and term_prior != "anchored":
+        raise ValueError(f"observable_rest {observable_rest!r} needs term_prior anchored, "
+                         f"found {term_prior!r}")
     rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
     d = _Draft(V=V, L=np.full((V, V), np.nan), policy=policy, rate_floor=rate_floor)
@@ -265,16 +293,37 @@ def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
     observable = _sample_observable(rng, d)
     if policy == "sinh":
         _ensure_observed_noise(rng, d, observable)
-    status, rest, gains, ratios = "none", None, None, None
+    status, rest, gains, ratios, sigma, accept = "none", None, None, None, None, None
+    name = f"syn_{seed}_{stream}_{index}"
     if term_prior == "anchored":
+        # the observation is drawn last, from the card stream, and depends on no value: read
+        # it from a copy of the stream; the card below draws it again
+        if observable_rest == "bold" and _assemble(
+                copy.deepcopy(rng), d, observable, name, policy
+        )[0].observable.observation == "balloon_windkessel":
+            def accept(x):
+                return _bold_accepts(x, observable)
         rest, status = anchor_draft(d, np.random.default_rng([seed, stream, index, ANCHOR_TAG]),
-                                    SC_ROW_SUM, lambda w: _in_range(w, CONTRIBUTION_LOG10))
+                                    SC_ROW_SUM, lambda w: _in_range(w, CONTRIBUTION_LOG10),
+                                    accept)
         gains = np.array([ch["gain"] for ch in d.channels])
         if rest is not None:
             ratios = np.array([channel_ratio(ch) * _loop_sign(d, ch, rest) for ch in d.channels])
-    card, nominal = _assemble(rng, d, observable, name=f"syn_{seed}_{stream}_{index}",
-                              policy=policy)
-    return ModelSample(card, nominal, status, rest, gains, ratios)
+            sigma = noise_level(d, rest, SC_ROW_SUM)
+    card, nominal = _assemble(rng, d, observable, name=name, policy=policy)
+    if (accept is not None) != (observable_rest == "bold" and term_prior == "anchored"
+                                and card.observable.observation == "balloon_windkessel"):
+        raise SamplerError(f"{name}: the observation read ahead is not the card's "
+                           f"({card.observable.observation})")
+    return ModelSample(card, nominal, status, rest, gains, ratios, sigma)
+
+
+def _bold_accepts(rest: np.ndarray, observable: tuple[int, int | None]) -> bool:
+    """True if the resting observable o* = x*^plus (- x*^minus) leaves Balloon-Windkessel's
+    resting flow 1 + o* / BW_ELIMINATION at BW_MIN_REST_FLOW or more."""
+    plus, minus = observable
+    o = rest[plus] - (0.0 if minus is None else rest[minus])
+    return bool(1.0 + o / BW_ELIMINATION >= BW_MIN_REST_FLOW)
 
 
 def _loop_sign(d: _Draft, ch: dict, rest: np.ndarray) -> float:
@@ -542,14 +591,15 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
                     n_regions: int, policy: str = "multiplier", rate_floor: float = 0.0,
                     gain_prior: str = "absolute", ratio: np.ndarray | None = None,
                     term_prior: str = "flat", nominal: np.ndarray | None = None,
-                    ) -> tuple[np.ndarray, np.ndarray]:
+                    noise_level: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """returns: theta (n_draws, N, P), psi (n_draws, K). multiplier: 10^U(-1, 1) each.
     sinh: theta the regions' coefficients, psi the gains (module docstring).
 
     rate_floor, gain_prior, term_prior: the sinh policy's options. ratio (K,): relative or
     loop gains only, the coupling ratios to use (a model's own, sim/corpus.py) instead of the
-    ones drawn here. nominal (P,): draw the levels around these (draw_level_spread). The
-    random numbers consumed do not depend on any of the five. Anchored gains are the model's
+    ones drawn here. nominal (P,): draw the levels around these; noise_level: draw sigma's
+    level relative to it (both draw_level_spread). The random numbers consumed do not depend
+    on any of the six. Anchored gains are the model's
     (`sample_model`), not drawn here: the caller draws with "absolute" and replaces psi.
     """
     _check_prior(policy, rate_floor, gain_prior, term_prior)
@@ -562,7 +612,8 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
         P = len(card.regional_params)
         theta = 10.0 ** rng.uniform(*MULTIPLIER_LOG10, size=(n_draws, n_regions, P))
         return theta, draw_gains(card, rng, n_draws, policy)
-    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor, term_prior, nominal)
+    z, kappa = draw_level_spread(card, rng, n_draws, rate_floor, term_prior, nominal,
+                                 noise_level)
     theta = regional_values(card, z, kappa, rng, n_regions)
     if gain_prior == "absolute":
         return theta, draw_gains(card, rng, n_draws, policy)
@@ -572,13 +623,16 @@ def draw_parameters(card: ModelCard, rng: np.random.Generator, n_draws: int,
 
 def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int,
                       rate_floor: float = 0.0, term_prior: str = "flat",
-                      nominal: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+                      nominal: np.ndarray | None = None, noise_level: float | None = None,
+                      ) -> tuple[np.ndarray, np.ndarray]:
     """sinh policy: z (n_draws, P) the regional parameters' levels, mu_p = S sinh(z_p) (only
     |z_p| matters for a fixed sign), and kappa (n_draws, P) their spreads (module docstring).
     rate_floor > 0: a free L diagonal's level is z ~ U(z0, Z), S sinh(z0) = rate_floor.
     term_prior "scaled": a regional w or I has |mu_p| in its range, with the draw's sign.
     nominal (P,; `ModelSample.nominal`): mu_p = nominal_p 10^U(-0.5, 0.5) where nominal_p is
-    finite (the nominal sign; a rate not below the floor); the others as without it."""
+    finite (the nominal sign; a rate not below the floor); the others as without it.
+    noise_level (`ModelSample.noise_level`): sigma's level is noise_level 10^U(-3, 0)
+    (NOISE_LOG10), from the same uniform number; without sigma it changes nothing."""
     _check_prior("sinh", rate_floor, term_prior=term_prior)
     P = len(card.regional_params)
     z = rng.uniform(-SINH_Z, SINH_Z, size=(n_draws, P))
@@ -601,6 +655,13 @@ def draw_level_spread(card: ModelCard, rng: np.random.Generator, n_draws: int,
             level = np.where(rate_params(card), np.maximum(level, rate_floor), level)
             z = np.where(np.isfinite(nominal),
                          np.where(nominal < 0, -1.0, 1.0) * np.arcsinh(level / SINH_SCALE), z)
+    if noise_level is not None:
+        if not (np.isfinite(noise_level) and noise_level > 0):
+            raise ValueError(f"noise_level must be positive and finite, found {noise_level}")
+        lo, hi = NOISE_LOG10
+        level = noise_level * 10.0 ** (lo + (hi - lo) * np.abs(z) / SINH_Z)
+        is_sigma = np.array([p == "sigma" for p in card.regional_params])
+        z = np.where(is_sigma, np.arcsinh(level / SINH_SCALE), z)
     return z, kappa
 
 

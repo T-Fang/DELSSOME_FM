@@ -281,7 +281,8 @@ def run_model(cfg: CmaesConfig, corpus_cfg: CorpusConfig, sim_cfg: SimConfig,
         raise ValueError("CMA-ES needs a corpus with gain_scope model and the sinh policy, "
                          f"found {corpus_cfg.gain_scope!r}, {corpus_cfg.parameter_policy!r}")
     if (corpus_cfg.rate_floor != 0.0 or corpus_cfg.gain_prior != "absolute"
-            or corpus_cfg.term_prior != "flat" or corpus_cfg.level_prior != "flat"):
+            or corpus_cfg.term_prior != "flat" or corpus_cfg.level_prior != "flat"
+            or corpus_cfg.noise_prior != "flat" or corpus_cfg.observable_rest != "free"):
         raise ValueError("CMA-ES is not implemented for a rate floor or relative gains or "
                          "scaled terms (its search box is the flat prior's levels and it holds "
                          f"the gains fixed), found rate_floor {corpus_cfg.rate_floor}, "

@@ -47,9 +47,20 @@ mapped to log10 ~ U(-2, 0) (`channel_ratio`): at a ratio of 1 the resting networ
 stability. Every other coefficient (L, beta of a variable with a term, gate weights, noise)
 keeps its drawn value.
 
-Status: "stable"; "unstable" (solved, but no stable point in ANCHOR_ATTEMPTS: the last
-solution is kept); "unsolved" (no attempt could be solved: the draft keeps its drawn
+Status: "stable"; "unstable" (solved, but no stable point that `accept` takes in
+ANCHOR_ATTEMPTS: the last solution is kept); "unsolved" (no attempt could be solved: the draft keeps its drawn
 coefficients, gains follow the loop rule at nominal values, and there is no resting state).
+
+Two further options (fourth pilot, generation.md §14; the third pilot's open problems):
+
+    accept      `anchor_draft(accept=...)`: a stable resting point must also satisfy this
+                condition, else a new one is drawn like after an unstable one. The sampler
+                uses it to keep the resting observable where Balloon-Windkessel is defined.
+    noise level `noise_level`: the sigma at which the stationary SD of the most sensitive
+                noisy variable, sigma / sqrt(2 r_v), equals its resting magnitude |x*_v|. A
+                draw's sigma is then a fraction of it (sampler.draw_level_spread) instead of
+                a value from the full range, which exceeded |x*_v| in 45% of the third
+                pilot's draws.
 """
 
 from __future__ import annotations
@@ -173,11 +184,41 @@ def is_stable(d, rest: np.ndarray, row_sum: float) -> bool:
                 and np.abs(eig.imag).max() < RATE_LIMIT)
 
 
+def rest_inputs(d, rest: np.ndarray, row_sum: float) -> dict[int, float]:
+    """u*_v of each variable with a term, in the draft resting at `rest` (its neighbours
+    too): weights, drive and the direct channels into u^v."""
+    out = {}
+    for v, t in enumerate(d.nonlinear):
+        if t is None:
+            continue
+        u = sum(w * rest[k] for k, w in enumerate(t["weights"]) if w is not None)
+        u += t["drive"] or 0.0
+        u += sum(ch["gain"] * row_sum * transfer(ch["transfer"], rest[ch["source"]])[0]
+                 for ch in d.channels if v in ch["into_input"] and not ch["diffusive"])
+        out[v] = float(u)
+    return out
+
+
+def noise_level(d, rest: np.ndarray, row_sum: float) -> float | None:
+    """The sigma at which the most sensitive noisy variable's stationary SD equals its
+    resting magnitude: min over noisy v of |x*_v| sqrt(2 r_v) (module docstring; the sinh
+    policy's noise scales are 1). None if no noisy variable gives a positive finite value
+    (a resting state or a rate of exactly zero)."""
+    rates = decay_rates(d, rest, rest_inputs(d, rest, row_sum))
+    levels = [abs(rest[v]) * np.sqrt(2.0 * rates[v]) for v, s in enumerate(d.noise)
+              if s is not None]
+    levels = [float(s) for s in levels if np.isfinite(s) and s > 0]
+    return min(levels) if levels else None
+
+
 def anchor_draft(d, rng: np.random.Generator, row_sum: float,
-                 contribution: Callable[[float], float]) -> tuple[np.ndarray | None, str]:
+                 contribution: Callable[[float], float],
+                 accept: Callable[[np.ndarray], bool] | None = None,
+                 ) -> tuple[np.ndarray | None, str]:
     """Anchor the draft in place (module docstring). d: the sampler's draft, whose channels
     carry the coupling `ratio` of the card stream. contribution(w): the flat-prior weight w
-    moved to CONTRIBUTION_LOG10. Returns (x* (V,) or None, status)."""
+    moved to CONTRIBUTION_LOG10. accept(x*): a further condition on a stable resting point
+    (None: none). Returns (x* (V,) or None, status)."""
     drawn = (copy.deepcopy(d.nonlinear), list(d.bias))
     kept = None
     for _ in range(ANCHOR_ATTEMPTS):
@@ -185,7 +226,7 @@ def anchor_draft(d, rng: np.random.Generator, row_sum: float,
         rest = _solve(d, rng, row_sum, contribution)
         if rest is None:
             continue
-        if is_stable(d, rest, row_sum):
+        if is_stable(d, rest, row_sum) and (accept is None or accept(rest)):
             return rest, "stable"
         kept = (copy.deepcopy(d.nonlinear), list(d.bias), [ch["gain"] for ch in d.channels], rest)
     if kept is not None:
