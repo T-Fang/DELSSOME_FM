@@ -808,3 +808,23 @@ Divergence falls by a third and the number of coupled draws nearly doubles; the 
 
 **Status.** The anchored prior with levels around nominal, noise relative to the resting state and the Balloon–Windkessel range is the best prior tested. Not decided: adopting it for a full corpus, the ratio prior (two thirds of models are designed not to couple), and whether the regional spread, now the largest cause of divergence, stays at $\mathcal{U}(0, 1)$.
 
+### The full corpus (decided 2026-11-11, project lead)
+
+The prior of the fourth pilot, with the coupling ratio drawn from the upper two decades: `ratio_prior: upper`, $\log_{10}\text{ratio} \sim \mathcal{U}(-1, 1)$ from the same uniform number, a direct channel's $\mathcal{U}(-1, 0)$. Under $\mathcal{U}(-2, 1)$ a third of the anchored one-channel models had a ratio below 0.1, where 2% of usable draws are coupled. The regional spread stays $\mathcal{U}(0, 1)$.
+
+**Local check, candidates 0–199** (the same candidates of the fourth pilot in the first column):
+
+| | fourth pilot | with upper ratios |
+|---|---|---|
+| valid models | 66 (33.0%) | 64 (32.0%) |
+| draws diverged | 32.3% | 33.0% |
+| usable draws per valid model | 64.1 | 63.8 |
+| coupled share of usable draws | 16.4% | 23.7% |
+| models with no coupled draw | 59% | 44% |
+| input channels (one-channel models): coupled share of usable draws | 12.8% | 21.0% |
+| usable draws with mean FC above 0.2 / above 0.5 | 4.3% / 0.7% | 7.6% / 1.7% |
+
+Of 2,000 candidates, 1,196 are anchored at a stable point (1,225 under the full range), 744 unstable, 60 unsolved.
+
+**Run.** `configs/corpus_anchored.yaml` → `outputs/corpus_anchored`: train candidates 0–280,000, val and test 0–29,000 each, 100 candidates per job (3,380 jobs), submitted 2026-11-11. Expected at about 38% valid: 106,000 / 11,000 / 11,000 valid models, 7,700 CPU-h, 160 GB.
+
