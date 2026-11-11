@@ -1,0 +1,34 @@
+# The anchored corpus (generation.md §14; decided by the project lead 2026-11-11): the prior
+# of the fourth pilot (corpus_anchored_noise_pilot.yaml) with the coupling ratios drawn from
+# the upper two decades.
+#   term_prior, gain_prior anchored   a model's resting point is drawn first; gamma, w, I and
+#                                     the gains are solved for it (spec/anchor.py)
+#   level_prior nominal               a draw's regional levels within half a decade of nominal
+#   noise_prior rest                  a draw's noise SD is 0.1% to 100% of the resting state
+#   observable_rest bold              Balloon-Windkessel: resting flow >= 0.5
+#   ratio_prior upper                 coupling ratio 0.1-10 (direct channels 0.1-1)
+# Same seed as the earlier corpora: candidate i has the same SC group. Every field is required.
+
+seed: 20261005
+n_param_sets: 100
+first_draw: 0                 # draws first_draw .. first_draw + n_param_sets - 1
+batch_size: 100               # one model's draws per jit call
+
+screen_draws: 4               # generation.md §6
+screen_frames: 250            # 180 s at TR 0.72 s ("roughly three minutes")
+screen_burn_in_frames: 50
+flat_rel_sd: 1.0e-6           # flat: SD <= 1e-6 * |mean| in any region (decided 2026-10-12)
+
+initial_state_scale: 0.1      # anchored: x0 = x* (1 + U(-0.1, 0.1)) per simulation
+fcd_store_stride: 100         # 100 levels: CDF at FCD = -0.98, -0.96, ..., 1.00 (decided 2026-10-05)
+
+parameter_policy: sinh        # spec/sampler.py: Theta = each region's coefficient
+gain_scope: model             # the gains are the model's
+rate_floor: 0.1               # 1/s: time constants <= 10 s, 14 of them in the 144-s burn-in
+gain_prior: anchored          # solved with the resting point: the coupling ratio is the effective loop there
+term_prior: anchored          # resting point drawn first; gamma, w, I solved (spec/anchor.py)
+level_prior: nominal          # a draw's regional levels around the model's nominal values
+noise_prior: rest             # sigma's level = 10^U(-3, 0) x the level at which the noise SD equals the resting state
+observable_rest: bold         # Balloon-Windkessel: resting flow 1 + o*/0.41 >= 0.5, else a new resting point
+ratio_prior: upper            # coupling ratios 10^U(-1, 1) (a direct channel's 10^U(-1, 0)); was 10^U(-2, 1)
+output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_anchored

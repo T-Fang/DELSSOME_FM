@@ -53,7 +53,7 @@ def _tiny_store(tmp_path_factory, policy: str):
                               screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
                               initial_state_scale=0.1, fcd_store_stride=10,
                               parameter_policy=policy, gain_scope="draw", rate_floor=0.0,
-                              gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free",
+                              gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free", ratio_prior="full",
                               output_dir=root / "corpus")
     sim_cfg = SimConfig(**TINY_SIM)
     scs = np.random.default_rng(0).uniform(0, 0.02, (64, 68, 68))

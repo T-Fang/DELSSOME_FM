@@ -14,7 +14,7 @@ def _cfgs(tmp_path):
                           screen_frames=40, screen_burn_in_frames=5, flat_rel_sd=1e-6,
                           initial_state_scale=0.1, fcd_store_stride=10,
                           parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
-                          gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free", output_dir=tmp_path)
+                          gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free", ratio_prior="full", output_dir=tmp_path)
     gen = GeneralisationConfig(output_dir=tmp_path / "gen", seed=3, n_models=2, first_draw=100,
                                n_draws=2)
     return corpus, gen

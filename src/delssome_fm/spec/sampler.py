@@ -108,6 +108,11 @@ behaviour above, so existing corpora are reproduced unchanged:
                               a new resting point is drawn (anchor.py `accept`). The flow is
                               negative for o* < -0.41, where the hemodynamic state is
                               undefined and the simulation diverges.
+    ratio_prior "upper"       anchored only (full corpus, 2026-11-11): a channel's ratio is
+                              log10 ~ U(-1, 1) instead of U(-2, 1), from the same uniform
+                              number (a direct channel's U(-1, 0)). Under U(-2, 1) a third of
+                              the models had a ratio below 0.1, where 2% of usable draws
+                              were coupled (generation.md §14).
     noise level               `draw_level_spread(noise_level=...)`: sigma's level is
                               `ModelSample.noise_level` times 10^U(-3, 0) (NOISE_LOG10), so
                               the noise's stationary SD is 0.1% to 100% of the resting state,
@@ -172,6 +177,8 @@ SINH_Z = float(np.arcsinh(1e4 / SINH_SCALE))   # |x| <= 1e4, the constants' 8 de
 SPREAD_RANGE = (0.0, 1.0)        # kappa: regional SD / |mean|
 GAIN_LOG10 = (-2.0, 2.0)         # sinh policy: coupling gains
 COUPLING_RATIO_LOG10 = (-2.0, 1.0)
+RATIO_PRIORS = ("full", "upper")
+UPPER_RATIO_LOG10 = (-1.0, 1.0)  # ratio_prior "upper" (anchored): a direct channel then U(-1, 0)
 # Mean row sum of the 64 HCP-YA training group SCs rescaled to max 0.02 (range over groups
 # 0.356-0.365; tests/test_sampler.py checks it against the data on the cluster).
 SC_ROW_SUM = 0.360
@@ -265,10 +272,11 @@ def sample_card(seed: int, stream: int, index: int, policy: str = "multiplier",
 
 def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
                  rate_floor: float = 0.0, term_prior: str = "flat",
-                 observable_rest: str = "free") -> ModelSample:
+                 observable_rest: str = "free", ratio_prior: str = "full") -> ModelSample:
     """`sample_card` with the model's nominal levels and, under the anchored prior, its
     resting state, gains and noise level. observable_rest "bold" (anchored only): the
-    resting observable stays in Balloon-Windkessel's range (module docstring)."""
+    resting observable stays in Balloon-Windkessel's range; ratio_prior "upper" (anchored
+    only): the coupling ratios are drawn from the upper two decades (module docstring)."""
     _check_prior(policy, rate_floor, term_prior=term_prior)
     if observable_rest not in OBSERVABLE_RESTS:
         raise ValueError(f"observable_rest must be one of {OBSERVABLE_RESTS}, found "
@@ -276,6 +284,11 @@ def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
     if observable_rest != "free" and term_prior != "anchored":
         raise ValueError(f"observable_rest {observable_rest!r} needs term_prior anchored, "
                          f"found {term_prior!r}")
+    if ratio_prior not in RATIO_PRIORS:
+        raise ValueError(f"ratio_prior must be one of {RATIO_PRIORS}, found {ratio_prior!r}")
+    if ratio_prior != "full" and term_prior != "anchored":
+        raise ValueError(f"ratio_prior {ratio_prior!r} needs term_prior anchored, found "
+                         f"{term_prior!r}")
     rng = np.random.default_rng([seed, stream, index])
     V = int(rng.choice(V_CHOICES[rng.choice(len(V_CHOICES), p=V_PROBS)]))
     d = _Draft(V=V, L=np.full((V, V), np.nan), policy=policy, rate_floor=rate_floor)
@@ -290,6 +303,8 @@ def sample_model(seed: int, stream: int, index: int, policy: str = "multiplier",
     if term_prior == "scaled":
         _scale_terms(d)
     _set_gains(rng, d)
+    if ratio_prior == "upper":
+        _upper_ratios(d)
     observable = _sample_observable(rng, d)
     if policy == "sinh":
         _ensure_observed_noise(rng, d, observable)
@@ -459,8 +474,18 @@ def _set_gains(rng: np.random.Generator, d: _Draft) -> None:
             inputs += [abs(t["drive"])] if t["drive"] is not None else []
             reference = max(inputs, default=1.0)
         ratio = 10.0 ** rng.uniform(*COUPLING_RATIO_LOG10)
-        ch["ratio"] = float(ratio)
+        ch["ratio"], ch["ratio_log10"] = float(ratio), COUPLING_RATIO_LOG10
         ch["gain"] = float(ratio * reference / SC_ROW_SUM)
+
+
+def _upper_ratios(d: _Draft) -> None:
+    """ratio_prior "upper": each channel's ratio moved from COUPLING_RATIO_LOG10 to
+    UPPER_RATIO_LOG10, the same uniform number (module docstring). Anchored only: the gain
+    drawn with the ratio is replaced by the anchored one."""
+    (lo, hi), (ulo, uhi) = COUPLING_RATIO_LOG10, UPPER_RATIO_LOG10
+    for ch in d.channels:
+        u = (np.log10(ch["ratio"]) - lo) / (hi - lo)
+        ch["ratio"], ch["ratio_log10"] = float(10.0 ** (ulo + (uhi - ulo) * u)), UPPER_RATIO_LOG10
 
 
 def _ensure_observed_noise(rng: np.random.Generator, d: _Draft,

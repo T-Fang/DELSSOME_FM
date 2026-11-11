@@ -44,12 +44,15 @@ that does not converge counts as unsolved.
 `ratio` is the coupling ratio the card stream already drew, log10 ~ U(-2, 1); for both
 injection sites it is the effective loop at the resting point. A direct channel's ratio is
 mapped to log10 ~ U(-2, 0) (`channel_ratio`): at a ratio of 1 the resting network loses
-stability. Every other coefficient (L, beta of a variable with a term, gate weights, noise)
-keeps its drawn value.
+stability. The channel carries the range its ratio was drawn from (`ratio_log10`; the
+sampler's ratio_prior "upper" draws log10 ~ U(-1, 1)), and a direct channel keeps that
+range's lower end: U(-1, 0) then. Every other coefficient (L, beta of a variable with a
+term, gate weights, noise) keeps its drawn value.
 
 Status: "stable"; "unstable" (solved, but no stable point that `accept` takes in
-ANCHOR_ATTEMPTS: the last solution is kept); "unsolved" (no attempt could be solved: the draft keeps its drawn
-coefficients, gains follow the loop rule at nominal values, and there is no resting state).
+ANCHOR_ATTEMPTS: the last solution is kept); "unsolved" (no attempt could be solved: the
+draft keeps its drawn coefficients, gains follow the loop rule at nominal values, and there
+is no resting state).
 
 Two further options (fourth pilot, generation.md §14; the third pilot's open problems):
 
@@ -75,8 +78,9 @@ REST_UNIT = (0.05, 0.95)             # x*_v under the gate 1 - x^v
 INPUT_RANGE = {"logistic": (-3.0, 3.0), "wong_wang": (-3.0, 5.0)}   # u*_v
 INPUT_LOG10 = (-1.0, 1.0)            # |u*_v|, identity transfer
 CONTRIBUTION_LOG10 = (-2.0, 1.0)     # |w_vu x*^u|
-RATIO_LOG10 = (-2.0, 1.0)            # the card stream's coupling ratio (sampler)
-DIRECT_RATIO_LOG10 = (-2.0, 0.0)     # the same uniform number, for a direct channel
+RATIO_LOG10 = (-2.0, 1.0)            # the card stream's coupling ratio (sampler; ratio_prior full)
+DIRECT_RATIO_LOG10 = (-2.0, 0.0)     # the same uniform number, for a direct channel (its upper
+                                     # end holds for every ratio range)
 RATE_LIMIT = 1000.0                  # 1/s: half of Euler's stability limit at dt = 1 ms
 ANCHOR_ATTEMPTS = 200
 GAIN_ITERATIONS = 50
@@ -140,12 +144,13 @@ def local_rhs(d, x: np.ndarray, rest: np.ndarray, row_sum: float) -> np.ndarray:
 
 
 def channel_ratio(ch: dict) -> float:
-    """The channel's effective loop at rest: its drawn ratio, mapped to DIRECT_RATIO_LOG10
-    for a direct channel (module docstring)."""
+    """The channel's effective loop at rest: its drawn ratio; for a direct channel, the same
+    uniform number between the lower end of the ratio's range (`ratio_log10`) and
+    DIRECT_RATIO_LOG10's upper end (module docstring)."""
     if ch["diffusive"]:
         return ch["ratio"]
-    (lo, hi), (dlo, dhi) = RATIO_LOG10, DIRECT_RATIO_LOG10
-    return float(10.0 ** (dlo + (np.log10(ch["ratio"]) - lo) * (dhi - dlo) / (hi - lo)))
+    (lo, hi), dhi = ch["ratio_log10"], DIRECT_RATIO_LOG10[1]
+    return float(10.0 ** (lo + (np.log10(ch["ratio"]) - lo) * (dhi - lo) / (hi - lo)))
 
 
 def decay_rates(d, x: np.ndarray, u_star: dict[int, float]) -> np.ndarray:

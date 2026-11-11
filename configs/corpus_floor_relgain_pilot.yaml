@@ -27,4 +27,5 @@ term_prior: flat              # nonlinear terms: gamma, w, I from the flat prior
 level_prior: flat             # a draw's regional levels over the full range (sinh-policy option)
 noise_prior: flat             # sigma's level over the full range (rest: relative to the resting state)
 observable_rest: free         # no condition on the resting observable (bold: inside Balloon-Windkessel's range)
+ratio_prior: full             # coupling ratios 10^U(-2, 1) (upper: 10^U(-1, 1), anchored only)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_floor_relgain_pilot

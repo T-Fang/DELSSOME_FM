@@ -26,7 +26,7 @@ def _cfg(tmp_path: Path, n_param_sets: int = 3, first_draw: int = 0) -> CorpusCo
                         screen_draws=2, screen_frames=40, screen_burn_in_frames=5,
                         flat_rel_sd=1e-6, initial_state_scale=0.1, fcd_store_stride=10,
                         parameter_policy="multiplier", gain_scope="draw", rate_floor=0.0,
-                        gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free",
+                        gain_prior="absolute", term_prior="flat", level_prior="flat", noise_prior="flat", observable_rest="free", ratio_prior="full",
                         output_dir=tmp_path)
 
 

@@ -37,7 +37,8 @@ nominal` draws each regional parameter's level around its slot's nominal value
 (sampler.draw_level_spread) instead of over the full range. `noise_prior: rest` draws sigma's
 level relative to the model's resting state (`ModelSample.noise_level`; a model without one
 keeps the full range), and `observable_rest: bold` keeps the resting observable in
-Balloon-Windkessel's range (sampler.sample_model). Both exist under the anchored prior only.
+Balloon-Windkessel's range (sampler.sample_model). `ratio_prior: upper` draws the coupling
+ratios from 0.1-10 instead of 0.01-10. All three exist under the anchored prior only.
 
 Every candidate gets one log row (`CandidateLog`): the acceptance rate and mean
 off-diagonal FC per model that brief §8 asks to log, and its validity.
@@ -161,7 +162,7 @@ def model_sample(cfg: CorpusConfig, split: str, index: int) -> ModelSample:
         raise ValueError(f"noise_prior rest needs the anchored prior, found term_prior "
                          f"{cfg.term_prior!r}")
     return sample_model(cfg.seed, SPLIT_STREAM[split], index, cfg.parameter_policy,
-                        cfg.rate_floor, cfg.term_prior, cfg.observable_rest)
+                        cfg.rate_floor, cfg.term_prior, cfg.observable_rest, cfg.ratio_prior)
 
 
 def sc_group(cfg: CorpusConfig, split: str, index: int, n_groups: int) -> int:

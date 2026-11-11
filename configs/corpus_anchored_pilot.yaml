@@ -26,4 +26,5 @@ term_prior: anchored          # resting point drawn first; gamma, w, I solved (s
 level_prior: flat             # a draw's regional levels over the full range
 noise_prior: flat             # sigma's level over the full range (rest: relative to the resting state)
 observable_rest: free         # no condition on the resting observable (bold: inside Balloon-Windkessel's range)
+ratio_prior: full             # coupling ratios 10^U(-2, 1) (upper: 10^U(-1, 1), anchored only)
 output_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/corpus_anchored_pilot

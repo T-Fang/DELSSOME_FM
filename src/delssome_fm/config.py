@@ -88,6 +88,8 @@ class CorpusConfig:
                                   # or "rest" (relative to the model's resting state)
     observable_rest: str          # anchored only: "free", or "bold" (the resting observable
                                   # stays in Balloon-Windkessel's range; sampler.py)
+    ratio_prior: str              # anchored only: coupling ratios 10^U(-2, 1) ("full") or
+                                  # 10^U(-1, 1) ("upper"; sampler.py)
     output_dir: Path
 
 

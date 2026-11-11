@@ -271,3 +271,34 @@ def test_noise_level_puts_sigma_relative_to_the_resting_state():
     with pytest.raises(ValueError, match="noise_level must be positive"):
         draw_level_spread(MODELS[0].card, np.random.default_rng(0), 2, FLOOR, "anchored",
                           None, 0.0)
+
+
+def test_upper_ratio_prior_moves_the_ratios_and_nothing_structural():
+    """ratio_prior upper: the ratio is the same uniform number in U(-1, 1) (a direct channel:
+    U(-1, 0)); the equations, parameters and observable are those of the full range."""
+    from delssome_fm.spec.sampler import UPPER_RATIO_LOG10
+    seen = {True: 0, False: 0}
+    for i, full in enumerate(MODELS[:150]):
+        up = sample_model(123, 0, i, "sinh", FLOOR, "anchored", "free", "upper")
+        assert up.card.parameters == full.card.parameters
+        assert up.card.observable == full.card.observable
+        assert [c.diffusive for c in up.card.channels] == [c.diffusive for c in full.card.channels]
+        if not full.card.channels:
+            assert up.card == full.card
+            continue
+        if up.anchor != "stable":
+            continue
+        for ch, r in zip(up.card.channels, np.abs(up.ratios)):
+            hi = UPPER_RATIO_LOG10[1] if ch.diffusive else DIRECT_RATIO_LOG10[1]
+            assert UPPER_RATIO_LOG10[0] - 1e-6 <= np.log10(r) <= hi + 1e-6
+            seen[ch.diffusive] += 1
+        if full.anchor == "stable":      # the same uniform number: lo + (hi - lo) u in both
+            for ch, r, r_full in zip(up.card.channels, np.abs(up.ratios), np.abs(full.ratios)):
+                hi = (1.0 if ch.diffusive else 0.0)
+                u = (np.log10(r_full) + 2.0) / (hi + 2.0)
+                assert np.log10(r) == pytest.approx(-1.0 + (hi + 1.0) * u, abs=1e-6)
+    assert seen[True] > 20 and seen[False] > 20
+    with pytest.raises(ValueError, match="needs term_prior anchored"):
+        sample_model(123, 0, 0, "sinh", FLOOR, "flat", "free", "upper")
+    with pytest.raises(ValueError, match="ratio_prior must be one of"):
+        sample_model(123, 0, 0, "sinh", FLOOR, "anchored", "free", "top")
