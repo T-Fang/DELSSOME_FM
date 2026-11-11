@@ -778,5 +778,33 @@ The project lead agreed to implement the answers to the first two problems as op
 | input channels (one-channel models): coupled share of usable | 11.2% | 12.8% |
 | median mean FC of coupled draws | 0.13 | 0.12 |
 
-Divergence falls by a third and the number of coupled draws nearly doubles; the strength of coupling does not change. A cluster pilot on the 2,000 candidates (`corpus_anchored_noise_pilot.yaml`) is proposed, not submitted.
+Divergence falls by a third and the number of coupled draws nearly doubles; the strength of coupling does not change. A cluster pilot on the 2,000 candidates (`corpus_anchored_noise_pilot.yaml`) followed.
+
+### Fourth pilot: both options on the 2,000 candidates (2026-11-11)
+
+`corpus_anchored_noise_pilot.yaml`: levels around nominal, `noise_prior: rest`, `observable_rest: bold`. 200 jobs of 10 candidates, 45.6 CPU-h, 940 MB. Against the third pilot's arm with levels around nominal:
+
+| | third pilot | fourth pilot |
+|---|---|---|
+| valid models | 594 (29.7%) | 778 (38.9%) |
+| anchored candidates that pass the screen | 548 of 1,242 (44%) | 729 of 1,225 (60%) |
+| the same, Balloon–Windkessel / direct | 35% / 54% | 57% / 62% |
+| draws diverged | 47.9% | 35.4% |
+| usable draws per valid model | 47.1 | 61.9 |
+| coupled share of usable draws | 14.4% | 15.3% |
+| coupled draws | 4,037 | 7,372 |
+| models with no coupled draw | 62% | 63% |
+| input channels (one-channel models): coupled share of usable draws | 11.9% | 11.9% |
+| the same, slowest rate ≥ 10 s⁻¹: coupled draws | 620 | 1,044 |
+| median mean FC of coupled draws | 0.14 | 0.16 |
+| usable draws with mean FC above 0.2 / above 0.5 | 5.5% / 1.7% | 6.4% / 1.9% |
+| one-variable models observed directly: regional mean within 20% of $x^*$ | 21% | 27% |
+| zero-gain control: coupled draws that stay coupled | 3 of 211 | 8 of 259 |
+
+- **The options do what they were made for.** A third more valid models, a third more usable draws per model, 1.8 times the coupled draws, at the same coupled share and the same strength of coupling. Balloon–Windkessel models now pass the screen almost as often as directly observed ones.
+- **The ratio still decides coupling.** Diffusive channels at a ratio of 3 or more: 48% (input) and 59% (derivative) of usable draws coupled; at 1–3: 44% and 45%; below 0.1: 1.5% and 2.0%. Input channels designed to couple: 37.5% (as in the third pilot), 57% with the gate $1 - x$, 49% with the Wong–Wang transfer, 5.5% with a state gate.
+- **Zero-gain control.** 8 of 259 stay coupled: six in models with a slowest rate below 0.3 s⁻¹, and two faster models whose regions follow a common deterministic time course (mean FC 1.0 with and without gains; 0.16 with and 0.93 without). With little noise such a course is no longer masked. Small numbers; the synchronised share of usable draws is unchanged (0.3%).
+- **What is left of divergence** (draws of anchored valid models, 34% diverged): it rises with the largest regional spread of a parameter, 18% below a spread of 0.25 and 41% above 0.75, and with the noise fraction, 26% at 0.1–1% and 41% at 10–100%; hardly with the level shift (30% below 0.1 decades, 36% above 0.4). Draws with a spread below 0.25 and a shift below 0.2 decades still diverge in 20%.
+
+**Status.** The anchored prior with levels around nominal, noise relative to the resting state and the Balloon–Windkessel range is the best prior tested. Not decided: adopting it for a full corpus, the ratio prior (two thirds of models are designed not to couple), and whether the regional spread, now the largest cause of divergence, stays at $\mathcal{U}(0, 1)$.
 
