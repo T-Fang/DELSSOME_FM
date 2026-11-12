@@ -1,0 +1,9 @@
+# The stage-1 training store packed from configs/corpus_anchored.yaml (the anchored prior,
+# generation.md §14; sinh policy, per-model gains, 100 draws per model; 2026-11-13). Its own
+# normalisation, as every store since 2026-11-05. Every field is required.
+
+store_dir: /home/ftian/storage/projects/DELSSOME-FM/outputs/training_store_anchored
+
+# the first valid models of each split (submitted 2026-11-11: train candidates 0..279,999,
+# val and test 0..28,999; valid rate 38.2%)
+n_models: {train: 100000, val: 10000, test: 10000}

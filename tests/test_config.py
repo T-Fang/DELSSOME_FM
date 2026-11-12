@@ -74,6 +74,7 @@ CONFIG_CLASSES = {"data": DataConfig, "sim": SimConfig, "cluster": ClusterConfig
                   "corpus_anchored": CorpusConfig,
                   "training_data_d10": TrainingDataConfig, "training_data_sinh_pilot": TrainingDataConfig, "training_data_sinh": TrainingDataConfig,
                   "training_data_sinh300k": TrainingDataConfig, "training_data_sinh_fixed_gain": TrainingDataConfig,
+                  "training_data_anchored": TrainingDataConfig,
                   "stage1_d10": Stage1Config, "stage1_sinh_smoke": Stage1Config, "stage1_sinh": Stage1Config, "fc_autoencoder": FCAutoencoderConfig,
                   "reference_eval": ReferenceEvalConfig,
                   "reference_eval_sinh": ReferenceEvalConfig, "cmaes_pilot": CmaesConfig,
