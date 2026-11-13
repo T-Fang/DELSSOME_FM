@@ -667,3 +667,40 @@ The total MSE of the targeted models' base draws does not move (per model +0.003
   - 15–50%: +0.013 ± 0.041 (−0.015 ± 0.040)
   - over 50%: +0.11 ± 0.12 (+0.12 ± 0.16)
 - **Training curves.** Base val tracks the baseline until about step 120k. The gap (0.925 vs 0.94) opens only in the low-learning-rate phase.
+
+### 7.12 The anchored corpus (2026-11-13)
+
+The baseline recipe (`configs/stage1_sinh.yaml`, parameter tokens, θ raw, cost loss) on the anchored corpus (`outputs/training_store_anchored`, generation.md §14): 100,000 models, 6.16 M training rows (fixed-gain store 4.15 M). Two runs on an H200: `anch_ptok_raw_cost`, 200k steps = 8.3 passes, 5.0 h, best step 140k; and `anch_ptok_raw_cost_s300k`, 300k steps = 12.5 passes (the fixed-gain baseline's number of passes), 7.4 h, best step 195k. Table: `outputs/report_anchored/comparison_table.md` (`scripts/comparison_table.py --runs anchored`); figures in `outputs/report_sinh/anch_ptok_raw_cost*/figures`, learning curves against the fixed-gain baseline in `outputs/report_sinh/anch_ptok_raw_cost/figures/learning_curves_vs_fixed_gain.png`.
+
+**What compares across corpora.** Each corpus has its own val and test models and its own normalisation. MSE totals and R² of FC do not compare: the pairwise target's SD is 0.424 on the anchored corpus and 1.596 on the fixed-gain one, whose FC variance was mostly synchronised drift. The cost terms are in raw units but over each corpus's own coupled and uncoupled draws, which are different populations: about the same coupled share of test rows (21.1% vs 21.6%), but synchronised draws (mean FC ≥ 0.9) are 0.9% of the anchored test rows against 9.1% of the fixed-gain ones. The reference models are the same simulations for every run and compare directly.
+
+**Synthetic test draws** (every test row; median cost terms):
+
+| | fixed-gain baseline | anchored, 200k | anchored, 300k |
+|---|---|---|---|
+| R² of FC, test / trained rows | 0.752 / 0.905 | 0.325 / 0.662 | 0.329 / 0.678 |
+| coupled 1 − r / d / KS | 0.347 / 0.029 / 0.171 | 0.230 / 0.050 / 0.394 | 0.231 / 0.054 / 0.414 |
+| uncoupled d / KS | 0.001 / 0.035 | 0.002 / 0.061 | 0.002 / 0.063 |
+| coupled draws called coupled (20,000 test rows) | 0.85 | 0.71 | 0.72 |
+
+Against the training-average reference the anchored model is well ahead on its own test draws (coupled 1 − r 0.23 vs 0.59, KS 0.39 vs 0.72).
+
+- **Longer training does not help.** 300k steps fit the trained rows a little better (total 0.919 vs 0.969) and leave val and test where they were.
+- **The gap is to new equations, and it opens early.** Val total falls from 2.44 to 2.17 in the first 20k steps and then only to 1.90; the trained rows fall from 2.4 to about 0.9. Val KS (all draws) is flat at about 0.22 from step 100k while train KS falls to 0.13. On the fixed-gain corpus val kept improving until about step 150k.
+- **Val is unsteady.** R² of FC sits near 0.2 for most of training and jumps to about 0.3 late (step 140k in one run, 195k in the other); the best checkpoints are those jumps.
+
+**Reference models.** Every fitted set is still called uncoupled.
+
+| | fixed-gain baseline | anchored, 200k | anchored, 300k |
+|---|---|---|---|
+| MFM fitted (46 coupled): called coupled / 1 − r / d / KS | 0 / 0.40 / 0.25 / 0.89 | 1 / 0.60 / 0.24 / 0.89 | 1 / 0.49 / 0.25 / 0.88 |
+| FIC fitted (49 coupled) | 0 / 0.24 / 0.49 / 0.89 | 0 / 0.36 / 0.49 / 0.89 | 0 / 0.39 / 0.49 / 0.89 |
+| Hopf fitted (50 coupled) | 50 / 0.13 / 0.11 / 0.70 | 0 / 0.31 / 0.30 / 0.90 | 3 / 0.18 / 0.27 / 0.90 |
+| random draws of the card, coupled recall: MFM (44) / FIC (157) / Hopf (1,333) | 0.27 / 0.00 / 0.90 | 0.61 / 0.00 / 0.89 | 0.61 / 0.00 / 0.89 |
+| Hopf random draws, uncoupled called coupled | 0.21 | 0.27 | 0.18 |
+
+(1 − r, d, KS: medians over the 50 fitted sets, scripts/model_report_data.py; called coupled and recall: scripts/reference_variants_compare.py, predicted mean FC > 0.05.) Predicted mean FC of the fitted sets is 0.01 (MFM), 0.00 (FIC) and 0.01 (Hopf), against 0.25, 0.49 and 0.30 simulated.
+
+- **MFM's random draws are the one gain** (coupled recall 0.27 → 0.61, on 44 draws); its fitted and scrambled sets are still missed.
+- **The fixed-gain baseline's Hopf call is lost**, as with CMA-ES draws (§7.10); §7.11 found it to be a lean.
+- **Two of the three fitted sets lie outside the anchored prior.** Under `ratio_prior: upper` (ratios 0.1–10) FIC's fitted coupling ratio (0.004–0.1) is below the range, and Hopf's coefficient a (0.005–0.097) is below the rate floor with a ratio of about 38. MFM's ratio (2.5) is inside, so its miss is not a coverage gap of the ratio prior.

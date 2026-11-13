@@ -6,9 +6,13 @@ comparison.npz, where it exists). Writes <out>/comparison_table.md and .csv.
     python scripts/comparison_table.py --runs d10 --out outputs/report
     python scripts/comparison_table.py --runs sinh --out outputs/report_sinh
     python scripts/comparison_table.py --runs fixed_gain --out outputs/report_sinh_fg
+    python scripts/comparison_table.py --runs anchored --out outputs/report_anchored
 
 The fixed_gain set adds the CMA-ES draws (final/<split>_cma/*, base + CMA-ES pooled in
-final/<split>_pooled/*; generation.md §9) as extra sections.
+final/<split>_pooled/*; generation.md §9) as extra sections. The anchored set puts the
+fixed-gain baseline beside the runs on the anchored corpus (generation.md §14): each corpus
+has its own val and test models and its own normalisation, so only the cost terms and the
+reference models compare across them (the table says so).
 """
 
 import argparse
@@ -68,12 +72,27 @@ FIXED_GAIN = {   # corpus_sinh_fixed_gain (per-model gains), 100k models, parame
     "sinh_fg_ptok_raw_cost_cma": ("+ cost, parameter tokens θ raw, + CMA-ES draws",
                                   "outputs/report_sinh/sinh_fg_ptok_raw_cost_cma/comparison.npz"),
 }
+ANCHORED = {   # corpus_anchored (generation.md §14), 100k models, parameter tokens θ raw
+    "sinh_fg_ptok_raw_cost": ("fixed-gain corpus: + cost, parameter tokens θ raw †",
+                              "outputs/report_sinh/sinh_fg_ptok_raw_cost/comparison.npz"),
+    "anch_ptok_raw_cost": ("anchored corpus: + cost, parameter tokens θ raw",
+                           "outputs/report_sinh/anch_ptok_raw_cost/comparison.npz"),
+    "anch_ptok_raw_cost_s300k": ("anchored corpus: + cost, parameter tokens θ raw, 300k steps",
+                                 "outputs/report_sinh/anch_ptok_raw_cost_s300k/comparison.npz"),
+}
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]
 CMA_SPLITS = [("val_cma", "val, CMA-ES draws"), ("test_cma", "test, CMA-ES draws"),
               ("test_pooled", "test, base + CMA-ES draws")]
 # run set -> (MLflow experiment, runs, the final/<split> sections of the table)
 RUN_SETS = {"d10": ("stage1", D10, SPLITS), "sinh": ("stage1_sinh", SINH, SPLITS),
-            "fixed_gain": ("stage1_sinh", FIXED_GAIN, SPLITS + CMA_SPLITS)}
+            "fixed_gain": ("stage1_sinh", FIXED_GAIN, SPLITS + CMA_SPLITS),
+            "anchored": ("stage1_sinh", ANCHORED, SPLITS)}
+# run set -> a note under its table
+NOTES = {"anchored": "† on its own corpus's rows and in its own normalisation: MSE total and "
+                     "R² FC do not compare between the two corpora (the pairwise target's SD is "
+                     "1.596 on the fixed-gain corpus, 0.424 on the anchored one); the cost "
+                     "terms (1−r, d, KS) are in raw units, on each corpus's own coupled and "
+                     "uncoupled draws. The reference-model table is the same data for every row."}
 COUPLED = [("final_coupled/train", "trained rows, coupled draws"),
            ("final_coupled/test", "test, coupled draws")]
 TEST = [("total", "MSE total"), ("r2_pairwise", "R² FC"),
@@ -159,6 +178,8 @@ def main() -> None:
         lines += ["", "\\* trained, validated and evaluated on coupled draws only (mean FC > 0.05): "
                   "its rows in the all-draw tables are coupled draws, so compare it in the "
                   "coupled-draw tables."]
+    if args.runs in NOTES:
+        lines += ["", NOTES[args.runs]]
     (args.out / "comparison_table.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 

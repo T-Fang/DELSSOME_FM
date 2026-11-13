@@ -47,6 +47,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -166,6 +167,9 @@ def learning_curves_figure(curves: dict, out: Path, smooth: int = 100,
                      f"{title}, median: coupled (solid), uncoupled (dashed)", fontsize=10)
         ax.set_xlabel("training step")
         style(ax)
+    for ax in grid.ravel():      # steps as 100k: full numbers run together beyond 200,000
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(
+            lambda x, _: f"{x / 1000:.0f}k" if x else "0"))
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(curves), frameon=False,
                bbox_to_anchor=(0.5, 1.06))
