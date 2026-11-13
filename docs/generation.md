@@ -828,3 +828,35 @@ Of 2,000 candidates, 1,196 are anchored at a stable point (1,225 under the full 
 
 **Run.** `configs/corpus_anchored.yaml` → `outputs/corpus_anchored`: train candidates 0–280,000, val and test 0–29,000 each, 100 candidates per job (3,380 jobs), submitted 2026-11-11. Expected at about 38% valid: 106,000 / 11,000 / 11,000 valid models, 7,700 CPU-h, 160 GB.
 
+**Result (2026-11-13).** All 3,380 chunks are on disk: 7,490 CPU-h, 151 GB, 2.2 h per job (3.4 h at most), 1.2 GB peak. One val job (candidates 1,700–1,799) left the queue after 5 s with exit status 0 and empty logs; its candidates were run on the login node in ten chunks of ten.
+
+| | train | val | test |
+|---|---|---|---|
+| candidates | 280,000 | 29,000 | 29,000 |
+| passed the screen | 107,773 | 11,062 | 11,136 |
+| valid models | 107,087 (38.2%) | 10,989 (37.9%) | 11,070 (38.2%) |
+| the corpus: first 100,000 / 10,000 / 10,000 valid end at candidate | 261,692 | 26,440 | 26,161 |
+| draws of valid models: diverged / flat | 35.8% / 2.5% | 35.5% / 2.5% | 35.7% / 2.6% |
+| usable draws per valid model | 61.7 | 62.0 | 61.8 |
+| usable draws with an incomplete FCD | 0.16% | 0.16% | 0.24% |
+| coupled share of usable draws (mean FC > 0.05) | 21.5% | 21.3% | 21.3% |
+| mean FC > 0.2 / > 0.5 / ≥ 0.9 | 8.4% / 3.0% / 0.75% | 8.3% / 3.0% / 0.82% | 8.4% / 3.1% / 0.94% |
+| median mean FC of coupled draws | 0.146 | 0.147 | 0.148 |
+| models with no coupled draw | 51.8% | 51.5% | 52.0% |
+| models with 0–5% / 5–15% / 15–50% / 50–99% / all usable draws coupled | 8.3 / 8.7 / 13.4 / 11.6 / 6.2% | 9.2 / 8.6 / 13.2 / 11.4 / 6.1% | 8.6 / 8.7 / 13.4 / 11.2 / 6.1% |
+
+Valid models by number of state variables: 45% one, 44% two, 9% three, 2% four to six (candidates: 30 / 45 / 15 / 10%); 86% have one channel.
+
+Checks, all passed:
+
+- **Files.** Every split is covered without a gap or an overlap; each chunk has its arrays, cards, log and manifest; no candidate is logged twice.
+- **Logs against arrays.** The arrays hold exactly the valid models, 100 draws each; the logged counts of diverged and flat draws and the valid flag equal those of the arrays; no draw is both diverged and flat; every usable draw has finite statistics; the parameter and gain columns in use are the model's; the gains are the same in all draws of a model.
+- **Code.** 3,194 chunks record commit `33a443c`, 195 train chunks `4e7cf91` (it adds `configs/training_data_anchored.yaml` and its test entry only). 78 train chunks and the ten local val chunks record a modified tree: those two files, before they were committed. No file under `src/` changed during the run.
+- **Reproduction.** Train candidates 0–199 against the local run of the same configuration made before submission: cards, regional parameters, gains, the diverged and flat flags, the FCD CDF, the catch24 features and every regional mean are identical; the coupled call is the same for every usable draw. The centred statistics differ at float32 round-off, a different order of summation on a different CPU: FC by $1.3 \times 10^{-8}$ at the median ($3.6 \times 10^{-3}$ at most), mean FC by $2.5 \times 10^{-5}$ at most, the skewness of nearly constant signals by up to 0.13.
+- **Zero-gain control** (train candidates 0–1,999, one coupled draw per model re-simulated with its gains and with every gain 0): of 339 draws coupled again with their gains, 8 stay coupled without them (fourth pilot: 8 of 259); in 91 the run without gains diverges or is flat.
+
+Against the fourth pilot on the same 2,000 train candidates, as the local check predicted: valid 38.9% → 37.9%, coupled share of usable draws 15.3% → 23.6%, models with no coupled draw 63% → 51%.
+
+**Training store.** `configs/training_data_anchored.yaml` → `outputs/training_store_anchored` (125 GB), its own normalisation: 6,156,118 / 619,477 / 616,459 rows (fixed-gain store: 4.15 M train rows); 34 / 3 / 12 models have no row (usable draws with an incomplete FCD only). The solved coefficients and gains reach further than the earlier priors' (gains up to $1.8 \times 10^{8}$, median 17.5; regional parameters up to $3.6 \times 10^{7}$); in the network's signed-log encoding these are about 1.5 where the earlier corpora stop at 1.
+
+
