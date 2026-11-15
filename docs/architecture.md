@@ -711,9 +711,9 @@ Every stage-1 model so far predicts the fitted MFM, FIC and Hopf sets as uncoupl
 
 **Ruled out.**
 - *Evaluation.* Predictions are de-normalised with the training store's statistics and simulations with the reference store's (`report.predict_fc_fcd`); the parameters reach the network in the same encoding as in training.
-- *Inputs out of range.* The fitted gains, regional levels and regional spreads lie between the 12th and 90th percentile of the anchored training rows. The one exception is Hopf's a (0.005–0.097/s), below the corpus's rate floor of 0.1/s.
+- *Inputs out of range.* The fitted gains and regional levels lie between the 15th and 90th percentile of the anchored training rows, the regional spreads between the 12th and 40th (Hopf's ω, nearly uniform over regions, at the 2nd). The one value outside the prior is Hopf's a (0.005–0.097/s), below the corpus's rate floor of 0.1/s.
 
-**An analytic reference: the linearised network.** For one draw: the fixed point of the noise-free network (from the simulation's initial state), its Jacobian A and noise input B, and the FC the linearised network would show (equal-time covariance for direct observation; the cross-spectrum weighted by the linearised Balloon-Windkessel response over the scan's frequencies otherwise). It needs no simulation and about 0.15 CPU-s per draw.
+**An analytic reference: the linearised network.** For one draw: the fixed point of the noise-free network (from the simulation's initial state), its Jacobian A and noise input B, and the FC the linearised network would show (equal-time covariance for direct observation; the cross-spectrum weighted by the linearised Balloon-Windkessel response over the scan's frequencies otherwise). It needs no simulation. The unoptimised script takes about 0.15 CPU-s per draw; a corpus simulation, in batches of 100 draws, takes about 2.
 
 | | analytic FC | network |
 |---|---|---|
