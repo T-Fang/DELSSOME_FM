@@ -737,7 +737,7 @@ Median mean FC of the fitted sets when one input is scaled (simulation; the anal
 |---|---|---|---|---|---|---|---|
 | MFM, gain G | 0.084 | 0.114 | | 0.244 | | 0.045 | 0.040 |
 | MFM, drive I | 0.040 | 0.045 | | 0.244 | | 0.107 | 0.069 |
-| FIC, gain G | 0.069 | 0.116 | | 0.473 | | 0.253 | |
+| FIC, gain G | 0.069 | 0.116 | | 0.473 | | 0.253 | 0.193 |
 | FIC, w_EE | | 0.045 | 0.083 | 0.473 | 0.157 | 0.087 | |
 | Hopf, gain g | ×0.5: 0.131 | | | 0.299 | | | ×2: 0.643 |
 
