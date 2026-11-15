@@ -704,3 +704,69 @@ Against the training-average reference the anchored model is well ahead on its o
 - **MFM's random draws are the one gain** (coupled recall 0.27 → 0.61, on 44 draws); its fitted and scrambled sets are still missed.
 - **The fixed-gain baseline's Hopf call is lost**, as with CMA-ES draws (§7.10); §7.11 found it to be a lean.
 - **Two of the three fitted sets lie outside the anchored prior.** Under `ratio_prior: upper` (ratios 0.1–10) FIC's fitted coupling ratio (0.004–0.1) is below the range, and Hopf's coefficient a (0.005–0.097) is below the rate floor with a ratio of about 38. MFM's ratio (2.5) is inside, so its miss is not a coverage gap of the ratio prior.
+
+### 7.13 Why the reference models fail (diagnosis, 2026-11-16)
+
+Every stage-1 model so far predicts the fitted MFM, FIC and Hopf sets as uncoupled. This section is the diagnosis; no model or corpus was changed. Scripts and results: `outputs/diagnosis_reference_20261116` (`lna.py` is the analytic tool; figure `outputs/report_anchored/figures/reference_gain_sweep.png`). Network: `anch_ptok_raw_cost`, step 140k, unless stated.
+
+**Ruled out.**
+- *Evaluation.* Predictions are de-normalised with the training store's statistics and simulations with the reference store's (`report.predict_fc_fcd`); the parameters reach the network in the same encoding as in training.
+- *Inputs out of range.* The fitted gains, regional levels and regional spreads lie between the 12th and 90th percentile of the anchored training rows. The one exception is Hopf's a (0.005–0.097/s), below the corpus's rate floor of 0.1/s.
+
+**An analytic reference: the linearised network.** For one draw: the fixed point of the noise-free network (from the simulation's initial state), its Jacobian A and noise input B, and the FC the linearised network would show (equal-time covariance for direct observation; the cross-spectrum weighted by the linearised Balloon-Windkessel response over the scan's frequencies otherwise). It needs no simulation and about 0.15 CPU-s per draw.
+
+| | analytic FC | network |
+|---|---|---|
+| fitted MFM / FIC / Hopf sets, FC pattern 1 − r against simulation | 0.033 / 0.037 / 0.038 | 0.60 / 0.36 / 0.31 |
+| the same, d | 0.009 / 0.058 / 0.109 | 0.24 / 0.49 / 0.30 |
+| (a second simulation of the same parameters, 1 − r) | 0.070 / 0.058 / 0.048 | |
+| 4,712 rows of 600 random test models: coupled or not, share right | 0.967 (of the 93.8% with a stable fixed point) | 0.905 (0.897 on all rows) |
+| their coupled rows: FC pattern 1 − r / d | 0.098 / 0.012 | 0.203 / 0.044 |
+
+So the statistics are determined by the inputs through a computation of known form (solve the fixed point, then the linear response), and the network does not carry it out for the reference models. The 6% of rows without a stable fixed point (28% of them coupled) are outside this analysis.
+
+**What is special about the fitted sets: they sit on a ridge.**
+
+| slowest collective mode / local rate (1/s) | MFM | FIC | Hopf |
+|---|---|---|---|
+| median over the fitted sets | 1.4 / 9.8 | 0.13 / 155 | 0.11 / 1.0 |
+
+Median mean FC of the fitted sets when one input is scaled (simulation; the analytic FC agrees, see the figure):
+
+| | ×0.9 | ×0.95 | ×0.98 | fitted | ×1.02 | ×1.05 | ×1.1 |
+|---|---|---|---|---|---|---|---|
+| MFM, gain G | 0.084 | 0.114 | | 0.244 | | 0.045 | 0.040 |
+| MFM, drive I | 0.040 | 0.045 | | 0.244 | | 0.107 | 0.069 |
+| FIC, gain G | 0.069 | 0.116 | | 0.473 | | 0.253 | |
+| FIC, w_EE | | 0.045 | 0.083 | 0.473 | 0.157 | 0.087 | |
+| Hopf, gain g | ×0.5: 0.131 | | | 0.299 | | | ×2: 0.643 |
+
+- **MFM** is fitted just below an instability of its resting state: 5% more or less gain halves the FC or worse. In the network's input (asinh(x / 10⁻⁴) / 19.1) a 5% change is 0.0026 on a scale of about ±1.
+- **FIC** is coupled only where each region's w_IE balances its w_EE, w_EI and its SC row: a 2% change of w_EE alone takes the FC from 0.47 to 0.08–0.16. With w_IE re-solved for each gain (the model's own parametrisation) the analytic FC varies smoothly with G (0.19, 0.39, 0.53, 0.65, 0.67 at ×0.7, ×0.9, ×1, ×1.1, ×1.2). The network reads w_IE as a free regional map, in which the fitted sets are a thin surface that independent regional draws never reach (§7.8).
+- **Hopf** is not on a ridge: its FC varies smoothly with g, a and ω.
+- **Both networks are flat across MFM's and FIC's sweeps** (predicted mean FC 0.007–0.017 and 0.000). On Hopf the fixed-gain network follows the gain (0.21 → 0.55 from ×0.5 to ×2; simulation 0.13 → 0.64) and the anchored one is flat at 0.007.
+- **The corpus has almost no draws like this.** Of the sample's coupled rows, 0.8% lose more than 70% of their analytic FC when every gain is scaled by 0.8 (MFM's fitted sets lose 82%); the median coupled row keeps 82%. Fitted sets are the output of an optimisation that climbs to the ridge; random draws land on it with probability about its width.
+
+**The same failure on synthetic test models.** Share of coupled rows the network calls coupled (predicted mean FC > 0.05), 20,000 random test rows; in brackets on 19,568 rows it trained on:
+
+| the model's channel | one state | two states | three or more |
+|---|---|---|---|
+| diffusive, at the derivative | 0.93 (0.90) | 0.60 (0.80) | 0.34 (0.67) |
+| diffusive, into the transfer input | 0.85 (0.88) | 0.48 (0.76) | 0.08 (0.74) |
+| direct, at the derivative | 0.79 (0.81) | 0.39 (0.80) | 0.39 (0.74) |
+| direct, into the transfer input (MFM, FIC) | 0.52 (0.54) | 0.10 (0.54) | 0.19 (0.43) |
+| two channels | 0.88 (0.91) | 0.54 (0.84) | 0.47 (0.88) |
+
+- **Direct coupling into the transfer input is not learned even on the training rows** (0.54, against 0.8–0.9 for every other mechanism). It is 5.6% of the coupled rows, and such a model couples only in a window of its parameters (7% of its rows). Test rows of this kind with a simulated mean FC of 0.2–0.5 get a median predicted mean FC of 0.008: what the reference models get.
+- **Models with two or more states are fitted but not generalised** (two states: 0.76–0.84 on trained rows, 0.39–0.60 on test). Among the 100,000 training models, the 45,159 one-state models share 9,825 structures and 90.5% of one-state test models have a structure seen in training; the 43,683 two-state models have 42,980 structures and 2.7% of two-state test models have a seen one; no structure with three or more states repeats. For one state the test is interpolation between seen equations; from two states on it is not.
+- **Rarely coupled models are missed**: 0.37 for models with under 5% of their rows coupled, 0.82 for those with over 90%.
+
+**The three reference models.**
+
+| | why it is missed |
+|---|---|
+| MFM | one state, direct coupling into the transfer input, fitted within 5% of an instability: the mechanism the network fits worst, at a sharpness the corpus lacks |
+| FIC | the same mechanism with two states (0.10 on synthetic test rows), on a balanced surface that independent regional maps do not reach |
+| Hopf | two states, two channels sharing one gain (outside the grammar), a decay rate below the anchored corpus's floor. The fixed-gain corpus had slow models and its network leaned towards coupling for them (§7.11); the anchored corpus removed them |
+
+The anchored prior made more models robustly coupled (coupling follows the designed ratio), which is what the network already learns. It did not add the reference models' regime: a narrow ridge next to an instability, reached through the transfer input.
