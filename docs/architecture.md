@@ -852,4 +852,4 @@ Six runs are planned on the baseline recipe (`anch_ptok_raw_cost`): {fc, fc_fcd}
 
 Reference stores (`analytic_reference.py`): every fitted MFM, FIC and Hopf set is stable; of the random draws of the cards 91% (MFM), 94% (FIC), 81% (Hopf).
 
-**Runs** `anch_anfc_heads`, `anch_anfc_tokens`, `anch_anfc_both` submitted 2026-11-16 21:52 (L40S, jobs 3646613–5), after an 8-step CPU run of each on the packed store.
+**Runs** `anch_anfc_heads`, `anch_anfc_tokens`, `anch_anfc_both` submitted 2026-11-16 22:20 (L40S, jobs 3646616–8, 24 h), after an 8-step CPU run of each on the packed store. A first submission with 12 h was cancelled after 26 minutes: an L40S runs about 3.5 steps/s against 12 on the H200, so 200k steps take about 15 h.
