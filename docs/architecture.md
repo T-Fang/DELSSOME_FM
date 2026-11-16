@@ -795,18 +795,34 @@ Decided by the project lead: give the network the analytic FC as an input, and t
 
 | outcome | share of rows | simulated coupled |
 |---|---|---|
-| stable | 89.3% | 19% |
-| unstable under the map | 6.7% | 32% |
-| no resting state found | 4.0% | 18% |
+| stable | 92.0% | 19% |
+| unstable under the map | 6.0% | 32% |
+| no resting state found | 2.0% | 25% |
+
+(With the fallback added after the first pilot: where the implicit search finds no resting state, or one the map leaves, the noise-free map itself is run for 300 s and polished. Without it: 89.3 / 6.7 / 4.0%.)
 
 | stable rows | analytic | network |
 |---|---|---|
-| coupled or not, share right | 0.981 | |
+| coupled or not, share right | 0.980 | |
 | coupled rows: FC pattern 1 − r / d | 0.078 / 0.008 | 0.191 / 0.042 |
 | coupled rows: FCD KS (1 surrogate / mean of 4) | 0.116 / 0.089 | 0.336 |
 | uncoupled rows: FCD KS (1 surrogate / mean of 4) | 0.048 / 0.038 | 0.059 |
 
 - Where the slowest mode decays below 0.02/s (3.5% of the stable rows) the regime is right in 82% and the coupled rows' KS is 0.17; elsewhere 98–99% and 0.08–0.09.
-- By number of states, the share of rows that are stable is 94% (one), 87% (two), 83% (three).
+- By number of states, the share of rows that are stable is 95% (one), 90% (two), 87% (three).
 - **A property of the corpus found on the way.** 4.7% of the rows are stable in continuous time but not under the 1-ms Euler step: two thirds of them have a mode faster than 2,000/s, Euler's limit at this step (the anchored prior caps rates at 1,000/s at nominal values, and a draw moves the levels by up to half a decade); the rest have fast oscillating modes. These simulations did not diverge, so what they show is partly the integrator.
 - **Cost.** 0.12 CPU-s per row for the linearisation and FC, 0.13 for each surrogate with its FCD (0.02–0.37 and 0.08–0.25 by model size): 0.25 with one surrogate, 0.57 with four. For the anchored store's 7.4 M rows: about 250 CPU-h for FC alone, 510 with one surrogate, 1,170 with four.
+
+**What the draws without an answer do** (the noise-free map run for 300 s from the simulation's start, first pilot's 505 such rows = 10.7%): 3.6% of all rows oscillate on their own (median period 15 ms); 2.8% flip sign every step, an artefact of the 1-ms step; 3.3% settle at a resting state the implicit search had missed (what the fallback now recovers); 0.6% are still drifting after 300 s; 0.5% diverge without noise. The grammar allows a growth-sign $L$ diagonal (probability 0.2 per variable): rows of models with one are without an answer in 20% of cases against 10%, but they are 7% of the rows, so most such draws have leaks only and lose their resting state through the nonlinear term, the coupling or the time step.
+
+**Which corpus.** The same pilot on 600 random test models of the fixed-gain corpus (4,643 rows), with the fallback:
+
+| | anchored | fixed-gain |
+|---|---|---|
+| stable | 92.0% | 81.3% |
+| stable and slowest mode faster than 0.02/s | 88.8% | 62.5% |
+| share of the coupled rows that are stable / stable and faster than 0.02/s | 88% / 82% | 64% / 24% |
+| stable and faster than 0.02/s: regime right, coupled 1 − r | 0.986, 0.071 | 0.984, 0.080 |
+| stable and slower than 0.02/s: regime right, coupled 1 − r | 0.827, 0.395 | 0.767, 0.743 |
+
+Where the slowest mode is faster than 0.02/s the analysis is equally good on both corpora. The fixed-gain corpus has few coupled draws there: 40% of its coupled rows are slower (rates down to 10⁻⁴/s against an 864-s scan; §12 of generation.md found half of that corpus's coupled draws stay coupled with every gain at zero), and 36% have no answer, mostly models still drifting after 300 s.

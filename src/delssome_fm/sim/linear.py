@@ -5,7 +5,9 @@ For one draw (theta, psi, SC):
 
     1. resting state x*      the noise-free network's fixed point, reached from the simulation's
                              initial state by linearly implicit Euler steps of growing size,
-                             then Newton steps
+                             then Newton steps. If that finds none, or one the simulator's map
+                             leaves, the noise-free map itself is run for SETTLE_S from the
+                             initial state (what the simulation does) and polished by Newton
     2. linearisation         A = d rhs / dx at x*, B = d rhs / d nu, C = d observable / dx.
                              Under Balloon-Windkessel the hemodynamic states (linearised at each
                              region's steady state for its resting observable) are appended, so
@@ -46,6 +48,7 @@ from delssome_fm.spec.ops import JaxOps
 STATUSES = ("stable", "unstable", "none")
 IMPLICIT_STEPS, FIRST_STEP, STEP_GROWTH, LAST_STEP = 120, 1e-3, 1.25, 100.0   # s
 NEWTON_STEPS = 8
+SETTLE_S = 300.0                # the fallback's run of the noise-free map (burn-in is 144 s)
 RESIDUAL = 1e-6                 # |rhs| <= RESIDUAL * (|A| |x*|) at an accepted fixed point
 STATE_BOUND = 1e8
 
@@ -103,7 +106,13 @@ class LinearModel:
         def bw(s, u):
             return observe.bw_derivative(s[None], u[None])[0]
 
+        def settle(x, theta, psi, sc, dt, steps):
+            x, _ = jax.lax.scan(lambda x, _: (x + dt * noise_free(x, theta, psi, sc), None),
+                                x, None, length=steps)
+            return x
+
         self._drift = jax.jit(noise_free)
+        self._settle = jax.jit(settle, static_argnames="steps")
         self._jac = jax.jit(jax.jacfwd(noise_free))
         self._noise = jax.jit(jax.jacfwd(drift, argnums=1))
         self._obs = jax.jit(lambda x: obs(x.reshape(-1, V)))
@@ -112,10 +121,12 @@ class LinearModel:
         self._bw_in = jax.jit(jax.vmap(jax.jacfwd(bw, argnums=1)))
         self._bw_out = jax.jit(jax.vmap(jax.jacfwd(lambda s: observe.bw_signal(s[None])[0])))
 
-    def resting_state(self, x0: np.ndarray, theta, psi, sc) -> np.ndarray | None:
-        """x0 (N, V) -> x* (N V,) or None. Call inside jax.enable_x64."""
+    def resting_state(self, x0: np.ndarray, theta, psi, sc, newton_only: bool = False,
+                      ) -> np.ndarray | None:
+        """x0 (N, V) -> x* (N V,) or None. newton_only: polish a state already near x*. Call
+        inside jax.enable_x64."""
         x, dt, eye = np.asarray(x0, np.float64).reshape(-1).copy(), FIRST_STEP, np.eye(np.size(x0))
-        for k in range(IMPLICIT_STEPS + NEWTON_STEPS):
+        for k in range(IMPLICIT_STEPS * newton_only, IMPLICIT_STEPS + NEWTON_STEPS):
             f = np.asarray(self._drift(x, theta, psi, sc))
             J = np.asarray(self._jac(x, theta, psi, sc))
             if not (np.isfinite(f).all() and np.isfinite(J).all()):
@@ -147,13 +158,20 @@ class LinearModel:
         with jax.enable_x64(True):
             theta, psi, sc = (jnp.asarray(np.asarray(a, np.float64)) for a in (theta, psi, sc))
             x = self.resting_state(x0, theta, psi, sc)
+            radius = None if x is None else self._radius(x, theta, psi, sc, dt)
+            if radius is None or radius >= 1.0:          # the fallback: run the map itself
+                near = np.asarray(self._settle(jnp.asarray(np.asarray(x0, np.float64).reshape(-1)),
+                                               theta, psi, sc, dt, steps=round(SETTLE_S / dt)))
+                bounded = np.isfinite(near).all() and np.abs(near).max() <= STATE_BOUND
+                settled = (self.resting_state(near, theta, psi, sc, newton_only=True)
+                           if bounded else None)
+                if settled is not None:
+                    x, radius = settled, self._radius(settled, theta, psi, sc, dt)
             if x is None:
                 return Linearised("none", float("nan"))
             A = np.asarray(self._jac(x, theta, psi, sc))
             B = np.asarray(self._noise(x, jnp.zeros_like(x), theta, psi, sc))
             C = np.asarray(self._obs_jac(x))
-            # the model's own modes decide stability; the hemodynamic states only filter
-            radius = float(np.abs(np.linalg.eigvals(np.eye(len(A)) + dt * A)).max())
             decay = -np.log(radius) / dt
             B = B[:, np.abs(B).sum(axis=0) > 0]
             if radius >= 1.0 or B.shape[1] == 0:
@@ -167,6 +185,12 @@ class LinearModel:
         noise = np.sqrt(dt) * B
         cov = solve_discrete_lyapunov(M, noise @ noise.T)
         return Linearised("stable", decay, x.reshape(N, self.V), M, noise, C, (cov + cov.T) / 2)
+
+    def _radius(self, x, theta, psi, sc, dt: float) -> float:
+        """Spectral radius of the map I + dt A at x: the model's own modes decide stability,
+        the hemodynamic states only filter."""
+        A = np.asarray(self._jac(x, theta, psi, sc))
+        return float(np.abs(np.linalg.eigvals(np.eye(len(A)) + dt * A)).max())
 
     def _with_hemodynamics(self, A, B, C, rest_obs):
         """Append each region's linearised Balloon-Windkessel states (4 N) to the system."""

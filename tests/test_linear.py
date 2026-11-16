@@ -130,3 +130,27 @@ def test_gain_beyond_the_instability_is_unstable():
     assert lin.status == "unstable" and lin.decay < 0 and lin.cov is None
     with pytest.raises(ValueError, match="stable"):
         analytic_fc(lin)
+
+
+def test_fallback_finds_the_state_the_map_settles_at(monkeypatch):
+    """Bistable dx = x - x^3 (growth, cubic gate) started at 0.5. The first search is made to
+    return the unstable point 0, which the map leaves; the fallback runs the map, which
+    settles at +1 (f'(1) = -2)."""
+    from delssome_fm.spec.card import Gate, Nonlinear
+    card = ModelCard(
+        name="bistable", states=("x",), linear=((Coef(-1.0),),), bias=(None,),
+        nonlinear=(Nonlinear(-1.0, Gate("quadratic", weights=(1.0,)), "identity",
+                             (Coef(1.0),), None),),
+        noise=(Coef(param="sigma"),), channels=(), observable=Observable(0, None, "direct"),
+        parameters=(Parameter("sigma", "regional"),))
+    model = LinearModel(compile_card(card))
+    search = model.resting_state
+
+    def unstable_first(x0, theta, psi, sc, newton_only=False):
+        return search(x0, theta, psi, sc, newton_only) if newton_only else np.zeros(N)
+
+    monkeypatch.setattr(model, "resting_state", unstable_first)
+    lin = model.linearise(np.full((N, 1), 0.5), np.ones((N, 1)), np.zeros(0), np.zeros((N, N)), DT)
+    assert lin.status == "stable"
+    np.testing.assert_allclose(lin.rest, 1.0, atol=1e-9)
+    np.testing.assert_allclose(lin.decay, -np.log(1.0 - 2.0 * DT) / DT, rtol=1e-6)
