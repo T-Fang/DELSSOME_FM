@@ -839,4 +839,17 @@ Decided by the project lead: the anchored corpus; analytic FC, and in a second a
 - **tokens.** 68 region tokens, each an MLP of the region's row of the analytic FC (as the SC row enters a parameter token), and one global token (analytic mean FC, the slowest mode's decay rate as $\text{clip}(\log_{10}, \pm 3)/3$, whether there is an FCD, and with `fc_fcd` the analytic CDF), after the parameter tokens with a fourth segment embedding. A draw without an analytic FC gets a learned missing vector in place of each. $r_i$ stays the mean of region $i$'s parameter-token outputs.
 - The regional and FC-moment heads are unchanged; with `heads` alone they see no analytic input.
 
-Six runs are planned on the baseline recipe (`anch_ptok_raw_cost`): {fc, fc_fcd} × {heads, tokens, both}.
+Six runs are planned on the baseline recipe (`anch_ptok_raw_cost`): {fc, fc_fcd} × {heads, tokens, both}. The three `fc` runs go first (project lead, 2026-11-16), to settle one place or both.
+
+**Features computed (2026-11-16).** 599 of the 600 jobs finished (1,130 CPU-h, 1.9 h per job, 0.9 GB); one failed on a row whose covariance equation was singular (an eigenvalue of the map at −1 within rounding, from Balloon-Windkessel's own rates at an extreme resting flow). `sim/linear.py` now also requires the map with the hemodynamic states to contract and reports a singular equation as unstable; that chunk (train models 37,200–37,399) was recomputed with the fix, the others stand (24 of 574,807 stable val rows show an FC at the arctanh clip).
+
+| | train | val | test |
+|---|---|---|---|
+| rows | 6,156,118 | 619,477 | 616,459 |
+| stable / unstable / none / no variance | 93.1 / 4.3 / 2.5 / 0.07% | 92.8 / 4.5 / 2.6 / 0.08% | 93.1 / 4.4 / 2.4 / 0.08% |
+| 20,000 stable rows: coupled or not, share right | 0.977 | 0.977 | 0.977 |
+| their coupled rows: recall, \|d\| of mean FC, FCD KS | 0.923, 0.007, 0.090 | 0.919, 0.007, 0.091 | 0.923, 0.007, 0.096 |
+
+Reference stores (`analytic_reference.py`): every fitted MFM, FIC and Hopf set is stable; of the random draws of the cards 91% (MFM), 94% (FIC), 81% (Hopf).
+
+**Runs** `anch_anfc_heads`, `anch_anfc_tokens`, `anch_anfc_both` submitted 2026-11-16 21:52 (L40S, jobs 3646613–5), after an 8-step CPU run of each on the packed store.

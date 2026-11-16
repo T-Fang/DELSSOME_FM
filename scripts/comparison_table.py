@@ -79,6 +79,13 @@ ANCHORED = {   # corpus_anchored (generation.md §14), 100k models, parameter to
                            "outputs/report_sinh/anch_ptok_raw_cost/comparison.npz"),
     "anch_ptok_raw_cost_s300k": ("anchored corpus: + cost, parameter tokens θ raw, 300k steps",
                                  "outputs/report_sinh/anch_ptok_raw_cost_s300k/comparison.npz"),
+    # the linearised network's FC as an input (architecture.md §7.15)
+    "anch_anfc_heads": ("anchored corpus: + analytic FC in the heads",
+                        "outputs/report_sinh/anch_anfc_heads/comparison.npz"),
+    "anch_anfc_tokens": ("anchored corpus: + analytic FC as tokens",
+                         "outputs/report_sinh/anch_anfc_tokens/comparison.npz"),
+    "anch_anfc_both": ("anchored corpus: + analytic FC in the heads and as tokens",
+                       "outputs/report_sinh/anch_anfc_both/comparison.npz"),
 }
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]
 CMA_SPLITS = [("val_cma", "val, CMA-ES draws"), ("test_cma", "test, CMA-ES draws"),
