@@ -809,7 +809,7 @@ Decided by the project lead: give the network the analytic FC as an input, and t
 | uncoupled rows: FCD KS (1 surrogate / mean of 4) | 0.048 / 0.038 | 0.059 |
 
 - Where the slowest mode decays below 0.02/s (3.5% of the stable rows) the regime is right in 82% and the coupled rows' KS is 0.17; elsewhere 98–99% and 0.08–0.09.
-- By number of states, the share of rows that are stable is 95% (one), 90% (two), 87% (three).
+- By number of states, the share of rows that are stable is 96% (one), 90% (two), 88% (three).
 - **A property of the corpus found on the way.** 4.7% of the rows are stable in continuous time but not under the 1-ms Euler step: two thirds of them have a mode faster than 2,000/s, Euler's limit at this step (the anchored prior caps rates at 1,000/s at nominal values, and a draw moves the levels by up to half a decade); the rest have fast oscillating modes. These simulations did not diverge, so what they show is partly the integrator.
 - **Cost.** 0.12 CPU-s per row for the linearisation and FC, 0.13 for each surrogate with its FCD (0.02–0.37 and 0.08–0.25 by model size): 0.25 with one surrogate, 0.57 with four. For the anchored store's 7.4 M rows: about 250 CPU-h for FC alone, 510 with one surrogate, 1,170 with four.
 
