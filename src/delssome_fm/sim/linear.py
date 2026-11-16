@@ -23,7 +23,8 @@ For one draw (theta, psi, SC):
                              sim/summary.summarize then gives its FCD like a simulation's
 
 Status: "stable" (the analysis applies); "unstable" (a fixed point was found but the map
-does not contract there: the model leaves it); "none" (no fixed point was found, or a
+does not contract there: the model leaves it, or the hemodynamic states do at that resting
+flow); "none" (no fixed point was found, or a
 region's resting observable puts Balloon-Windkessel's flow at or below zero).
 
 The numerics are float64 (jax.enable_x64 as a context manager): a slowest mode a thousand
@@ -183,7 +184,17 @@ class LinearModel:
                 A, B, C = self._with_hemodynamics(A, B, C, rest_obs)
         M = np.eye(len(A)) + dt * A
         noise = np.sqrt(dt) * B
-        cov = solve_discrete_lyapunov(M, noise @ noise.T)
+        # with the hemodynamic states the map can still fail to contract: at an extreme resting
+        # flow Balloon-Windkessel's own rates pass Euler's limit. An eigenvalue at -1 within
+        # rounding makes the covariance equation singular (scipy's bilinear transform)
+        if self.hemo and np.abs(np.linalg.eigvals(M)).max() >= 1.0:
+            return Linearised("unstable", decay)
+        try:
+            cov = solve_discrete_lyapunov(M, noise @ noise.T)
+        except np.linalg.LinAlgError:
+            return Linearised("unstable", decay)
+        if not np.isfinite(cov).all():
+            return Linearised("unstable", decay)
         return Linearised("stable", decay, x.reshape(N, self.V), M, noise, C, (cov + cov.T) / 2)
 
     def _radius(self, x, theta, psi, sc, dt: float) -> float:

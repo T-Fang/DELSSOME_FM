@@ -154,3 +154,20 @@ def test_fallback_finds_the_state_the_map_settles_at(monkeypatch):
     assert lin.status == "stable"
     np.testing.assert_allclose(lin.rest, 1.0, atol=1e-9)
     np.testing.assert_allclose(lin.decay, -np.log(1.0 - 2.0 * DT) / DT, rtol=1e-6)
+
+
+def test_hemodynamics_beyond_eulers_limit_are_unstable():
+    """dx = -x + 7000 rests at 7000: a resting flow of 1 + 7000 / 0.41, where Balloon-Windkessel's
+    volume rate f^(1 - alpha) / (alpha tau) is about 2,100/s, past Euler's limit of 2 / dt. The
+    model's own mode is fine (decay 1/s), the map with the hemodynamic states is not."""
+    card = ModelCard(
+        name="high_flow", states=("x",), linear=((Coef(1.0),),), bias=(Coef(7000.0),),
+        nonlinear=(None,), noise=(Coef(param="sigma"),), channels=(),
+        observable=Observable(0, None, "balloon_windkessel"),
+        parameters=(Parameter("sigma", "regional"),))
+    lin = LinearModel(compile_card(card)).linearise(np.zeros((N, 1)), np.ones((N, 1)), np.zeros(0),
+                                                    np.zeros((N, N)), DT)
+    rate = (1 + 7000 / observe.GAMMA) ** (1 - observe.ALPHA) / (observe.ALPHA * observe.TAU)
+    assert rate > 2 / DT
+    assert lin.status == "unstable" and lin.cov is None
+    np.testing.assert_allclose(lin.decay, -np.log(1 - DT) / DT, rtol=1e-6)
