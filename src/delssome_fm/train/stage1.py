@@ -32,7 +32,7 @@ from delssome_fm.config import Stage1Config
 from delssome_fm.nn.backbone import Backbone, BackboneSize
 from delssome_fm.nn.heads import Stage1Heads
 from delssome_fm.train.costs import TERMS, cost_terms, raw_fc
-from delssome_fm.train.data import Stage1Batch
+from delssome_fm.train.data import ANALYTIC, Stage1Batch
 from delssome_fm.train.losses import (GROUPS, UncertaintyWeighting, group_losses,
                                       loss_groups)
 
@@ -57,7 +57,6 @@ class Stage1Module(L.LightningModule):
                                    "pairwise_sd": float(pairwise_norm[1])})
         self.cfg = cfg
         self.pairwise_norm = (float(pairwise_norm[0]), float(pairwise_norm[1]))
-        self.backbone = Backbone(backbone_size(cfg))
         decoder, latent_dim = None, 0
         if cfg.pair_head == "latent":
             from delssome_fm.train.autoencoder import load_fc_autoencoder
@@ -66,9 +65,13 @@ class Stage1Module(L.LightningModule):
                 raise ValueError(f"the FC autoencoder was trained on arctanh FC z-scored with "
                                  f"{ae_norm}, this store uses {self.pairwise_norm}")
             decoder, latent_dim = autoencoder.decoder, autoencoder.latent_dim
+        self.analytic_tokens, self.analytic_heads = analytic_places(cfg)
+        self.backbone = Backbone(backbone_size(cfg, n_fcd_levels))
         self.heads = Stage1Heads(cfg.d_model, cfg.fc_rank, n_fcd_levels, cfg.fc_offset,
                                  cfg.pair_head, cfg.pair_hidden, cfg.catch24_loss, decoder,
-                                 latent_dim, N_REGIONS, cfg.fc_net_loss)
+                                 latent_dim, N_REGIONS, cfg.fc_net_loss,
+                                 analytic_fc=self.analytic_heads,
+                                 analytic_fcd=self.analytic_heads and cfg.analytic == "fc_fcd")
         trained = loss_groups(cfg.stat_loss, cfg.catch24_loss, cfg.cost_loss, cfg.fc_net_loss)
         self.weighting = UncertaintyWeighting(trained)
         extra = tuple(g for g in ("catch24", "fc_net") if g in trained)
@@ -81,9 +84,19 @@ class Stage1Module(L.LightningModule):
         self.val_r2_pairwise = torchmetrics.R2Score()
         self._val_costs: list[dict[str, torch.Tensor]] = []
 
+    @property
+    def reads_analytic(self) -> bool:
+        """The model reads the store's analytic features: open stores with analytic=True."""
+        return self.analytic_tokens or self.analytic_heads
+
     def predict_statistics(self, batch: Stage1Batch, edge_index: torch.Tensor):
-        out = self.backbone(batch.theta, batch.psi, batch.sc, batch.graph)
-        return self.heads(out, self.edges[edge_index])
+        if (self.analytic_tokens or self.analytic_heads) and batch.analytic is None:
+            raise ValueError("this model reads analytic statistics: open the store with "
+                             "TrainingStore(analytic=True)")
+        out = self.backbone(batch.theta, batch.psi, batch.sc, batch.graph,
+                            batch.analytic if self.analytic_tokens else None)
+        return self.heads(out, self.edges[edge_index],
+                          batch.analytic if self.analytic_heads else None)
 
     def training_step(self, batch: Stage1Batch, batch_idx: int) -> torch.Tensor:
         if self.cfg.cost_loss:
@@ -153,9 +166,26 @@ class Stage1Module(L.LightningModule):
         return adamw_cosine(self.parameters(), self.cfg)
 
 
-def backbone_size(cfg: Stage1Config) -> BackboneSize:
-    """The backbone's widths and depths from the config (shared with train/coupling.py)."""
+ANALYTIC_INPUTS = ("heads", "tokens", "both")
+
+
+def analytic_places(cfg: Stage1Config) -> tuple[bool, bool]:
+    """(tokens, heads): where the analytic statistics enter (Stage1Config.analytic,
+    analytic_inputs; architecture.md §7.14)."""
+    if cfg.analytic not in ANALYTIC or cfg.analytic_inputs not in ANALYTIC_INPUTS:
+        raise ValueError(f"analytic must be one of {ANALYTIC} and analytic_inputs one of "
+                         f"{ANALYTIC_INPUTS}, found {cfg.analytic!r}, {cfg.analytic_inputs!r}")
+    on = cfg.analytic != "none"
+    return on and cfg.analytic_inputs != "heads", on and cfg.analytic_inputs != "tokens"
+
+
+def backbone_size(cfg: Stage1Config, n_fcd_levels: int = 0) -> BackboneSize:
+    """The backbone's widths and depths from the config (shared with train/coupling.py).
+    n_fcd_levels: the store's FCD levels, for the analytic global token of analytic fc_fcd."""
+    tokens, _ = analytic_places(cfg)
     return BackboneSize(
+        analytic_tokens=tokens,
+        analytic_fcd_levels=n_fcd_levels if tokens and cfg.analytic == "fc_fcd" else 0,
         n_regions=N_REGIONS, d_model=cfg.d_model, d_template=cfg.d_template,
         template_layers=cfg.template_layers, backbone_layers=cfg.backbone_layers,
         n_heads=cfg.n_heads, ffn_multiplier=cfg.ffn_multiplier, dropout=cfg.dropout,

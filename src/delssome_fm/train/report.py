@@ -37,7 +37,8 @@ def split_store(module: Stage1Module, split: str) -> TrainingStore:
     for "train", with the CMA-ES rows after the base rows if the module trained on them (the
     rows of training_rows); for other splits, the base rows only (as final/<split>/*)."""
     return TrainingStore(module.cfg.store_dir, split,
-                         cma=module.cfg.cma_draws and split == "train")
+                         cma=module.cfg.cma_draws and split == "train",
+                         analytic=module.reads_analytic)
 
 
 def training_rows(module: Stage1Module) -> np.ndarray:
@@ -119,7 +120,8 @@ def reference_comparison(module: Stage1Module, store_dir: Path, name: str,
     parameters, other noise), and the training average vs repeat 0. Only sets usable in both
     repeats count. Also keeps a typical set as an example: the one with the median simulated
     mean FC (so a model's rare degenerate fit, e.g. FIC's set with FC ~ 0, is not shown)."""
-    stores = [TrainingStore(store_dir, f"{name}_r{k}") for k in (0, 1)]
+    stores = [TrainingStore(store_dir, f"{name}_r{k}", analytic=module.reads_analytic)
+              for k in (0, 1)]
     draws = [np.load(Path(store_dir) / f"{name}_r{k}" / "draw.npy") for k in (0, 1)]
     common = np.intersect1d(*draws)
     rows = [np.searchsorted(d, common) for d in draws]   # draws are stored in increasing order

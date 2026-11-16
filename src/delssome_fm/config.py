@@ -187,6 +187,11 @@ class Stage1Config:
     cma_draws: bool               # also the store's CMA-ES draws (<split>_cma, generation.md
                                   # §9) of the chosen models, in train, val and test, each
                                   # draw weighing the same as a base draw (2026-11-05)
+    analytic: str                 # the linearised network's statistics as inputs (architecture.md
+                                  # §7.14; the store's analytic_* arrays): none | fc | fc_fcd
+    analytic_inputs: str          # where they enter: heads (a gated starting point in the FC
+                                  # and FCD heads) | tokens (68 region tokens + 1 global token
+                                  # in the transformer) | both. Unused when analytic is none
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)

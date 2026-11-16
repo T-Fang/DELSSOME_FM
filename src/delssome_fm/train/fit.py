@@ -57,7 +57,8 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
                               cfg.coupled_share if cfg.oversample_coupled else None,
                               cfg.coupled_threshold, cfg.coupled_draws_only)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
-                            cfg.seed, composition, cma=cfg.cma_draws)
+                            cfg.seed, composition, cma=cfg.cma_draws,
+                            analytic=cfg.analytic != "none")
     data.setup()
     norm = data.train.norm
     pairwise_norm = (float(norm["pairwise_mean"]), float(norm["pairwise_sd"]))
@@ -126,7 +127,8 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
         raise ValueError(f"splits must include val and test (final_eval.npz) and be among "
                          f"{FINAL_SPLITS}; found {splits}")
     sources = {"train": lambda: (data.train, data.train_rows), "val": lambda: (data.val, None),
-               "test": lambda: (TrainingStore(cfg.store_dir, "test", cma=cfg.cma_draws), None)}
+               "test": lambda: (TrainingStore(cfg.store_dir, "test", cma=cfg.cma_draws,
+                                              analytic=cfg.analytic != "none"), None)}
     summary, arrays = {}, {}
     for split in (s for s in FINAL_SPLITS if s in splits):
         store, candidates = sources[split]()

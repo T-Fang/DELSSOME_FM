@@ -30,7 +30,8 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         max_distance=8,
         max_degree=8, token_scheme="region", embed_theta=True, task="statistics", train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
-        coupled_threshold=0.05, coupled_draws_only=False, cma_draws=False, batch_size=2,
+        coupled_threshold=0.05, coupled_draws_only=False, cma_draws=False, analytic="none",
+        analytic_inputs="heads", batch_size=2,
         edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, final_eval_rows=16, num_workers=0, precision="32-true",
@@ -923,3 +924,141 @@ def test_report_reads_the_cma_rows_a_run_trained_on(tiny_cma_store, tmp_path):
     assert np.isfinite(fc).all() and np.isfinite(cdf).all()
     metrics = scaling_metrics(module, max_rows=10_000)
     assert np.isfinite(metrics["train"]["total"])
+
+
+# ---------------------------------------------------------------- analytic statistics as inputs
+
+ANALYTIC_ARMS = [(a, w) for a in ("fc", "fc_fcd") for w in ("heads", "tokens", "both")]
+
+
+def _analytic_module(store, tmp_path, analytic, inputs):
+    torch.manual_seed(0)
+    cfg = _ptok_config(store.root.parent, tmp_path, analytic=analytic, analytic_inputs=inputs)
+    return Stage1Module(cfg, store.n_fcd_levels, (0.4, 1.3)).eval()
+
+
+@pytest.fixture
+def analytic(tiny_analytic_store):
+    """The store with analytic features and a batch of it whose row 0 has none."""
+    cfg, _, _ = tiny_analytic_store
+    store = TrainingStore(cfg.store_dir, "train", analytic=True)
+    batch = store[list(range(min(8, len(store))))]
+    a = batch.analytic
+    fc_valid, fcd_valid = a.fc_valid.clone(), a.fcd_valid.clone()
+    fc_valid[0] = fcd_valid[0] = False
+    zero = lambda x: torch.where(fc_valid.reshape(-1, *[1] * (x.dim() - 1)), x, 0.0)   # noqa: E731
+    batch.analytic = dataclasses.replace(a, pairwise=zero(a.pairwise), fcd=zero(a.fcd),
+                                         decay=zero(a.decay), fc_valid=fc_valid,
+                                         fcd_valid=fcd_valid)
+    return store, batch
+
+
+def test_analytic_features_are_served_z_scored_and_zero_where_missing(tiny_analytic_store):
+    cfg, _, _ = tiny_analytic_store
+    store = TrainingStore(cfg.store_dir, "train", analytic=True)
+    rows = list(range(min(8, len(store))))
+    a = store[rows].analytic
+    status = np.asarray(store.analytic["status"][rows])
+    raw = np.asarray(store.analytic["pairwise"][rows], np.float64)
+    expected = (raw - store.norm["pairwise_mean"]) / store.norm["pairwise_sd"]
+    ok = status == 0
+    assert a.pairwise.shape == (len(rows), 2278) and a.fcd.shape == (len(rows), store.n_fcd_levels)
+    np.testing.assert_array_equal(a.fc_valid.numpy(), ok)
+    np.testing.assert_allclose(a.pairwise.numpy()[ok], expected[ok], rtol=1e-5, atol=1e-6)
+    assert (a.pairwise.numpy()[~ok] == 0).all() and (a.decay.numpy()[~ok] == 0).all()
+    assert (np.abs(a.decay.numpy()) <= 1).all() and not (a.fcd_valid & ~a.fc_valid).any()
+    with pytest.raises(FileNotFoundError, match="analytic"):
+        TrainingStore(cfg.store_dir.parent / "nowhere", "train", analytic=True)
+
+
+def test_a_store_without_analytic_arrays_refuses_them(tiny_store_sinh):
+    with pytest.raises(FileNotFoundError, match="submit_analytic"):
+        TrainingStore(tiny_store_sinh[0].store_dir, "train", analytic=True)
+
+
+@pytest.mark.parametrize("kind,inputs", ANALYTIC_ARMS)
+def test_analytic_arms_predict_and_train(analytic, tmp_path, kind, inputs):
+    """Every arm gives finite statistics of the right shape, a valid FCD CDF, and finite
+    gradients; a batch without analytic features is refused."""
+    store, batch = analytic
+    module = _analytic_module(store, tmp_path, kind, inputs).train()
+    edges = torch.arange(2278)
+    pred = module.predict_statistics(batch, edges)
+    assert pred.pairwise.shape == (len(batch.theta), 2278) and torch.isfinite(pred.pairwise).all()
+    assert (pred.fcd.diff(dim=1) >= -1e-6).all()
+    torch.testing.assert_close(pred.fcd[:, -1], torch.ones(len(batch.theta)), atol=1e-5, rtol=0)
+    sum(group_losses(pred, batch.targets, edges).values()).backward()
+    grads = [p.grad for p in module.parameters() if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)
+    with pytest.raises(ValueError, match="analytic"):
+        module.predict_statistics(dataclasses.replace(batch, analytic=None), edges)
+
+
+def test_the_fc_head_starts_from_the_analytic_fc(analytic, tmp_path):
+    """With the correction MLP silenced, the prediction is the analytic FC where there is
+    one (the gate starts at 1) and 0 where there is none."""
+    store, batch = analytic
+    module = _analytic_module(store, tmp_path, "fc", "heads")
+    with torch.no_grad():
+        for p in module.heads.pair_mlp.net[-1].parameters():
+            p.zero_()
+        pred = module.predict_statistics(batch, torch.arange(2278)).pairwise
+    torch.testing.assert_close(pred, batch.analytic.pairwise, atol=1e-6, rtol=0)
+    assert batch.analytic.fc_valid[1:].any() and (pred[0] == 0).all()
+
+
+def test_the_fcd_head_starts_from_the_analytic_cdf(analytic, tmp_path):
+    store, batch = analytic
+    module = _analytic_module(store, tmp_path, "fc_fcd", "heads")
+    with torch.no_grad():
+        for mlp in (module.heads.fcd_logits, module.heads.fcd_analytic):
+            for p in mlp.net[-1].parameters():
+                p.zero_()
+        pred = module.predict_statistics(batch, torch.arange(2278)).fcd
+    ok = batch.analytic.fcd_valid
+    assert ok.any()
+    # softmax(log(steps + eps)) is the analytic CDF up to the floor eps on each of L steps
+    torch.testing.assert_close(pred[ok], batch.analytic.fcd[ok], atol=2e-3, rtol=0)
+    uniform = torch.arange(1, store.n_fcd_levels + 1) / store.n_fcd_levels
+    torch.testing.assert_close(pred[0], uniform, atol=1e-6, rtol=0)      # row 0 has none
+
+
+def test_analytic_tokens_use_a_missing_vector_and_keep_rows_independent(analytic, tmp_path):
+    """Row 0 (no analytic FC) reads only the learned missing vectors: its outputs do not change
+    with the values in its slots; and each row's outputs are those of the row alone."""
+    store, batch = analytic
+    module = _analytic_module(store, tmp_path, "fc_fcd", "tokens")
+    a = batch.analytic
+    junk = dataclasses.replace(a, pairwise=a.pairwise.clone(), fcd=a.fcd.clone(),
+                               decay=a.decay.clone())
+    junk.pairwise[0], junk.fcd[0], junk.decay[0] = 3.0, 0.5, -1.0
+    with torch.no_grad():
+        out = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph, a)
+        other = module.backbone(batch.theta, batch.psi, batch.sc, batch.graph, junk)
+        torch.testing.assert_close(out.h_cls, other.h_cls, rtol=1e-5, atol=1e-6)
+        g, b = batch.graph, 1
+        n = int(g.node_mask[b].sum())
+        one = GraphBatch(features=g.features[b:b + 1, :n], degree=g.degree[b:b + 1, :n],
+                         distances=g.distances[b:b + 1, :n, :n], node_mask=g.node_mask[b:b + 1, :n],
+                         regional_par=g.regional_par[b:b + 1], global_par=g.global_par[b:b + 1],
+                         deriv_roots=g.deriv_roots[b:b + 1], agg=g.agg[b:b + 1],
+                         out_root=g.out_root[b:b + 1], const_value=g.const_value[b:b + 1, :n])
+        alone_a = dataclasses.replace(a, **{f.name: getattr(a, f.name)[b:b + 1]
+                                            for f in dataclasses.fields(a)})
+        alone = module.backbone(batch.theta[b:b + 1], batch.psi[b:b + 1], batch.sc[b:b + 1], one,
+                                alone_a)
+    torch.testing.assert_close(alone.h_cls, out.h_cls[b:b + 1], rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(alone.regions, out.regions[b:b + 1], rtol=1e-4, atol=1e-5)
+
+
+def test_lightning_run_with_analytic_inputs(tiny_analytic_store, tmp_path):
+    cfg, _, _ = tiny_analytic_store
+    run = _ptok_config(cfg.store_dir, tmp_path, analytic="fc_fcd", analytic_inputs="both",
+                       cost_loss=True)
+    config_file = tmp_path / "stage1.yaml"
+    config_file.write_text("for the artifact\n")
+    checkpoints = fit(run, config_file, "analytic")
+    assert (checkpoints / "final_eval.npz").is_file()
+    from delssome_fm.train.evaluate import load_stage1
+    module = load_stage1(checkpoints / "last.ckpt")
+    assert module.reads_analytic and module.cfg.analytic == "fc_fcd"

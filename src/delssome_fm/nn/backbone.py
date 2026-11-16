@@ -12,6 +12,10 @@ its rows at the length of its longest row (P and M of the batch's largest); the 
 shorter row does not have are masked as attention keys and left out of the region means, so
 each row's outputs are those of its own sequence alone (tests/test_network.py checks this).
 
+With `analytic_tokens` the sequence also holds the linearised network's statistics
+(nn/tokens.AnalyticTokens, architecture.md §7.14): N region tokens and one global token,
+after the input tokens, with their own segment embedding.
+
 Outputs used downstream are h_CLS (B, d) and the region outputs r (B, N, d). The template
 positions of the output are discarded, but the template tokens are in the sequence so that
 the tokens can attend to individual equation nodes, not only to pooled readouts.
@@ -27,9 +31,9 @@ from torch import nn
 from delssome_fm.nn.layers import TransformerLayer, key_padding_bias, masked_mean
 from delssome_fm.nn.template_encoder import (GraphBatch, Readouts, TemplateEncoder,
                                              global_values, read_out)
-from delssome_fm.nn.tokens import ParameterTokens, RegionTokens
+from delssome_fm.nn.tokens import AnalyticTokens, ParameterTokens, RegionTokens
 
-CLS, TOKEN, TEMPLATE = 0, 1, 2   # segment ids
+CLS, TOKEN, TEMPLATE, ANALYTIC = 0, 1, 2, 3   # segment ids
 TOKEN_SCHEMES = ("region", "parameter")
 
 
@@ -49,6 +53,8 @@ class BackboneSize:
     max_degree: int
     token_scheme: str
     embed_theta: bool
+    analytic_tokens: bool = False     # the analytic statistics as tokens
+    analytic_fcd_levels: int = 0      # > 0: the global analytic token also reads the FCD CDF
 
 
 @dataclass
@@ -75,16 +81,22 @@ class Backbone(nn.Module):
         self.project = nn.Linear(s.d_template, s.d_model)   # W_proj
         self.tokens = (ParameterTokens(s.d_model, s.n_regions, s.embed_theta) if per_parameter
                        else RegionTokens(s.d_model, s.n_regions))
+        self.analytic = (AnalyticTokens(s.d_model, s.n_regions, s.analytic_fcd_levels)
+                         if s.analytic_tokens else None)
         self.cls = nn.Parameter(torch.randn(s.d_model) * 0.02)
-        self.segment = nn.Embedding(3, s.d_model)
+        self.segment = nn.Embedding(4 if s.analytic_tokens else 3, s.d_model)
         self.layers = nn.ModuleList(TransformerLayer(s.d_model, s.n_heads, s.ffn_multiplier,
                                                      s.dropout)
                                     for _ in range(s.backbone_layers))
         self.norm = nn.LayerNorm(s.d_model)
 
     def forward(self, theta: torch.Tensor, psi: torch.Tensor, sc: torch.Tensor,
-                graph: GraphBatch) -> BackboneOutput:
-        """theta (B, N, P), psi (B, K), sc (B, N, N): as RegionTokens; graph: the models' DAGs."""
+                graph: GraphBatch, analytic=None) -> BackboneOutput:
+        """theta (B, N, P), psi (B, K), sc (B, N, N): as RegionTokens; graph: the models' DAGs;
+        analytic: the batch's AnalyticBatch (train/data.py), required with analytic tokens."""
+        if (self.analytic is None) != (analytic is None):
+            raise ValueError("analytic statistics are given exactly when the backbone has "
+                             "analytic tokens")
         B, N, _ = theta.shape
         if self.token_scheme == "region":
             template = self.project(self.template(graph))             # (B, M, d)
@@ -101,12 +113,18 @@ class Backbone(nn.Module):
             tokens = self.tokens(theta[..., :P], sc, kappa).flatten(1, 2)   # (B, N * P, d)
             token_mask = kappa_mask[:, None, :].expand(B, N, P).flatten(1)
         T = tokens.shape[1]
-        x = torch.cat([self.cls.expand(B, 1, -1), tokens, template], dim=1)
+        extra = (tokens.new_zeros(B, 0, tokens.shape[-1]) if analytic is None else
+                 self.analytic(analytic.pairwise, analytic.fcd, analytic.decay, analytic.fc_valid,
+                               analytic.fcd_valid).to(tokens.dtype))
+        A = extra.shape[1]
+        x = torch.cat([self.cls.expand(B, 1, -1), tokens, extra, template], dim=1)
         segments = torch.cat([torch.full((T + 1,), TOKEN, device=x.device),
+                              torch.full((A,), ANALYTIC, device=x.device),
                               torch.full((template.shape[1],), TEMPLATE, device=x.device)])
         segments[0] = CLS
         x = x + self.segment(segments)[None]
         valid = torch.cat([torch.ones(B, 1, dtype=torch.bool, device=x.device), token_mask,
+                           torch.ones(B, A, dtype=torch.bool, device=x.device),
                            graph.node_mask], dim=1)
         bias = key_padding_bias(valid)
         for layer in self.layers:

@@ -129,3 +129,28 @@ def tiny_cma_store(tiny_store, tmp_path_factory):
         summary.update(split=f"{split}_cma", base_split=split)
         (store / f"{split}_cma" / "summary.json").write_text(json.dumps(summary))
     return store, cfg, corpus_cfg, sim_cfg
+
+
+@pytest.fixture(scope="session")
+def tiny_analytic_store(tiny_store_sinh, tmp_path_factory):
+    """(TrainingDataConfig, CorpusConfig, SimConfig): a copy of tiny_store_sinh whose splits
+    also hold the analytic features (train/analytic.py, 2 surrogates)."""
+    import dataclasses
+    import shutil
+
+    import numpy as np
+
+    from delssome_fm.train.analytic import ARRAYS, analytic_models, pack_analytic, write_chunk
+
+    cfg, corpus_cfg, sim_cfg = tiny_store_sinh
+    store = tmp_path_factory.mktemp("tiny_analytic") / "store"
+    shutil.copytree(cfg.store_dir, store)
+    with np.load(store / "train" / "models.npz") as m:
+        n_models = len(m["index"])
+    write_chunk(store, "train", 0, n_models,
+                analytic_models(corpus_cfg, sim_cfg, store, "train", 0, n_models, 2), 2)
+    pack_analytic(store, "train")
+    for split in ("val", "test"):
+        for k in ARRAYS:
+            shutil.copy(store / "train" / f"{k}.npy", store / split / f"{k}.npy")
+    return dataclasses.replace(cfg, store_dir=store), corpus_cfg, sim_cfg

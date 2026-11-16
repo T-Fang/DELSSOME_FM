@@ -4,7 +4,9 @@
 them) and builds a whole batch from a list of row indices: inputs, the models' equation
 graphs padded to the batch's largest graph, and the z-scored targets. With cma=True it also
 serves the split's CMA-ES draws (<split>_cma, train/pack.py): rows 0..n_base-1 are the base
-draws, the rows after them the CMA-ES draws, and every row weighs the same.
+draws, the rows after them the CMA-ES draws, and every row weighs the same. With
+analytic=True a batch also carries the rows' analytic features (train/analytic.py), as an
+`AnalyticBatch`.
 
 `Stage1DataModule` gives Lightning a shuffled train loader and a fixed validation set (all
 val rows, or a fixed random subset).
@@ -30,6 +32,30 @@ from delssome_fm.spec.sampler import POLICIES, SINH_SCALE, SINH_Z
 from delssome_fm.train.pack import OPTIONAL_TARGETS, TARGETS
 
 Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24", "fc_net")   # fcd: a raw CDF
+ANALYTIC = ("none", "fc", "fc_fcd")              # Stage1Config.analytic
+DECAY_LOG10_CLIP = 3.0                           # the decay feature: clip(log10 decay, +-3) / 3
+
+
+@dataclass
+class AnalyticBatch:
+    """The linearised network's statistics for a batch's rows (train/analytic.py).
+
+    pairwise:  (B, E)  arctanh FC, z-scored like the pairwise target; 0 where not fc_valid
+    fcd:       (B, L)  the FCD CDF; 0 where not fcd_valid
+    decay:     (B,)    clip(log10 of the slowest mode's decay rate, +-3) / 3; 0 where not fc_valid
+    fc_valid:  (B,)    the linearisation is stable (status 0)
+    fcd_valid: (B,)    fc_valid and every surrogate gave an FCD
+    """
+
+    pairwise: torch.Tensor
+    fcd: torch.Tensor
+    decay: torch.Tensor
+    fc_valid: torch.Tensor
+    fcd_valid: torch.Tensor
+
+    def pin_memory(self) -> "AnalyticBatch":
+        return AnalyticBatch(*(getattr(self, f.name).pin_memory()
+                               for f in dataclasses.fields(AnalyticBatch)))
 
 
 @dataclass
@@ -44,6 +70,7 @@ class Stage1Batch:
     graph: GraphBatch
     targets: dict[str, torch.Tensor]
     cma: torch.Tensor
+    analytic: AnalyticBatch | None = None
 
     def pin_memory(self) -> "Stage1Batch":
         """Called by DataLoader(pin_memory=True) for faster copies to the GPU."""
@@ -51,7 +78,8 @@ class Stage1Batch:
         graph = GraphBatch(**{f.name: pin(getattr(self.graph, f.name))
                               for f in dataclasses.fields(GraphBatch)})
         return Stage1Batch(pin(self.theta), pin(self.psi), pin(self.sc), graph,
-                           {k: pin(v) for k, v in self.targets.items()}, pin(self.cma))
+                           {k: pin(v) for k, v in self.targets.items()}, pin(self.cma),
+                           pin(self.analytic))
 
 
 class TrainingStore(Dataset):
@@ -59,8 +87,8 @@ class TrainingStore(Dataset):
     with a list of row indices returns a Stage1Batch. `rows` holds the base draws' arrays;
     `column` reads any row."""
 
-    def __init__(self, store_dir: Path, split: str, cma: bool = False):
-        root = Path(store_dir) / split
+    def __init__(self, store_dir: Path, split: str, cma: bool = False, analytic: bool = False):
+        root = self.root = Path(store_dir) / split
         if not (root / "summary.json").is_file():
             raise FileNotFoundError(f"{root}: no packed split (run scripts/pack_training_data.py)")
         self.rows = {k: np.load(root / f"{k}.npy", mmap_mode="r")
@@ -87,6 +115,38 @@ class TrainingStore(Dataset):
                              f"(one of {POLICIES}), found {self.parameter_policy!r}")
         self.n_base = len(self.rows["model"])
         self.cma_rows = self._cma_rows(Path(store_dir), split) if cma else None
+        self.analytic = self._analytic(root) if analytic else None
+        if analytic and cma:
+            raise ValueError("CMA-ES draws have no analytic features: analytic and cma_draws "
+                             "cannot both be on")
+
+    def _analytic(self, root: Path) -> dict[str, np.ndarray]:
+        names = ("analytic_status", "analytic_decay", "analytic_pairwise", "analytic_fcd")
+        missing = [k for k in names if not (root / f"{k}.npy").is_file()]
+        if missing:
+            raise FileNotFoundError(f"{root} lacks {missing}: run scripts/submit_analytic.py and "
+                                    f"scripts/pack_analytic.py")
+        arrays = {k[len("analytic_"):]: np.load(root / f"{k}.npy", mmap_mode="r") for k in names}
+        lengths = {k: len(v) for k, v in arrays.items()}
+        if set(lengths.values()) != {len(self.rows["model"])}:
+            raise ValueError(f"{root}: analytic arrays of {lengths} rows, the split has "
+                             f"{len(self.rows['model'])}")
+        return arrays
+
+    def analytic_batch(self, idx: np.ndarray) -> AnalyticBatch:
+        """The analytic features of store rows `idx` (sorted), encoded for the network."""
+        a = self.analytic
+        fc_valid = np.asarray(a["status"][idx]) == 0
+        pairwise, fcd = np.asarray(a["pairwise"][idx], np.float32), np.asarray(a["fcd"][idx], np.float32)
+        fcd_valid = fc_valid & np.isfinite(fcd).all(axis=1)
+        pairwise = (pairwise - self.norm["pairwise_mean"]) / self.norm["pairwise_sd"]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            decay = np.clip(np.log10(np.asarray(a["decay"][idx], np.float64)),
+                            -DECAY_LOG10_CLIP, DECAY_LOG10_CLIP) / DECAY_LOG10_CLIP
+        z = lambda x, ok: torch.from_numpy(np.where(ok, x, 0.0).astype(np.float32))   # noqa: E731
+        return AnalyticBatch(pairwise=z(pairwise, fc_valid[:, None]), fcd=z(fcd, fcd_valid[:, None]),
+                             decay=z(decay, fc_valid), fc_valid=torch.from_numpy(fc_valid),
+                             fcd_valid=torch.from_numpy(fcd_valid))
 
     def _cma_rows(self, store_dir: Path, split: str) -> dict[str, np.ndarray]:
         root = store_dir / f"{split}_cma"
@@ -138,7 +198,8 @@ class TrainingStore(Dataset):
                            psi=encode(self.column("psi", idx)),
                            sc=torch.from_numpy(self.sc[self.models["sc_group"][model]]),
                            graph=self._graphs(model), targets=targets,
-                           cma=torch.from_numpy(idx >= self.n_base))
+                           cma=torch.from_numpy(idx >= self.n_base),
+                           analytic=None if self.analytic is None else self.analytic_batch(idx))
 
     def _target(self, name: str, x: np.ndarray) -> np.ndarray:
         if name not in Z_SCORED:
@@ -271,16 +332,17 @@ class Stage1DataModule(L.LightningDataModule):
     too (TrainingStore)."""
 
     def __init__(self, store_dir: Path, batch_size: int, val_rows: int | None, num_workers: int,
-                 seed: int, composition: Composition, cma: bool = False):
+                 seed: int, composition: Composition, cma: bool = False,
+                 analytic: bool = False):
         super().__init__()
         self.store_dir, self.batch_size, self.val_rows = Path(store_dir), batch_size, val_rows
         self.num_workers, self.seed, self.composition = num_workers, seed, composition
-        self.cma = cma
+        self.cma, self.analytic = cma, analytic
 
     def setup(self, stage: str | None = None) -> None:
-        self.train = TrainingStore(self.store_dir, "train", cma=self.cma)
+        self.train = TrainingStore(self.store_dir, "train", cma=self.cma, analytic=self.analytic)
         self.train_rows = subset_rows(self.train, self.composition)
-        self.val = TrainingStore(self.store_dir, "val", cma=self.cma)
+        self.val = TrainingStore(self.store_dir, "val", cma=self.cma, analytic=self.analytic)
         pool = np.arange(len(self.val))
         if self.composition.coupled_draws:
             pool = coupled_rows(self.val, pool, self.composition.coupled_threshold)

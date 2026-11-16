@@ -45,8 +45,10 @@ def main() -> None:
     module = load_stage1(args.checkpoint).to("cuda" if torch.cuda.is_available() else "cpu")
     module.cfg = override(module.cfg, args.set)
     threshold = module.cfg.coupled_threshold
-    stores = {"synthetic_test": TrainingStore(module.cfg.store_dir, "test")} if args.test_rows else {}
-    stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}")
+    analytic = module.reads_analytic
+    stores = ({"synthetic_test": TrainingStore(module.cfg.store_dir, "test", analytic=analytic)}
+              if args.test_rows else {})
+    stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}", analytic=analytic)
                    for n in args.models or cfg.models for v in args.variants})
     arrays, table = {}, {}
     for split, store in stores.items():

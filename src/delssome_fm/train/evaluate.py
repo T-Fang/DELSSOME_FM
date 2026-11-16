@@ -41,6 +41,8 @@ LEGACY_DEFAULTS = {
     "stat_loss": True,               # added 2026-10-25: every earlier run trained on them
     "catch24_loss": False,           # added 2026-10-25
     "fc_net_loss": False,            # added 2026-10-26
+    "analytic": "none",              # added 2026-11-16
+    "analytic_inputs": "heads",      # unused when analytic is none
     "coupled_draws_only": False,     # added 2026-10-26
     "token_scheme": "region",        # added 2026-10-29: the only scheme before
     "embed_theta": True,             # added 2026-10-29; region tokens always embed theta
@@ -89,7 +91,7 @@ def evaluate(module: Stage1Module, store_dir: Path, split: str, batch_size: int 
     training rows), or on a seeded subset of max_rows of them. cma: the split's CMA-ES rows
     follow its base rows (TrainingStore(cma=True)), as in the training rows of a run that
     trained on them."""
-    store = TrainingStore(store_dir, split, cma=cma)
+    store = TrainingStore(store_dir, split, cma=cma, analytic=module.reads_analytic)
     rows = np.arange(len(store)) if candidates is None else np.asarray(candidates)
     if max_rows is not None and max_rows < len(rows):
         rows = np.sort(np.random.default_rng(seed).choice(rows, max_rows, replace=False))
@@ -120,7 +122,7 @@ def per_model_errors(module: Stage1Module, store_dir: Path, split: str,
     """Each model's mean squared error per group (and their sum, `total`) over its rows in the
     split, or in a seeded subset of max_rows rows; `model` (store row of each model) and
     `mean_fc` (from model_mean_fc) say which models these are. Every model weighs the same."""
-    store = TrainingStore(store_dir, split)
+    store = TrainingStore(store_dir, split, analytic=module.reads_analytic)
     rows = np.arange(len(store))
     if max_rows is not None and max_rows < len(rows):
         rows = np.sort(np.random.default_rng(seed).choice(rows, max_rows, replace=False))

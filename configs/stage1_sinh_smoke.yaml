@@ -37,6 +37,8 @@ coupled_share: 0.5
 coupled_threshold: 0.05     # coupled: model mean FC > this
 coupled_draws_only: false  # true: train and validate on coupled draws only (2026-10-26)
 cma_draws: false          # true: also the store's CMA-ES draws (<split>_cma; generation.md §9)
+analytic: none            # none | fc | fc_fcd: the linearised network's FC (and FCD) as inputs (architecture.md §7.14)
+analytic_inputs: heads    # heads | tokens | both: where they enter; unused when analytic is none
 
 # optimisation
 batch_size: 256

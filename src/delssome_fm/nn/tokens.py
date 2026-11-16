@@ -86,3 +86,41 @@ class ParameterTokens(nn.Module):
         x = torch.cat([t, kappa[:, None].expand(B, N, P, -1),
                        sc[:, :, None].expand(B, N, P, N)], dim=-1)
         return self.mlp(x)
+
+
+class AnalyticTokens(nn.Module):
+    """The linearised network's statistics as tokens (architecture.md §7.14): one per region,
+    from the region's row of the analytic FC as the SC row enters a parameter token, and one
+    global token from the analytic mean FC, the slowest mode's decay rate and, with
+    `n_fcd_levels`, the analytic FCD CDF. A draw without analytic FC gets a learned "missing"
+    vector in place of each (a zero FC would be read as "uncoupled")."""
+
+    def __init__(self, d: int, n_regions: int, n_fcd_levels: int):
+        super().__init__()
+        self.n_fcd_levels = n_fcd_levels
+        self.region = MLP([n_regions, d, d])
+        self.overall = MLP([3 + n_fcd_levels, d, d])
+        self.missing_region = nn.Parameter(torch.randn(d) * 0.02)
+        self.missing_overall = nn.Parameter(torch.randn(d) * 0.02)
+        i, j = torch.triu_indices(n_regions, n_regions, offset=1)
+        position = torch.zeros(n_regions, n_regions, dtype=torch.long)
+        position[i, j] = position[j, i] = torch.arange(len(i)) + 1     # 0: the diagonal
+        self.register_buffer("position", position, persistent=False)
+
+    def forward(self, pairwise: torch.Tensor, fcd: torch.Tensor, decay: torch.Tensor,
+                fc_valid: torch.Tensor, fcd_valid: torch.Tensor) -> torch.Tensor:
+        """
+        pairwise: (B, E) z-scored arctanh analytic FC;  fcd: (B, L);  decay: (B,)
+        fc_valid, fcd_valid: (B,) bool
+        returns: (B, N + 1, d) the region tokens, then the global token
+        """
+        B = len(pairwise)
+        padded = torch.cat([pairwise.new_zeros(B, 1), pairwise], dim=1)
+        rows = padded[:, self.position]                                # (B, N, N), diagonal 0
+        region = torch.where(fc_valid[:, None, None], self.region(rows), self.missing_region)
+        x = [pairwise.mean(1, keepdim=True), decay[:, None], fcd_valid[:, None].to(pairwise.dtype)]
+        if self.n_fcd_levels:
+            x.append(fcd)
+        overall = torch.where(fc_valid[:, None], self.overall(torch.cat(x, dim=1)),
+                              self.missing_overall)
+        return torch.cat([region, overall[:, None]], dim=1)
