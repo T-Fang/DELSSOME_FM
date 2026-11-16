@@ -826,3 +826,17 @@ Decided by the project lead: give the network the analytic FC as an input, and t
 | stable and slower than 0.02/s: regime right, coupled 1 − r | 0.827, 0.395 | 0.767, 0.743 |
 
 Where the slowest mode is faster than 0.02/s the analysis is equally good on both corpora. The fixed-gain corpus has few coupled draws there: 40% of its coupled rows are slower (rates down to 10⁻⁴/s against an 864-s scan; §12 of generation.md found half of that corpus's coupled draws stay coupled with every gain at zero), and 36% have no answer, mostly models still drifting after 300 s.
+
+### 7.15 Analytic statistics as network inputs (2026-11-16; implemented, features being computed)
+
+Decided by the project lead: the anchored corpus; analytic FC, and in a second arm FC and FCD; each fed in one place or in both (the simpler one is preferred if it does as well); a learned "missing" vector for draws without an analytic answer; 4 surrogates per draw for the FCD.
+
+**Features** (`train/analytic.py`, `scripts/submit_analytic.py`, `pack_analytic.py`): per store row, `analytic_status` (stable, unstable, none, a region without variance), `analytic_decay`, `analytic_pairwise` (arctanh of the analytic FC, z-scored at load like the pairwise target) and `analytic_fcd` (mean CDF of 4 surrogates). Submitted 2026-11-16 for the anchored store: 600 jobs of 200 store models, from the frozen checkout `outputs/analytic/code_5cda2db`. The reference-model stores get theirs from `scripts/analytic_reference.py`.
+
+**Where they enter** (`Stage1Config.analytic`: none | fc | fc_fcd; `analytic_inputs`: heads | tokens | both):
+
+- **heads.** The prediction starts from the analytic value and the head learns the correction. FC (the `mlp_concat` head): $\widehat{FC}_{ij} = g(h_\text{CLS})\,a_{ij} + \text{MLP}([r_i \,\|\, r_j \,\|\, h_\text{CLS} \,\|\, W_a[a_{ij}, \text{valid}]])$, symmetrised as before. FCD: $\text{softmax}(\text{MLP}(h_\text{CLS}) + \text{MLP}_a([A, \text{valid}]) + g'(h_\text{CLS}) \log(\Delta A + 10^{-4}))$, cumulated, with $A$ the analytic CDF. The gates $g, g'$ are 1 plus a linear map of $h_\text{CLS}$ that starts at zero. Without an analytic value the starting term is dropped.
+- **tokens.** 68 region tokens, each an MLP of the region's row of the analytic FC (as the SC row enters a parameter token), and one global token (analytic mean FC, the slowest mode's decay rate as $\text{clip}(\log_{10}, \pm 3)/3$, whether there is an FCD, and with `fc_fcd` the analytic CDF), after the parameter tokens with a fourth segment embedding. A draw without an analytic FC gets a learned missing vector in place of each. $r_i$ stays the mean of region $i$'s parameter-token outputs.
+- The regional and FC-moment heads are unchanged; with `heads` alone they see no analytic input.
+
+Six runs are planned on the baseline recipe (`anch_ptok_raw_cost`): {fc, fc_fcd} × {heads, tokens, both}.
