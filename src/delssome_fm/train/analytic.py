@@ -18,7 +18,8 @@ model's group SC rescaled as the simulator sees it, and its start the model's re
 
 `analytic_models` computes the rows of a range of store models; a job writes them with
 `write_chunk`; `pack_analytic` checks that the chunks cover the split exactly once and writes
-the four arrays into the store split.
+the four arrays into the store split. `analytic_single_model` does a split that holds one
+model given by its card (the reference-model stores, sim/reference_eval.py) in one go.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from delssome_fm.sim.corpus import SPLIT_STREAM, model_sample
 from delssome_fm.sim.integrate import rescale_sc
 from delssome_fm.sim.linear import LinearModel, analytic_fc, surrogate
 from delssome_fm.sim.summary import fcd_levels, stable_arctanh, summarize
+from delssome_fm.spec.card import ModelCard
 from delssome_fm.spec.compile import compile_card
 
 ANALYTIC_TAG = 8          # random stream [seed, split, index, 8, draw, surrogate] (corpus.py: 1-7)
@@ -57,12 +59,7 @@ def analytic_models(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, store_dir: Pat
                         for k in ("theta", "psi", "draw"))
     n_levels = np.load(root / "fcd.npy", mmap_mode="r").shape[1]
     sc = np.load(root / "sc.npy")                    # (G, N, N), each divided by its maximum
-    rows = np.arange(start[first], start[stop])
-    E = sc.shape[1] * (sc.shape[1] - 1) // 2
-    out = {"row": rows, "analytic_status": np.full(len(rows), -1, np.int8),
-           "analytic_decay": np.full(len(rows), np.nan, np.float32),
-           "analytic_pairwise": np.full((len(rows), E), np.nan, np.float32),
-           "analytic_fcd": np.full((len(rows), n_levels), np.nan, np.float32)}
+    out = _empty(np.arange(start[first], start[stop]), sc.shape[1], n_levels)
     for m in range(first, stop):
         sample = model_sample(corpus_cfg, split, int(index[m]))
         card = sample.card
@@ -79,6 +76,38 @@ def analytic_models(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, store_dir: Pat
             _row(out, r - start[first], linear, x0, theta[r, :, :P], psi[r, :K],
                  np.asarray(rescale_sc(jnp.asarray(sc[group[m]]))), sim_cfg, seed, n_surrogates)
     return out
+
+
+def _empty(rows: np.ndarray, n_regions: int, n_levels: int) -> dict[str, np.ndarray]:
+    E = n_regions * (n_regions - 1) // 2
+    return {"row": rows, "analytic_status": np.full(len(rows), -1, np.int8),
+            "analytic_decay": np.full(len(rows), np.nan, np.float32),
+            "analytic_pairwise": np.full((len(rows), E), np.nan, np.float32),
+            "analytic_fcd": np.full((len(rows), n_levels), np.nan, np.float32)}
+
+
+def analytic_single_model(root: Path, card: ModelCard, sim_cfg: SimConfig, seed: list[int],
+                          n_surrogates: int) -> dict[str, float]:
+    """Write the ARRAYS of a store split `root` whose rows are all draws of `card` (one model,
+    one SC), started at zero; returns the share of each status. A surrogate's random numbers
+    are [*seed, ANALYTIC_TAG, the row's draw, surrogate number]."""
+    with np.load(root / "models.npz") as m:
+        if len(m["index"]) != 1:
+            raise ValueError(f"{root} holds {len(m['index'])} models, expected one")
+    theta, psi, draw = (np.load(root / f"{k}.npy", mmap_mode="r")
+                        for k in ("theta", "psi", "draw"))
+    n_levels = np.load(root / "fcd.npy", mmap_mode="r").shape[1]
+    sc = np.asarray(rescale_sc(jnp.asarray(np.load(root / "sc.npy")[0])))
+    linear = LinearModel(compile_card(card))
+    P, K, V = len(card.regional_params), len(card.global_params), card.n_states
+    out = _empty(np.arange(len(theta)), len(sc), n_levels)
+    for r in range(len(theta)):
+        _row(out, r, linear, np.zeros((len(sc), V)), theta[r, :, :P], psi[r, :K], sc, sim_cfg,
+             [*seed, ANALYTIC_TAG, int(draw[r])], n_surrogates)
+    for k in ARRAYS:
+        np.save(root / f"{k}.npy", out[k])
+    status = out["analytic_status"]
+    return {name: float((status == code).mean()) for name, code in STATUS_CODE.items()}
 
 
 def _row(out: dict, k: int, linear: LinearModel, x0, theta, psi, sc, sim_cfg: SimConfig,
