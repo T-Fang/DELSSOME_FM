@@ -725,6 +725,8 @@ Every stage-1 model so far predicts the fitted MFM, FIC and Hopf sets as uncoupl
 
 So the statistics are determined by the inputs through a computation of known form (solve the fixed point, then the linear response), and the network does not carry it out for the reference models. The 6% of rows without a stable fixed point (28% of them coupled) are outside this analysis.
 
+**FCD from the same linearisation (`fcd_lna.py`).** The FCD CDF has no closed form, but the linearised network fixes the BOLD cross-spectrum, so one surrogate Gaussian series with that spectrum (1,200 frames; a 32 times finer grid for direct observation) can be summarised by `summary.summarize` like a simulation. Median KS against the stored simulation of the fitted sets: MFM 0.119, FIC 0.183, Hopf 0.580; between two simulations of the same parameters 0.115, 0.139, 0.156; the network 0.89, 0.89, 0.90. The linearisation gives MFM's FCD at the noise floor and FIC's near it, and fails on Hopf, whose FC it also underestimates (0.17 against 0.30): Hopf's fluctuations are not small against its nonlinearity. Not yet tested on synthetic draws.
+
 **What is special about the fitted sets: they sit on a ridge.**
 
 | slowest collective mode / local rate (1/s) | MFM | FIC | Hopf |
