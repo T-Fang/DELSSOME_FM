@@ -772,3 +772,41 @@ Median mean FC of the fitted sets when one input is scaled (simulation; the anal
 | Hopf | two states, two channels sharing one gain (outside the grammar), a decay rate below the anchored corpus's floor. The fixed-gain corpus had slow models and its network leaned towards coupling for them (§7.11); the anchored corpus removed them |
 
 The anchored prior made more models robustly coupled (coupling follows the designed ratio), which is what the network already learns. It did not add the reference models' regime: a narrow ridge next to an instability, reached through the transfer input.
+
+### 7.14 The linearised network as a library module, and a pilot (2026-11-16)
+
+Decided by the project lead: give the network the analytic FC as an input, and test a second arm with the analytic FC and FCD. This section covers the feature computation; where the features enter the network is not decided yet.
+
+`sim/linear.py` (tests: `tests/test_linear.py`) replaces the diagnosis script of §7.13 and differs from it in three ways:
+
+- **The simulator's map, not continuous time.** The states follow z ← (I + dt A) z + √dt B ξ, as `sim/integrate.py` steps them. Stability is that of this map.
+- **Hemodynamics inside the system.** Under Balloon-Windkessel each region's four hemodynamic states, linearised at the steady state for that region's resting observable, are appended to the state vector; there is no frequency grid. FC is the stationary covariance of the map read out through the BOLD signal.
+- **Exact surrogates.** Sampled every TR the map is z ← Mⁿ z + η with cov(η) = S − Mⁿ S Mⁿᵀ, so a Gaussian series with the linearised network's statistics is drawn directly and `summary.summarize` gives its FCD.
+
+**Reference models** (50 fitted sets each; FCD from the mean CDF of 4 surrogates):
+
+| | MFM | FIC | Hopf |
+|---|---|---|---|
+| FC pattern 1 − r / d against simulation | 0.033 / 0.009 | 0.037 / 0.059 | 0.025 / 0.015 |
+| FCD KS against simulation | 0.124 | 0.147 | 0.113 |
+| FCD KS between two simulations | 0.115 | 0.139 | 0.156 |
+
+**Synthetic pilot** (the 4,712 test rows of §7.13; network = `anch_ptok_raw_cost`):
+
+| outcome | share of rows | simulated coupled |
+|---|---|---|
+| stable | 89.3% | 19% |
+| unstable under the map | 6.7% | 32% |
+| no resting state found | 4.0% | 18% |
+
+| stable rows | analytic | network |
+|---|---|---|
+| coupled or not, share right | 0.981 | |
+| coupled rows: FC pattern 1 − r / d | 0.078 / 0.008 | 0.191 / 0.042 |
+| coupled rows: FCD KS (1 surrogate / mean of 4) | 0.116 / 0.089 | 0.336 |
+| uncoupled rows: FCD KS (1 surrogate / mean of 4) | 0.048 / 0.038 | 0.059 |
+
+- Where the slowest mode decays below 0.02/s (3.5% of the stable rows) the regime is right in 82% and the coupled rows' KS is 0.17; elsewhere 98–99% and 0.08–0.09.
+- By number of states, the share of rows that are stable is 94% (one), 87% (two), 83% (three).
+- **A property of the corpus found on the way.** 4.7% of the rows are stable in continuous time but not under the 1-ms Euler step: two thirds of them have a mode faster than 2,000/s, Euler's limit at this step (the anchored prior caps rates at 1,000/s at nominal values, and a draw moves the levels by up to half a decade); the rest have fast oscillating modes. These simulations did not diverge, so what they show is partly the integrator.
+- **Cost.** 0.12 CPU-s per row for the linearisation and FC, 0.13 for each surrogate with its FCD (0.02–0.37 and 0.08–0.25 by model size): 0.25 with one surrogate, 0.57 with four. For the anchored store's 7.4 M rows: about 250 CPU-h for FC alone, 510 with one surrogate, 1,170 with four.
