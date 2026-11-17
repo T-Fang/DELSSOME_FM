@@ -908,3 +908,46 @@ The gain is where the linearisation applies; the draws it does not cover (unstab
 **Report files** (2026-11-17): `outputs/report_anchored/comparison_table.md` (all runs of the anchored corpus, `comparison_table.py --runs anchored`); per run `outputs/report_sinh/anch_anf*/figures`; learning curves `outputs/report_anchored/figures/learning_curves_analytic.png`. In the curves the coupled 1 − r and d of the analytic runs are flat from the first validation: the analytic FC passes through from the start, and what training adds is the FCD (FC-only tokens) and the regional statistics.
 
 **The draws without an analytic answer** (6.8% of the test rows). They are not worse fits to the empirical data than the others: of the 1% of 200,000 test rows with the lowest cost against their group's empirical FC and FCD, 6.3% have no analytic answer (5% best: 6.3%; 0.1% best: 10.5%, 21 rows). What the noise-free map does for 600 of them, run for 300 s: 40% oscillate on their own (median period 21 ms), 29% flip sign every step (the integrator), 20% settle at a resting state the tool does not report, 9% are still drifting, 3% diverge. The 633 such rows among the best-fitting 5% have the same composition.
+
+### 7.17 Draws without an analytic answer: the working policy, two fixes, and step artefacts (2026-11-17)
+
+**Working policy** (project lead, 2026-11-17): a draw without an analytic answer is simulated. Whether a draw has one is known before any prediction.
+
+**What those draws do.** `outputs/report_anchored/figures/no_answer_examples.png` shows one example per behaviour: the eigenvalues of the noise-free Jacobian at the resting point with the stable disc of the 1-ms Euler map ($|1 + dt\,\lambda| < 1$), the noise-free run (the last 50 ms of 300 s at every step, and the whole 300 s), and the corpus simulation with noise. On 600 such test draws (`diag_euler.py`):
+
+- **Flips every step** (29% of them): 94% are stable in continuous time at the resting point; their fastest mode decays faster than Euler's limit $2/dt$ = 2,000/s (median −2,434/s), so the map alternates.
+- **Oscillates on its own** (40%): 70% of those with a resting point are stable in continuous time; the step undamps a damped oscillation (median Re λ −131/s, |Im λ| 623 rad/s, period 12 ms) or alternates as above. The remaining 30% oscillate in the model itself (median Re λ +5/s, period 300 ms).
+- **Settles at a resting state the tool missed** (20%): autodiff's Jacobian there is not finite (14 of 15 checked): a saturated logistic or Wong-Wang evaluates inf × 0 in the chain rule, while the drift and its finite differences are finite.
+
+The observed signal of a step artefact can look ordinary (the BOLD filter averages the alternation away), but it is the integrator's, not the model's.
+
+**Step 2: the Jacobian.** `sim/linear.py` replaces each non-finite autodiff entry by its central finite difference (drift finite). Stable rows are unchanged: their search never met a non-finite Jacobian.
+
+**Step 3: step artefacts.** New status `integrator`: a resting point stable in continuous time that the simulator's map does not hold (the model's own modes, or Balloon-Windkessel's at an extreme resting flow). Euler's stable region lies inside Re λ < 0, so the step can only destabilise; this status is exactly the set of draws the step, not the model, makes unstable. Such draws are excluded like diverged draws: `Stage1Config.exclude_step_artefacts` (`TrainingStore.in_use`, every row pool).
+
+**The store patched** (120 jobs, 51 CPU-h; `analytic_features.py --patch`, `pack_analytic.py --patch`; old status and decay kept as `analytic_{status,decay}_v1.npy`). Only rows without a stable answer were recomputed (6.9%).
+
+| share of rows | stable | integrator | unstable | none | no variance |
+|---|---|---|---|---|---|
+| train, before | 93.1% | — | 4.3% | 2.5% | 0.07% |
+| train, after | 94.5% | 3.5% | 1.2% | 0.8% | 0.07% |
+| val, after | 94.2% | 3.6% | 1.2% | 0.8% | 0.09% |
+| test, after | 94.4% | 3.4% | 1.4% | 0.8% | 0.07% |
+
+Newly answered rows (val 8,713, test 7,459): regime right 0.96; coupled rows |d| 0.012, FCD KS 0.11–0.12. Of the old "unstable" rows 76% (val) are step artefacts; of the old "none" rows 52% are now stable. Step artefacts are 31% coupled and 5% of all coupled val rows. Without an answer and not a step artefact: 2.1% of the rows (unstable 1.2%, none 0.8%, no variance 0.1%), 4% of the coupled rows.
+
+Reference stores (`analytic_reference.py`, old status kept in `outputs/reference_eval_sinh/analytic_v1_backup`): every fitted and scrambled or shuffled set stable; random draws of the cards stable 96.7% (MFM), 98.9% (FIC), 80.8% (Hopf); integrator 2.8%, 0.6%, **19.2%** (the corpus prior's ω for Hopf reaches oscillations the step undamps).
+
+**Re-evaluation** (no retraining; `evaluate_final.py --prefix`; every val and test row): `final_patched/` with the patched features on all rows, `final_noartefact/` with step artefacts left out. Test:
+
+| run | MSE total: final / patched / no artefacts | R² FC | coupled 1 − r | coupled KS |
+|---|---|---|---|---|
+| baseline | 1.944 / — / 1.803 | 0.325 / — / 0.340 | 0.230 / — / 0.220 | 0.394 / — / 0.377 |
+| FC, heads | 1.728 / 1.721 / 1.569 | 0.527 / 0.533 / 0.568 | 0.112 / 0.110 / 0.101 | 0.403 / 0.403 / 0.387 |
+| FC, tokens | 1.536 / 1.502 / 1.327 | 0.453 / 0.467 / 0.505 | 0.189 / 0.188 / 0.176 | 0.120 / 0.119 / 0.112 |
+| FC, both | 1.487 / 1.455 / 1.279 | 0.478 / 0.490 / 0.530 | 0.111 / 0.109 / 0.100 | 0.118 / 0.117 / 0.111 |
+| FC + FCD, heads | 1.750 / 1.740 / 1.596 | 0.538 / 0.546 / 0.576 | 0.112 / 0.110 / 0.101 | 0.113 / 0.112 / 0.107 |
+| FC + FCD, tokens | 1.489 / 1.455 / 1.265 | 0.465 / 0.478 / 0.525 | 0.173 / 0.171 / 0.160 | 0.103 / 0.102 / 0.097 |
+| FC + FCD, both | 1.535 / 1.498 / 1.313 | 0.460 / 0.474 / 0.517 | 0.111 / 0.109 / 0.100 | 0.105 / 0.104 / 0.099 |
+
+The patched features help a little (total −0.01 to −0.03); leaving out the 3.4% step artefacts lowers the MSE total by 8–12% for every run: they are among the hardest rows, as targets the integrator rather than the model produced. The runs were trained with them; whether training without them helps is a retraining question.
