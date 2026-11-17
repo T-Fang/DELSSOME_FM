@@ -20,6 +20,13 @@ model's group SC rescaled as the simulator sees it, and its start the model's re
 `write_chunk`; `pack_analytic` checks that the chunks cover the split exactly once and writes
 the four arrays into the store split. `analytic_single_model` does a split that holds one
 model given by its card (the reference-model stores, sim/reference_eval.py) in one go.
+
+Patching (architecture.md §7.17). When sim/linear.py changes in a way that can only change
+rows without a stable answer (the finite-difference Jacobian, the "integrator" status), those
+rows are recomputed (`analytic_models(only=...)`, chunks under <store>/analytic_patch/<split>/)
+and written over the packed arrays by `patch_analytic`, which keeps the old status and decay
+as analytic_{status,decay}_v1.npy. Rows with a stable answer are unchanged by such a change:
+their search never met a non-finite Jacobian, and their map contracts.
 """
 
 from __future__ import annotations
@@ -41,14 +48,16 @@ from delssome_fm.spec.card import ModelCard
 from delssome_fm.spec.compile import compile_card
 
 ANALYTIC_TAG = 8          # random stream [seed, split, index, 8, draw, surrogate] (corpus.py: 1-7)
-STATUS_CODE = {"stable": 0, "unstable": 1, "none": 2, "no_variance": 3}
+STATUS_CODE = {"stable": 0, "unstable": 1, "none": 2, "no_variance": 3, "integrator": 4}
 ARRAYS = ("analytic_status", "analytic_decay", "analytic_pairwise", "analytic_fcd")
 
 
 def analytic_models(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, store_dir: Path, split: str,
-                    first: int, stop: int, n_surrogates: int) -> dict[str, np.ndarray]:
+                    first: int, stop: int, n_surrogates: int,
+                    only: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """The analytic features of store models first..stop-1 of `split`, one row per store row
-    of theirs, in store order; also `row` (R,), the rows' store indices."""
+    of theirs, in store order; also `row` (R,), the rows' store indices. only: a boolean
+    mask over the split's rows; then just those rows (a model without one is skipped)."""
     root = Path(store_dir) / split
     with np.load(root / "models.npz") as m:
         index, group, n_rows, offsets = m["index"], m["sc_group"], m["n_rows"], m["node_offset"]
@@ -59,8 +68,16 @@ def analytic_models(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, store_dir: Pat
                         for k in ("theta", "psi", "draw"))
     n_levels = np.load(root / "fcd.npy", mmap_mode="r").shape[1]
     sc = np.load(root / "sc.npy")                    # (G, N, N), each divided by its maximum
-    out = _empty(np.arange(start[first], start[stop]), sc.shape[1], n_levels)
+    rows = np.arange(start[first], start[stop])
+    if only is not None:
+        if len(only) != start[-1]:
+            raise ValueError(f"only has {len(only)} entries, the split {start[-1]} rows")
+        rows = rows[np.asarray(only[start[first]:start[stop]], bool)]
+    out = _empty(rows, sc.shape[1], n_levels)
+    position = {int(r): k for k, r in enumerate(rows)}
     for m in range(first, stop):
+        if not any(int(r) in position for r in range(start[m], start[m + 1])):
+            continue
         sample = model_sample(corpus_cfg, split, int(index[m]))
         card = sample.card
         compiled = compile_card(card)
@@ -72,8 +89,10 @@ def analytic_models(corpus_cfg: CorpusConfig, sim_cfg: SimConfig, store_dir: Pat
         P, K, V = len(card.regional_params), len(card.global_params), card.n_states
         x0 = np.tile(sample.rest if sample.rest is not None else np.zeros(V), (sc.shape[1], 1))
         for r in range(start[m], start[m + 1]):
+            if r not in position:
+                continue
             seed = [corpus_cfg.seed, SPLIT_STREAM[split], int(index[m]), ANALYTIC_TAG, int(draw[r])]
-            _row(out, r - start[first], linear, x0, theta[r, :, :P], psi[r, :K],
+            _row(out, position[r], linear, x0, theta[r, :, :P], psi[r, :K],
                  np.asarray(rescale_sc(jnp.asarray(sc[group[m]]))), sim_cfg, seed, n_surrogates)
     return out
 
@@ -140,13 +159,14 @@ def _fcd(sim_cfg: SimConfig, stride: int):
     return jax.jit(lambda y: fcd_levels(summarize(y, sim_cfg).fcd_cdf, stride))
 
 
-def chunk_path(store_dir: Path, split: str, first: int, stop: int) -> Path:
-    return Path(store_dir) / "analytic" / split / f"models{first:06d}-{stop:06d}.npz"
+def chunk_path(store_dir: Path, split: str, first: int, stop: int, patch: bool = False) -> Path:
+    folder = "analytic_patch" if patch else "analytic"
+    return Path(store_dir) / folder / split / f"models{first:06d}-{stop:06d}.npz"
 
 
 def write_chunk(store_dir: Path, split: str, first: int, stop: int, arrays: dict[str, np.ndarray],
-                n_surrogates: int) -> Path:
-    path = chunk_path(store_dir, split, first, stop)
+                n_surrogates: int, patch: bool = False) -> Path:
+    path = chunk_path(store_dir, split, first, stop, patch)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npz")               # write then rename: never a partial chunk
     np.savez(tmp, first=first, stop=stop, n_surrogates=n_surrogates, **arrays)
@@ -195,6 +215,53 @@ def pack_analytic(store_dir: Path, split: str) -> dict[str, int | float]:
         out[k].flush()
         (root / f"{k}.tmp.npy").replace(root / f"{k}.npy")
     summary = {"rows": n, "n_surrogates": surrogates,
+               **{name: float((status == code).mean()) for name, code in STATUS_CODE.items()}}
+    (root / "analytic_summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
+
+
+def patch_targets(store_dir: Path, split: str) -> np.ndarray:
+    """(R,) bool: the rows a patch recomputes, those without a stable answer in the packed
+    arrays. Raises if the split was patched already (the targets would be the new ones)."""
+    root = Path(store_dir) / split
+    if (root / "analytic_status_v1.npy").is_file():
+        raise ValueError(f"{root} was patched already (analytic_status_v1.npy exists)")
+    return np.load(root / "analytic_status.npy") != STATUS_CODE["stable"]
+
+
+def patch_analytic(store_dir: Path, split: str) -> dict[str, int | float]:
+    """Write the patch chunks (<store>/analytic_patch/<split>/) over the packed ARRAYS of the
+    split, keeping the old status and decay as analytic_{status,decay}_v1.npy; returns the
+    new summary. Raises unless the chunks hold exactly the patch targets, once each, and the
+    targets' old FC and FCD are all NaN (so nothing with a value is overwritten)."""
+    root = Path(store_dir) / split
+    targets = np.flatnonzero(patch_targets(store_dir, split))
+    chunks = sorted((Path(store_dir) / "analytic_patch" / split).glob("models*.npz"))
+    if not chunks:
+        raise FileNotFoundError(f"no patch chunks for {split}")
+    rows = np.concatenate([np.load(c)["row"] for c in chunks])
+    if not np.array_equal(np.sort(rows), targets) or len(np.unique(rows)) != len(rows):
+        raise ValueError(f"{split}: the patch chunks hold {len(rows)} rows ({len(np.unique(rows))} "
+                         f"distinct), the targets are {len(targets)} rows")
+    arrays = {k: np.load(root / f"{k}.npy", mmap_mode="r+") for k in ARRAYS}
+    for k in ("analytic_pairwise", "analytic_fcd"):
+        if not np.isnan(arrays[k][targets]).all():
+            raise ValueError(f"{split}: some target rows have values in {k}: not a patch of rows "
+                             f"without an answer")
+    for k in ("analytic_status", "analytic_decay"):
+        np.save(root / f"{k}_v1.tmp.npy", np.asarray(arrays[k]))
+        (root / f"{k}_v1.tmp.npy").replace(root / f"{k}_v1.npy")
+    surrogates = set()
+    for c in chunks:
+        with np.load(c) as d:
+            surrogates.add(int(d["n_surrogates"]))
+            for k in ARRAYS:
+                arrays[k][d["row"]] = d[k]
+    for a in arrays.values():
+        a.flush()
+    status = np.asarray(arrays["analytic_status"])
+    summary = {"rows": int(len(status)), "n_surrogates": sorted(surrogates),
+               "patched_rows": int(len(targets)),
                **{name: float((status == code).mean()) for name, code in STATUS_CODE.items()}}
     (root / "analytic_summary.json").write_text(json.dumps(summary, indent=2))
     return summary

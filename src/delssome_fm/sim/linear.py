@@ -22,10 +22,17 @@ For one draw (theta, psi, SC):
                              with the linearised network's statistics costs T matrix products;
                              sim/summary.summarize then gives its FCD like a simulation's
 
-Status: "stable" (the analysis applies); "unstable" (a fixed point was found but the map
-does not contract there: the model leaves it, or the hemodynamic states do at that resting
-flow); "none" (no fixed point was found, or a
-region's resting observable puts Balloon-Windkessel's flow at or below zero).
+Status: "stable" (the analysis applies); "unstable" (a fixed point was found but the model
+leaves it: it is unstable in continuous time); "integrator" (the fixed point is stable in
+continuous time, but the simulator's map does not contract there: a mode faster than Euler's
+limit 2 / dt, or an oscillating mode the step undamps, in the model or in the hemodynamic
+states; what the simulation shows is then the integrator's, not the model's, and such draws
+are excluded like diverged ones, architecture.md §7.17); "none" (no fixed point was found, or
+a region's resting observable puts Balloon-Windkessel's flow at or below zero).
+
+The Jacobian is autodiff's, except where autodiff gives a non-finite entry while the drift is
+finite: a saturated transfer function (logistic or Wong-Wang far from its operating range)
+evaluates to inf * 0 in the chain rule, so those entries are central finite differences.
 
 The numerics are float64 (jax.enable_x64 as a context manager): a slowest mode a thousand
 times slower than the local rates is the regime of interest, and float32 loses it.
@@ -46,11 +53,12 @@ from delssome_fm.sim.integrate import steps_per_frame
 from delssome_fm.spec.compile import CompiledModel
 from delssome_fm.spec.ops import JaxOps
 
-STATUSES = ("stable", "unstable", "none")
+STATUSES = ("stable", "unstable", "none", "integrator")
 IMPLICIT_STEPS, FIRST_STEP, STEP_GROWTH, LAST_STEP = 120, 1e-3, 1.25, 100.0   # s
 NEWTON_STEPS = 8
 SETTLE_S = 300.0                # the fallback's run of the noise-free map (burn-in is 144 s)
 RESIDUAL = 1e-6                 # |rhs| <= RESIDUAL * (|A| |x*|) at an accepted fixed point
+FD_STEP = 1e-6                  # finite differences: h_k = FD_STEP * max(|x_k|, 1e-3)
 STATE_BOUND = 1e8
 
 
@@ -64,7 +72,8 @@ class Linearised:
     read:   (N, n)   the observed signal's gradient
     cov:    (n, n)   the stationary covariance S = M S M^T + noise noise^T
     decay:  the decay rate of the model's slowest mode under the map (the hemodynamic states
-            excluded), -ln(spectral radius) / dt, 1/s (<= 0 when "unstable", NaN when "none")
+            excluded), -ln(spectral radius) / dt, 1/s (<= 0 when "unstable" or "integrator"
+            through the model's own modes, NaN when "none")
     """
 
     status: str
@@ -112,15 +121,32 @@ class LinearModel:
                                 x, None, length=steps)
             return x
 
+        def fd_jac(x, h, theta, psi, sc):
+            plus = jax.vmap(lambda e: noise_free(x + e, theta, psi, sc))(jnp.diag(h))
+            minus = jax.vmap(lambda e: noise_free(x - e, theta, psi, sc))(jnp.diag(h))
+            return ((plus - minus) / (2.0 * h)[:, None]).T          # column k: d rhs / d x_k
+
         self._drift = jax.jit(noise_free)
         self._settle = jax.jit(settle, static_argnames="steps")
         self._jac = jax.jit(jax.jacfwd(noise_free))
+        self._fd_jac = jax.jit(fd_jac)
         self._noise = jax.jit(jax.jacfwd(drift, argnums=1))
         self._obs = jax.jit(lambda x: obs(x.reshape(-1, V)))
         self._obs_jac = jax.jit(jax.jacfwd(lambda x: obs(x.reshape(-1, V))))
         self._bw_jac = jax.jit(jax.vmap(jax.jacfwd(bw, argnums=0)))
         self._bw_in = jax.jit(jax.vmap(jax.jacfwd(bw, argnums=1)))
         self._bw_out = jax.jit(jax.vmap(jax.jacfwd(lambda s: observe.bw_signal(s[None])[0])))
+
+    def jacobian(self, x, theta, psi, sc) -> np.ndarray:
+        """(n, n) d rhs / dx at x: autodiff, with any non-finite entry replaced by its central
+        finite difference (module docstring). Non-finite only if the drift itself is."""
+        J = np.asarray(self._jac(x, theta, psi, sc))
+        bad = ~np.isfinite(J)
+        if bad.any():
+            h = FD_STEP * np.maximum(np.abs(np.asarray(x)), 1e-3)
+            J = np.where(bad, np.asarray(self._fd_jac(jnp.asarray(x), jnp.asarray(h), theta, psi,
+                                                      sc)), J)
+        return J
 
     def resting_state(self, x0: np.ndarray, theta, psi, sc, newton_only: bool = False,
                       ) -> np.ndarray | None:
@@ -129,7 +155,7 @@ class LinearModel:
         x, dt, eye = np.asarray(x0, np.float64).reshape(-1).copy(), FIRST_STEP, np.eye(np.size(x0))
         for k in range(IMPLICIT_STEPS * newton_only, IMPLICIT_STEPS + NEWTON_STEPS):
             f = np.asarray(self._drift(x, theta, psi, sc))
-            J = np.asarray(self._jac(x, theta, psi, sc))
+            J = self.jacobian(x, theta, psi, sc) if np.isfinite(f).all() else f[:, None]
             if not (np.isfinite(f).all() and np.isfinite(J).all()):
                 return None
             lhs = eye / dt - J if k < IMPLICIT_STEPS else -J
@@ -141,7 +167,7 @@ class LinearModel:
                 return None
             dt = min(dt * STEP_GROWTH, LAST_STEP)
         f = np.asarray(self._drift(x, theta, psi, sc))
-        scale = np.abs(np.asarray(self._jac(x, theta, psi, sc))) @ np.abs(x) + 1e-12
+        scale = np.abs(self.jacobian(x, theta, psi, sc)) @ np.abs(x) + 1e-12
         return x if (np.abs(f) <= RESIDUAL * scale).all() else None
 
     def linearise(self, x0: np.ndarray, theta: np.ndarray, psi: np.ndarray, sc: np.ndarray,
@@ -170,12 +196,14 @@ class LinearModel:
                     x, radius = settled, self._radius(settled, theta, psi, sc, dt)
             if x is None:
                 return Linearised("none", float("nan"))
-            A = np.asarray(self._jac(x, theta, psi, sc))
+            A = self.jacobian(x, theta, psi, sc)
             B = np.asarray(self._noise(x, jnp.zeros_like(x), theta, psi, sc))
             C = np.asarray(self._obs_jac(x))
             decay = -np.log(radius) / dt
             B = B[:, np.abs(B).sum(axis=0) > 0]
-            if radius >= 1.0 or B.shape[1] == 0:
+            if radius >= 1.0:
+                return Linearised(_why_unstable(A), decay)
+            if B.shape[1] == 0:
                 return Linearised("unstable", decay)
             if self.hemo:
                 rest_obs = np.asarray(self._obs(x))
@@ -188,7 +216,7 @@ class LinearModel:
         # flow Balloon-Windkessel's own rates pass Euler's limit. An eigenvalue at -1 within
         # rounding makes the covariance equation singular (scipy's bilinear transform)
         if self.hemo and np.abs(np.linalg.eigvals(M)).max() >= 1.0:
-            return Linearised("unstable", decay)
+            return Linearised(_why_unstable(A), decay)
         try:
             cov = solve_discrete_lyapunov(M, noise @ noise.T)
         except np.linalg.LinAlgError:
@@ -200,7 +228,9 @@ class LinearModel:
     def _radius(self, x, theta, psi, sc, dt: float) -> float:
         """Spectral radius of the map I + dt A at x: the model's own modes decide stability,
         the hemodynamic states only filter."""
-        A = np.asarray(self._jac(x, theta, psi, sc))
+        A = self.jacobian(x, theta, psi, sc)
+        if not np.isfinite(A).all():
+            return float("inf")
         return float(np.abs(np.linalg.eigvals(np.eye(len(A)) + dt * A)).max())
 
     def _with_hemodynamics(self, A, B, C, rest_obs):
@@ -219,6 +249,13 @@ class LinearModel:
             A2[rows, :n] = np.outer(bh[i], C[i])
             C2[i, rows] = ch[i]
         return A2, np.vstack([B, np.zeros((4 * N, B.shape[1]))]), C2
+
+
+def _why_unstable(A: np.ndarray) -> str:
+    """For a fixed point the simulator's map does not hold: "unstable" if the system A (the
+    model's own, or with the hemodynamic states) is unstable in continuous time, else
+    "integrator": the step, not the model, makes it unstable."""
+    return "unstable" if np.linalg.eigvals(A).real.max() >= 0 else "integrator"
 
 
 def analytic_fc(lin: Linearised) -> np.ndarray:

@@ -169,5 +169,41 @@ def test_hemodynamics_beyond_eulers_limit_are_unstable():
                                                     np.zeros((N, N)), DT)
     rate = (1 + 7000 / observe.GAMMA) ** (1 - observe.ALPHA) / (observe.ALPHA * observe.TAU)
     assert rate > 2 / DT
-    assert lin.status == "unstable" and lin.cov is None
+    assert lin.status == "integrator" and lin.cov is None
     np.testing.assert_allclose(lin.decay, -np.log(1 - DT) / DT, rtol=1e-6)
+
+
+def test_a_mode_faster_than_eulers_limit_is_the_integrators():
+    """dx = -theta x: stable for any theta > 0 in continuous time, but the 1-ms map
+    x <- (1 - theta dt) x contracts only for theta < 2 / dt. A growth (theta < 0) is the
+    model's own instability."""
+    def status(theta_value):
+        theta = np.column_stack([np.full(N, theta_value), np.ones(N)])
+        return LinearModel(compile_card(_ou())).linearise(np.zeros((N, 1)), theta, np.array([0.0]),
+                                                          np.zeros((N, N)), DT)
+    fast, slow, growth = status(2500.0), status(1500.0), status(-1.0)
+    assert fast.status == "integrator" and fast.cov is None
+    np.testing.assert_allclose(fast.decay, -np.log(abs(1 - 2500.0 * DT)) / DT, rtol=1e-9)
+    assert slow.status == "stable" and growth.status == "unstable"
+
+
+def test_a_saturated_transfer_gets_a_finite_jacobian():
+    """dx = -x + logistic(x - 1000): the logistic is saturated (value and slope 0 within
+    float64), but autodiff's chain rule through 1 / (1 + exp(1000 - x)) gives inf * 0 = NaN.
+    The tool must still find the resting point x* = 0 and its decay rate 1/s."""
+    from delssome_fm.spec.card import Gate, Nonlinear
+    card = ModelCard(
+        name="saturated", states=("x",), linear=((Coef(1.0),),), bias=(None,),
+        nonlinear=(Nonlinear(1.0, Gate("one"), "logistic", (Coef(1.0),), Coef(-1000.0)),),
+        noise=(Coef(param="sigma"),), channels=(), observable=Observable(0, None, "direct"),
+        parameters=(Parameter("sigma", "regional"),))
+    model = LinearModel(compile_card(card))
+    with jax.enable_x64(True):
+        args = (jnp.ones((N, 1)), jnp.zeros(0), jnp.zeros((N, N)))
+        raw = np.asarray(model._jac(jnp.zeros(N), *args))
+        assert not np.isfinite(raw).all()                       # the failure being fixed
+        np.testing.assert_allclose(model.jacobian(jnp.zeros(N), *args), -np.eye(N), atol=1e-9)
+    lin = model.linearise(np.zeros((N, 1)), np.ones((N, 1)), np.zeros(0), np.zeros((N, N)), DT)
+    assert lin.status == "stable"
+    np.testing.assert_allclose(lin.rest, 0.0, atol=1e-12)
+    np.testing.assert_allclose(lin.decay, -np.log(1 - DT) / DT, rtol=1e-9)

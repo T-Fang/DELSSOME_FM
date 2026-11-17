@@ -34,6 +34,8 @@ def main() -> None:
     p.add_argument("--walltime", required=True)
     p.add_argument("--mem", default="4G")
     p.add_argument("--only-missing", action="store_true")
+    p.add_argument("--patch", action="store_true", help="recompute the rows without a stable "
+                   "answer only (scripts/analytic_features.py --patch)")
     p.add_argument("--code-dir", type=Path, default=None,
                    help="run from this checkout (git worktree) instead of the live repository")
     p.add_argument("--submit", action="store_true", help="actually submit (default: dry run)")
@@ -58,11 +60,12 @@ def main() -> None:
     requests = []
     for a in range(args.first, stop, args.chunk):
         b = min(a + args.chunk, stop)
-        if args.only_missing and chunk_path(store, args.split, a, b).is_file():
+        if args.only_missing and chunk_path(store, args.split, a, b, args.patch).is_file():
             continue
         requests.append((f"{prefix} python scripts/analytic_features.py --config {args.config} "
                          f"--corpus-config {args.corpus_config} --split {args.split} "
-                         f"--first {a} --stop {b} --surrogates {args.surrogates}",
+                         f"--first {a} --stop {b} --surrogates {args.surrogates}"
+                         f"{' --patch' if args.patch else ''}",
                          f"analytic_{args.split}_{a}", resources))
     submit_batch(requests, load_config(args.cluster_config, ClusterConfig),
                  dry_run=not args.submit)
