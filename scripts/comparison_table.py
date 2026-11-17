@@ -86,6 +86,12 @@ ANCHORED = {   # corpus_anchored (generation.md §14), 100k models, parameter to
                          "outputs/report_sinh/anch_anfc_tokens/comparison.npz"),
     "anch_anfc_both": ("anchored corpus: + analytic FC in the heads and as tokens",
                        "outputs/report_sinh/anch_anfc_both/comparison.npz"),
+    "anch_anfcd_heads": ("anchored corpus: + analytic FC and FCD in the heads",
+                         "outputs/report_sinh/anch_anfcd_heads/comparison.npz"),
+    "anch_anfcd_tokens": ("anchored corpus: + analytic FC and FCD as tokens",
+                          "outputs/report_sinh/anch_anfcd_tokens/comparison.npz"),
+    "anch_anfcd_both": ("anchored corpus: + analytic FC and FCD in the heads and as tokens",
+                        "outputs/report_sinh/anch_anfcd_both/comparison.npz"),
 }
 SPLITS = [("train", "trained rows"), ("val", "val"), ("test", "test")]
 CMA_SPLITS = [("val_cma", "val, CMA-ES draws"), ("test_cma", "test, CMA-ES draws"),

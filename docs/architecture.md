@@ -853,3 +853,54 @@ Six runs are planned on the baseline recipe (`anch_ptok_raw_cost`): {fc, fc_fcd}
 Reference stores (`analytic_reference.py`): every fitted MFM, FIC and Hopf set is stable; of the random draws of the cards 91% (MFM), 94% (FIC), 81% (Hopf).
 
 **Runs** `anch_anfc_heads`, `anch_anfc_tokens`, `anch_anfc_both` submitted 2026-11-16 22:20 (L40S, jobs 3646616–8, 24 h), after an 8-step CPU run of each on the packed store. A first submission with 12 h was cancelled after 26 minutes: an L40S runs about 3.5 steps/s against 12 on the H200, so 200k steps take about 15 h.
+
+### 7.16 Analytic inputs: results of the six runs (2026-11-17)
+
+All six runs of §7.15 finished (L40S, about 10 h each; one seed each). Best steps: `anch_anfc_heads` 180k, `_tokens` 115k, `_both` 130k; `anch_anfcd_heads` 175k, `_tokens` 160k, `_both` 115k. Baseline: `anch_ptok_raw_cost` (§7.12).
+
+**Synthetic test** (every test row; cost terms: medians over coupled draws):
+
+| analytic input | where | MSE total | regional / FC moments | R² FC | 1 − r | d | KS | KS uncoupled |
+|---|---|---|---|---|---|---|---|---|
+| none (baseline) | | 1.944 | 0.556 / 0.576 | 0.325 | 0.230 | 0.050 | 0.394 | 0.061 |
+| FC | heads | 1.728 | 0.561 / 0.594 | 0.527 | 0.112 | 0.008 | 0.403 | 0.061 |
+| FC | tokens | 1.536 | 0.539 / 0.345 | 0.453 | 0.189 | 0.009 | 0.120 | 0.040 |
+| FC | both | 1.487 | 0.527 / 0.337 | 0.478 | 0.111 | 0.008 | 0.118 | 0.039 |
+| FC + FCD | heads | 1.750 | 0.571 / 0.629 | 0.538 | 0.112 | 0.008 | 0.113 | 0.042 |
+| FC + FCD | tokens | 1.489 | 0.523 / 0.329 | 0.465 | 0.173 | 0.009 | 0.103 | 0.038 |
+| FC + FCD | both | 1.535 | 0.549 / 0.342 | 0.460 | 0.111 | 0.008 | 0.105 | 0.039 |
+
+**Reference models at their fitted sets** (medians over the coupled sets; `reference_variants_compare.py`). Every run with an analytic input calls every coupled fitted set coupled (the baseline: 1 of 46, 0 of 49, 0 of 50).
+
+| analytic input | where | MFM 1 − r / d / KS | FIC 1 − r / d / KS | Hopf 1 − r / d / KS |
+|---|---|---|---|---|
+| none (baseline) | | 0.56 / 0.25 / 0.89 | 0.35 / 0.49 / 0.89 | 0.30 / 0.30 / 0.90 |
+| FC | heads | 0.03 / 0.01 / 0.89 | 0.06 / 0.05 / 0.89 | 0.03 / 0.02 / 0.90 |
+| FC | tokens | 0.44 / 0.01 / 0.23 | 0.18 / 0.06 / 0.20 | 0.08 / 0.02 / 0.53 |
+| FC | both | 0.03 / 0.01 / 0.10 | 0.04 / 0.06 / 0.17 | 0.02 / 0.01 / 0.78 |
+| FC + FCD | heads | 0.03 / 0.01 / 0.14 | 0.04 / 0.06 / 0.19 | 0.02 / 0.02 / 0.14 |
+| FC + FCD | tokens | 0.20 / 0.01 / 0.11 | 0.06 / 0.06 / 0.15 | 0.08 / 0.02 / 0.13 |
+| FC + FCD | both | 0.03 / 0.01 / 0.14 | 0.04 / 0.06 / 0.15 | 0.02 / 0.02 / 0.13 |
+| a second simulation of the same parameters | | 0.07 / 0.01 / 0.11 | 0.06 / 0.03 / 0.14 | 0.05 / 0.03 / 0.16 |
+
+Coupled recall on random draws of the cards (baseline → FC + FCD in the heads): MFM 0.61 → 0.84 (44 coupled draws), FIC 0.00 → 0.85 (157), Hopf 0.89 → 0.96 (1,333; uncoupled draws called coupled 0.27 → 0.22).
+
+**One place or both.**
+
+- **The heads carry the FC pattern.** Tokens alone leave 1 − r at 0.17–0.19 on the synthetic test and 0.20–0.44 on MFM: 2,278 edge values do not pass through 68 region vectors intact.
+- **Tokens carry the global information.** With the analytic FC alone, the tokens bring the FCD (KS 0.39 → 0.12) and the FC moments (0.58 → 0.34), which the heads alone do not touch; on Hopf's fitted sets that is not enough (KS 0.53–0.78).
+- **With the analytic FCD, the heads alone give all three cost terms**, on the synthetic test (0.112 / 0.008 / 0.113) and on the three reference models (at the level of a second simulation). Adding tokens changes the cost terms little (KS 0.105) and improves the regional statistics and FC moments (MSE total 1.54 against 1.75).
+- The simplest architecture that reaches the reference models is therefore **analytic FC and FCD in the heads** (`anch_anfcd_heads`); `both` adds the regional and FC-moment gains.
+
+**What the network adds to the analytic values.** In the heads-only runs the FC gate is 0.99 (5–95%: 0.97–1.00) and the correction MLP's mean contribution about 0.00 in z units, on the synthetic test and on the reference sets alike: where there is an analytic FC the prediction is the analytic FC. The 20,000 test rows by whether the row has one (90% of the coupled rows do):
+
+| coupled rows | recall | 1 − r | d | KS |
+|---|---|---|---|---|
+| with an analytic answer: baseline | 0.74 | 0.215 | 0.043 | 0.354 |
+| with an analytic answer: FC + FCD, heads | 0.94 | 0.100 | 0.007 | 0.101 |
+| without: baseline | 0.43 | 0.678 | 0.136 | 0.810 |
+| without: FC + FCD, heads | 0.50 | 0.709 | 0.135 | 0.692 |
+
+The gain is where the linearisation applies; the draws it does not cover (unstable under the map, no resting state) are predicted as badly as before, and with tokens more of their uncoupled draws are called coupled (0.06 → 0.11–0.20).
+
+**An evaluation error found and fixed on the way.** The analytic FC was z-scored with the statistics of the store being read. The reference stores carry another corpus's statistics, so the first evaluation fed the network the analytic FC in other units and under-predicted its level (MFM mean FC 0.04 against 0.27 analytic and 0.28 simulated; d 0.24). `TrainingStore(analytic_norm=...)` now takes the statistics of the store the model was trained on (`Stage1Module.pairwise_norm`). The synthetic numbers were not affected.
