@@ -87,7 +87,12 @@ class TrainingStore(Dataset):
     with a list of row indices returns a Stage1Batch. `rows` holds the base draws' arrays;
     `column` reads any row."""
 
-    def __init__(self, store_dir: Path, split: str, cma: bool = False, analytic: bool = False):
+    def __init__(self, store_dir: Path, split: str, cma: bool = False, analytic: bool = False,
+                 analytic_norm: tuple[float, float] | None = None):
+        """analytic_norm: (mean, SD) with which the analytic FC is z-scored for the network:
+        those of the store the network was trained on (Stage1Module.pairwise_norm). None: this
+        store's own, which is right only for the training store itself; a store with other
+        statistics (the reference-model stores) would feed the network other units."""
         root = self.root = Path(store_dir) / split
         if not (root / "summary.json").is_file():
             raise FileNotFoundError(f"{root}: no packed split (run scripts/pack_training_data.py)")
@@ -116,6 +121,8 @@ class TrainingStore(Dataset):
         self.n_base = len(self.rows["model"])
         self.cma_rows = self._cma_rows(Path(store_dir), split) if cma else None
         self.analytic = self._analytic(root) if analytic else None
+        self.analytic_norm = (analytic_norm if analytic_norm is not None else
+                              (float(self.norm["pairwise_mean"]), float(self.norm["pairwise_sd"])))
         if analytic and cma:
             raise ValueError("CMA-ES draws have no analytic features: analytic and cma_draws "
                              "cannot both be on")
@@ -139,7 +146,7 @@ class TrainingStore(Dataset):
         fc_valid = np.asarray(a["status"][idx]) == 0
         pairwise, fcd = np.asarray(a["pairwise"][idx], np.float32), np.asarray(a["fcd"][idx], np.float32)
         fcd_valid = fc_valid & np.isfinite(fcd).all(axis=1)
-        pairwise = (pairwise - self.norm["pairwise_mean"]) / self.norm["pairwise_sd"]
+        pairwise = (pairwise - self.analytic_norm[0]) / self.analytic_norm[1]
         with np.errstate(invalid="ignore", divide="ignore"):
             decay = np.clip(np.log10(np.asarray(a["decay"][idx], np.float64)),
                             -DECAY_LOG10_CLIP, DECAY_LOG10_CLIP) / DECAY_LOG10_CLIP

@@ -1062,3 +1062,22 @@ def test_lightning_run_with_analytic_inputs(tiny_analytic_store, tmp_path):
     from delssome_fm.train.evaluate import load_stage1
     module = load_stage1(checkpoints / "last.ckpt")
     assert module.reads_analytic and module.cfg.analytic == "fc_fcd"
+
+
+def test_analytic_inputs_are_z_scored_with_the_models_statistics(tiny_analytic_store):
+    """A store with other normalisation statistics (the reference-model stores) must feed the
+    network the analytic FC in the units of the store it was trained on."""
+    cfg, _, _ = tiny_analytic_store
+    own = TrainingStore(cfg.store_dir, "train", analytic=True)
+    rows = list(range(min(8, len(own))))
+    other = TrainingStore(cfg.store_dir, "train", analytic=True, analytic_norm=(0.5, 2.0))
+    raw = np.asarray(own.analytic["pairwise"][rows], np.float64)
+    ok = np.asarray(own.analytic["status"][rows]) == 0
+    assert ok.any()
+    np.testing.assert_allclose(other[rows].analytic.pairwise.numpy()[ok], (raw[ok] - 0.5) / 2.0,
+                               rtol=1e-5, atol=1e-6)
+    mean, sd = float(own.norm["pairwise_mean"]), float(own.norm["pairwise_sd"])
+    np.testing.assert_allclose(own[rows].analytic.pairwise.numpy()[ok], (raw[ok] - mean) / sd,
+                               rtol=1e-5, atol=1e-6)
+    # the targets stay in the store's own units
+    torch.testing.assert_close(other[rows].targets["pairwise"], own[rows].targets["pairwise"])
