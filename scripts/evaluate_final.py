@@ -38,6 +38,10 @@ def main() -> None:
     p.add_argument("--set", nargs="*", default=[], metavar="FIELD=VALUE",
                    help="evaluate under other settings than the run's, e.g. final_eval_rows=null "
                         "cma_draws=true (all rows, with the CMA-ES draws; 2026-11-05)")
+    p.add_argument("--prefix", default=None,
+                   help="log as <prefix>/<split>/* and write <prefix>.npz (final_eval with "
+                        "final -> final_eval), e.g. final_noartefact with --set "
+                        "exclude_step_artefacts=true, keeping the run's own final/* (2026-11-17)")
     args = p.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -52,10 +56,12 @@ def main() -> None:
     logger = MLFlowLogger(experiment_name=cfg.mlflow_experiment, tracking_uri=cfg.mlflow_tracking_uri,
                           run_id=runs[0].info.run_id)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers, cfg.seed,
-                            training_composition(module), cma=cfg.cma_draws)
+                            training_composition(module), cma=cfg.cma_draws,
+                            analytic=module.reads_analytic,
+                            exclude_step_artefacts=cfg.exclude_step_artefacts)
     data.setup()
     summary = final_evaluation(module, data, logger, args.checkpoint.parent, coupled=args.coupled,
-                               splits=tuple(args.splits))
+                               splits=tuple(args.splits), prefix=args.prefix)
     for split, s in summary.items():
         print(split, {k: round(v, 4) for k, v in s.items()})
 

@@ -192,6 +192,10 @@ class Stage1Config:
     analytic_inputs: str          # where they enter: heads (a gated starting point in the FC
                                   # and FCD heads) | tokens (68 region tokens + 1 global token
                                   # in the transformer) | both. Unused when analytic is none
+    exclude_step_artefacts: bool  # leave out the draws whose analytic status is "integrator"
+                                  # (a resting point the 1-ms Euler step cannot hold; their
+                                  # simulation is the integrator's): in training, validation and
+                                  # evaluation, like diverged draws (architecture.md §7.17)
     # optimisation
     batch_size: int
     edges_per_step: int           # FC edges in the pairwise loss per step (architecture.md §5.2)

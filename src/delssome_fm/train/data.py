@@ -6,7 +6,9 @@ graphs padded to the batch's largest graph, and the z-scored targets. With cma=T
 serves the split's CMA-ES draws (<split>_cma, train/pack.py): rows 0..n_base-1 are the base
 draws, the rows after them the CMA-ES draws, and every row weighs the same. With
 analytic=True a batch also carries the rows' analytic features (train/analytic.py), as an
-`AnalyticBatch`.
+`AnalyticBatch`. With exclude_step_artefacts=True the rows whose analytic status is
+"integrator" (sim/linear.py: the simulation is the 1-ms step's, not the model's) are left out
+of `in_use`, the rows every row pool starts from (architecture.md §7.17).
 
 `Stage1DataModule` gives Lightning a shuffled train loader and a fixed validation set (all
 val rows, or a fixed random subset).
@@ -33,6 +35,7 @@ from delssome_fm.train.pack import OPTIONAL_TARGETS, TARGETS
 
 Z_SCORED = ("regional", "pairwise", "fc_moments", "catch24", "fc_net")   # fcd: a raw CDF
 ANALYTIC = ("none", "fc", "fc_fcd")              # Stage1Config.analytic
+STEP_ARTEFACT = 4                                # train/analytic.STATUS_CODE["integrator"]
 DECAY_LOG10_CLIP = 3.0                           # the decay feature: clip(log10 decay, +-3) / 3
 
 
@@ -88,7 +91,8 @@ class TrainingStore(Dataset):
     `column` reads any row."""
 
     def __init__(self, store_dir: Path, split: str, cma: bool = False, analytic: bool = False,
-                 analytic_norm: tuple[float, float] | None = None):
+                 analytic_norm: tuple[float, float] | None = None,
+                 exclude_step_artefacts: bool = False):
         """analytic_norm: (mean, SD) with which the analytic FC is z-scored for the network:
         those of the store the network was trained on (Stage1Module.pairwise_norm). None: this
         store's own, which is right only for the training store itself; a store with other
@@ -126,6 +130,24 @@ class TrainingStore(Dataset):
         if analytic and cma:
             raise ValueError("CMA-ES draws have no analytic features: analytic and cma_draws "
                              "cannot both be on")
+        self.in_use = (self._without_step_artefacts(root, cma) if exclude_step_artefacts
+                       else np.arange(len(self)))
+
+    def _without_step_artefacts(self, root: Path, cma: bool) -> np.ndarray:
+        """The base rows whose analytic status is not "integrator" (class docstring)."""
+        if cma:
+            raise ValueError("CMA-ES draws have no analytic status: exclude_step_artefacts and "
+                             "cma_draws cannot both be on")
+        summary = root / "analytic_summary.json"
+        known = json.loads(summary.read_text()).get("statuses", []) if summary.is_file() else []
+        if "integrator" not in known:
+            raise ValueError(f"{root}: its analytic status predates the 'integrator' status "
+                             f"(2026-11-17): recompute or patch it first (scripts/pack_analytic.py "
+                             f"--patch, scripts/analytic_reference.py)")
+        status = np.load(root / "analytic_status.npy")
+        if len(status) != self.n_base:
+            raise ValueError(f"{root}: {len(status)} analytic statuses, {self.n_base} rows")
+        return np.flatnonzero(status != STEP_ARTEFACT)
 
     def _analytic(self, root: Path) -> dict[str, np.ndarray]:
         names = ("analytic_status", "analytic_decay", "analytic_pairwise", "analytic_fcd")
@@ -326,6 +348,7 @@ def subset_rows(store: TrainingStore, c: Composition) -> np.ndarray:
     start = np.concatenate([[0], np.cumsum(n_rows)])[models]
     take = np.minimum(n_rows[models], c.draws_per_model)
     rows = np.concatenate([np.arange(s, s + t) for s, t in zip(start, take)])
+    rows = rows[np.isin(rows, store.in_use)]
     if store.cma_rows is not None:
         cma_model = np.asarray(store.cma_rows["model"])
         rows = np.concatenate([rows, store.n_base + np.flatnonzero(np.isin(cma_model, models))])
@@ -340,17 +363,19 @@ class Stage1DataModule(L.LightningDataModule):
 
     def __init__(self, store_dir: Path, batch_size: int, val_rows: int | None, num_workers: int,
                  seed: int, composition: Composition, cma: bool = False,
-                 analytic: bool = False):
+                 analytic: bool = False, exclude_step_artefacts: bool = False):
         super().__init__()
         self.store_dir, self.batch_size, self.val_rows = Path(store_dir), batch_size, val_rows
         self.num_workers, self.seed, self.composition = num_workers, seed, composition
-        self.cma, self.analytic = cma, analytic
+        self.cma, self.analytic, self.exclude = cma, analytic, exclude_step_artefacts
 
     def setup(self, stage: str | None = None) -> None:
-        self.train = TrainingStore(self.store_dir, "train", cma=self.cma, analytic=self.analytic)
+        self.train = TrainingStore(self.store_dir, "train", cma=self.cma, analytic=self.analytic,
+                                   exclude_step_artefacts=self.exclude)
         self.train_rows = subset_rows(self.train, self.composition)
-        self.val = TrainingStore(self.store_dir, "val", cma=self.cma, analytic=self.analytic)
-        pool = np.arange(len(self.val))
+        self.val = TrainingStore(self.store_dir, "val", cma=self.cma, analytic=self.analytic,
+                                 exclude_step_artefacts=self.exclude)
+        pool = self.val.in_use
         if self.composition.coupled_draws:
             pool = coupled_rows(self.val, pool, self.composition.coupled_threshold)
         if self.val_rows is None:

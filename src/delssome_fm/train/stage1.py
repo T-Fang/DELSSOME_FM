@@ -89,6 +89,13 @@ class Stage1Module(L.LightningModule):
         """The model reads the store's analytic features: open stores with analytic=True."""
         return self.analytic_tokens or self.analytic_heads
 
+    @property
+    def store_options(self) -> dict:
+        """TrainingStore keywords for any store this model is evaluated on: its analytic
+        inputs in its own units, and the draws it leaves out."""
+        return {"analytic": self.reads_analytic, "analytic_norm": self.pairwise_norm,
+                "exclude_step_artefacts": self.cfg.exclude_step_artefacts}
+
     def predict_statistics(self, batch: Stage1Batch, edge_index: torch.Tensor):
         if (self.analytic_tokens or self.analytic_heads) and batch.analytic is None:
             raise ValueError("this model reads analytic statistics: open the store with "

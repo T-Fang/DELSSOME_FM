@@ -45,18 +45,18 @@ def main() -> None:
     module = load_stage1(args.checkpoint).to("cuda" if torch.cuda.is_available() else "cpu")
     module.cfg = override(module.cfg, args.set)
     threshold = module.cfg.coupled_threshold
-    analytic = {"analytic": module.reads_analytic, "analytic_norm": module.pairwise_norm}
-    stores = ({"synthetic_test": TrainingStore(module.cfg.store_dir, "test", **analytic)}
+    options = module.store_options
+    stores = ({"synthetic_test": TrainingStore(module.cfg.store_dir, "test", **options)}
               if args.test_rows else {})
-    stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}", **analytic)
+    stores.update({f"{n}_{v}": TrainingStore(cfg.output_dir / "store", f"{n}_{v}", **options)
                    for n in args.models or cfg.models for v in args.variants})
     arrays, table = {}, {}
     for split, store in stores.items():
         if split == "synthetic_test":
-            pool = evaluation_rows(np.arange(len(store)), module.cfg)
+            pool = evaluation_rows(store.in_use, module.cfg)
             rows = np.sort(np.random.default_rng(0).choice(pool, args.test_rows, replace=False))
         else:
-            rows = np.arange(len(store))
+            rows = store.in_use
         r = regime_rows(module, store, rows)
         arrays.update({f"{split}_{k}": v for k, v in r.items()})
         table[split] = regime_summary(r, threshold)

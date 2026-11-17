@@ -126,7 +126,11 @@ def analytic_single_model(root: Path, card: ModelCard, sim_cfg: SimConfig, seed:
     for k in ARRAYS:
         np.save(root / f"{k}.npy", out[k])
     status = out["analytic_status"]
-    return {name: float((status == code).mean()) for name, code in STATUS_CODE.items()}
+    shares = {name: float((status == code).mean()) for name, code in STATUS_CODE.items()}
+    (root / "analytic_summary.json").write_text(json.dumps(
+        {"rows": int(len(status)), "n_surrogates": n_surrogates, "statuses": list(STATUS_CODE),
+         **shares}, indent=2))
+    return shares
 
 
 def _row(out: dict, k: int, linear: LinearModel, x0, theta, psi, sc, sim_cfg: SimConfig,
@@ -214,7 +218,7 @@ def pack_analytic(store_dir: Path, split: str) -> dict[str, int | float]:
     for k in ARRAYS:
         out[k].flush()
         (root / f"{k}.tmp.npy").replace(root / f"{k}.npy")
-    summary = {"rows": n, "n_surrogates": surrogates,
+    summary = {"rows": n, "n_surrogates": surrogates, "statuses": list(STATUS_CODE),
                **{name: float((status == code).mean()) for name, code in STATUS_CODE.items()}}
     (root / "analytic_summary.json").write_text(json.dumps(summary, indent=2))
     return summary
@@ -261,7 +265,7 @@ def patch_analytic(store_dir: Path, split: str) -> dict[str, int | float]:
         a.flush()
     status = np.asarray(arrays["analytic_status"])
     summary = {"rows": int(len(status)), "n_surrogates": sorted(surrogates),
-               "patched_rows": int(len(targets)),
+               "patched_rows": int(len(targets)), "statuses": list(STATUS_CODE),
                **{name: float((status == code).mean()) for name, code in STATUS_CODE.items()}}
     (root / "analytic_summary.json").write_text(json.dumps(summary, indent=2))
     return summary

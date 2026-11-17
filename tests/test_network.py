@@ -31,7 +31,7 @@ def tiny_config(store_dir: Path, tmp_path: Path) -> Stage1Config:
         max_degree=8, token_scheme="region", embed_theta=True, task="statistics", train_models=2,
         draws_per_model=100, oversample_coupled=False, coupled_share=0.5,
         coupled_threshold=0.05, coupled_draws_only=False, cma_draws=False, analytic="none",
-        analytic_inputs="heads", batch_size=2,
+        analytic_inputs="heads", exclude_step_artefacts=False, batch_size=2,
         edges_per_step=64,
         learning_rate=1e-3, weight_decay=0.0, warmup_steps=1, max_steps=2, val_rows=16,
         val_every_steps=1, final_eval_rows=16, num_workers=0, precision="32-true",
@@ -1081,3 +1081,34 @@ def test_analytic_inputs_are_z_scored_with_the_models_statistics(tiny_analytic_s
                                rtol=1e-5, atol=1e-6)
     # the targets stay in the store's own units
     torch.testing.assert_close(other[rows].targets["pairwise"], own[rows].targets["pairwise"])
+
+
+def test_step_artefacts_are_left_out_of_every_row_pool(tiny_analytic_store, tmp_path):
+    """exclude_step_artefacts: rows with analytic status "integrator" are in no training,
+    validation or evaluation pool; a store whose status predates that status is refused."""
+    import json
+    import shutil
+    from delssome_fm.train.analytic import STATUS_CODE
+    from delssome_fm.train.data import STEP_ARTEFACT, Composition, subset_rows
+    assert STEP_ARTEFACT == STATUS_CODE["integrator"]
+    cfg, _, _ = tiny_analytic_store
+    store_dir = tmp_path / "store"
+    shutil.copytree(cfg.store_dir, store_dir)
+    root = store_dir / "train"
+    summary = json.loads((root / "analytic_summary.json").read_text())
+    status = np.load(root / "analytic_status.npy")
+    flagged = np.arange(0, len(status), 3)
+    status[flagged] = STEP_ARTEFACT
+    np.save(root / "analytic_status.npy", status)
+    store = TrainingStore(store_dir, "train", exclude_step_artefacts=True)
+    assert not np.isin(flagged, store.in_use).any()
+    assert len(store.in_use) == len(status) - len(flagged)
+    rows = subset_rows(store, Composition(n_models=len(store.models["n_rows"]), draws_per_model=100,
+                                          coupled_share=None, coupled_threshold=0.05,
+                                          coupled_draws=False))
+    assert not np.isin(rows, flagged).any() and len(rows) == len(store.in_use)
+    np.testing.assert_array_equal(TrainingStore(store_dir, "train").in_use, np.arange(len(status)))
+    summary.pop("statuses")
+    (root / "analytic_summary.json").write_text(json.dumps(summary))
+    with pytest.raises(ValueError, match="predates"):
+        TrainingStore(store_dir, "train", exclude_step_artefacts=True)

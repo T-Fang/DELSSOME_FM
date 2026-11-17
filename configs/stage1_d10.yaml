@@ -38,6 +38,7 @@ coupled_draws_only: false  # true: train and validate on coupled draws only (202
 cma_draws: false          # true: also the store's CMA-ES draws (<split>_cma; generation.md §9)
 analytic: none            # none | fc | fc_fcd: the linearised network's FC (and FCD) as inputs (architecture.md §7.14)
 analytic_inputs: heads    # heads | tokens | both: where they enter; unused when analytic is none
+exclude_step_artefacts: false  # true: leave out draws the 1-ms step cannot simulate (analytic status integrator)
 
 # optimisation
 batch_size: 256

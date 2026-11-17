@@ -58,7 +58,8 @@ def fit(cfg: Stage1Config, config_path: Path, run_name: str | None = None) -> Pa
                               cfg.coupled_threshold, cfg.coupled_draws_only)
     data = Stage1DataModule(cfg.store_dir, cfg.batch_size, cfg.val_rows, cfg.num_workers,
                             cfg.seed, composition, cma=cfg.cma_draws,
-                            analytic=cfg.analytic != "none")
+                            analytic=cfg.analytic != "none",
+                            exclude_step_artefacts=cfg.exclude_step_artefacts)
     data.setup()
     norm = data.train.norm
     pairwise_norm = (float(norm["pairwise_mean"]), float(norm["pairwise_sd"]))
@@ -111,7 +112,7 @@ FINAL_SPLITS = ("train", "val", "test")
 
 def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlowLogger,
                      out: Path, coupled: bool = False, splits: tuple[str, ...] = FINAL_SPLITS,
-                     ) -> dict[str, dict[str, float]]:
+                     prefix: str | None = None) -> dict[str, dict[str, float]]:
     """Evaluate `module` on train (its own rows), val and test; log final/<split>/<metric>
     and the final_eval.npz artifact (module docstring). `splits` restricts it to some of them
     (scripts/evaluate_final.py --splits: re-evaluating val and test on every row, 2026-11-08);
@@ -121,18 +122,21 @@ def final_evaluation(module: Stage1Module, data: Stage1DataModule, logger: MLFlo
     coupled draws only are compared on the same rows. A coupled-only model's final/* rows are
     already coupled: val and test are restricted to coupled draws for it either way."""
     cfg = module.cfg
-    prefix = "final_coupled" if coupled else "final"
+    if prefix is None:
+        prefix = "final_coupled" if coupled else "final"
+    elif not prefix.startswith("final"):
+        raise ValueError(f"a metric prefix starts with 'final', found {prefix!r}")
     unknown = set(splits) - set(FINAL_SPLITS)
     if unknown or not {"val", "test"} <= set(splits):
         raise ValueError(f"splits must include val and test (final_eval.npz) and be among "
                          f"{FINAL_SPLITS}; found {splits}")
     sources = {"train": lambda: (data.train, data.train_rows), "val": lambda: (data.val, None),
                "test": lambda: (TrainingStore(cfg.store_dir, "test", cma=cfg.cma_draws,
-                                              analytic=cfg.analytic != "none"), None)}
+                                              **module.store_options), None)}
     summary, arrays = {}, {}
     for split in (s for s in FINAL_SPLITS if s in splits):
         store, candidates = sources[split]()
-        pool = np.arange(len(store)) if candidates is None else candidates
+        pool = store.in_use if candidates is None else candidates
         if coupled or cfg.coupled_draws_only:
             pool = coupled_rows(store, pool, cfg.coupled_threshold)
         rows = evaluation_rows(pool, cfg)        # sorted: row_metrics keeps this order

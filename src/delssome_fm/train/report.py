@@ -37,8 +37,7 @@ def split_store(module: Stage1Module, split: str) -> TrainingStore:
     for "train", with the CMA-ES rows after the base rows if the module trained on them (the
     rows of training_rows); for other splits, the base rows only (as final/<split>/*)."""
     return TrainingStore(module.cfg.store_dir, split,
-                         cma=module.cfg.cma_draws and split == "train",
-                         analytic=module.reads_analytic, analytic_norm=module.pairwise_norm)
+                         cma=module.cfg.cma_draws and split == "train", **module.store_options)
 
 
 def training_rows(module: Stage1Module) -> np.ndarray:
@@ -153,7 +152,7 @@ def prediction_vs_simulation(module: Stage1Module, split: str, reference_rows: i
     percentile of the model's 1 - r, and the median uncoupled draw (when there is one: a
     coupled-draws-only model's training rows have none)."""
     store = split_store(module, split)
-    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    pool = training_rows(module) if split == "train" else store.in_use
     rows = evaluation_rows(pool, module.cfg)
     p = predict_fc_fcd(module, store, rows)
     fc_avg, cdf_avg = training_average(module, reference_rows, seed)
@@ -188,7 +187,7 @@ def catch24_fit(module: Stage1Module, split: str, max_rows: int = 50_000, n_poin
         raise ValueError("the module has no catch24 head (catch24_loss was off)")
     store = split_store(module, split)
     check_parameter_policy(module, store)
-    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    pool = training_rows(module) if split == "train" else store.in_use
     rows = evaluation_rows(pool, module.cfg)
     rng = np.random.default_rng(seed)
     rows = np.sort(rng.choice(rows, min(max_rows, len(rows)), replace=False))
@@ -236,7 +235,7 @@ def network_fc_fit(module: Stage1Module, split: str, max_rows: int = 50_000, see
     if "fc_net" not in store.targets:
         raise ValueError(f"{module.cfg.store_dir}/{split} has no fc_net target "
                          f"(scripts/pack_network_fc.py)")
-    pool = training_rows(module) if split == "train" else np.arange(len(store))
+    pool = training_rows(module) if split == "train" else store.in_use
     rows = evaluation_rows(pool, module.cfg)
     rows = np.sort(np.random.default_rng(seed).choice(rows, min(max_rows, len(rows)),
                                                       replace=False))
